@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/types": ["../../packages/shared-types/src/index.ts"],
+      "@shared/types/*": ["../../packages/shared-types/src/*"]
+    }
+  },
+  "include": ["src/**/*", "../../packages/shared-types/src/**/*"],
+  "exclude": ["node_modules"]
+}

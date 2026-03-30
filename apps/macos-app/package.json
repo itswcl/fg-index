@@ -1,0 +1,63 @@
+{
+  "name": "macos-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "jest --passWithNoTests",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src --ext .ts,.tsx",
+    "start": "react-native start --port 8082",
+    "macos": "react-native run-macos",
+    "macos:build": "cd macos && xcodebuild -workspace macos-app.xcworkspace -scheme macos-app-macOS -configuration Debug -derivedDataPath build_debug build 2>&1 | tail -5",
+    "macos:release": "cd macos && xcodebuild -workspace macos-app.xcworkspace -scheme macos-app-macOS -configuration Release -derivedDataPath build_release build 2>&1 | tail -5",
+    "macos:open": "open 'macos/build_debug/Build/Products/Debug/Fear & Greed & VIX index.app'",
+    "macos:open-release": "open 'macos/build_release/Build/Products/Release/Fear & Greed & VIX index.app'",
+    "macos:run": "npm run macos:build && npm run macos:open",
+    "macos:run-release": "npm run macos:release && npm run macos:open-release",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.62.7",
+    "react": "18.3.1",
+    "react-native": "0.76.0",
+    "react-native-macos": "0.76.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.9",
+    "@babel/preset-env": "^7.25.9",
+    "@babel/preset-react": "^7.25.9",
+    "@babel/preset-typescript": "^7.25.9",
+    "@react-native-community/cli": "15.0.0-alpha.2",
+    "@react-native-community/cli-platform-android": "15.0.0-alpha.2",
+    "@react-native-community/cli-platform-ios": "15.0.0-alpha.2",
+    "@react-native/babel-preset": "^0.76.0",
+    "@react-native/dev-middleware": "^0.76.0",
+    "@react-native/metro-config": "^0.76.0",
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^12.9.0",
+    "@types/jest": "^29.5.14",
+    "@types/react": "^18.3.14",
+    "@types/react-native": "^0.73.0",
+    "@types/react-test-renderer": "^18.3.0",
+    "babel-jest": "^29.7.0",
+    "babel-plugin-module-resolver": "^5.0.2",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.7.3"
+  },
+  "jest": {
+    "preset": "react-native",
+    "moduleNameMapper": {
+      "^@shared/types$": "<rootDir>/../../packages/shared-types/src/index.ts"
+    },
+    "transformIgnorePatterns": [
+      "node_modules/(?!(react-native|@react-native|react-native-macos)/)"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.test.{ts,tsx}",
+      "**/src/**/*.test.{ts,tsx}"
+    ]
+  }
+}
