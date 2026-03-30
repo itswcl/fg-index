@@ -1,0 +1,78 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+test_output.log
+metro.log
+
+# Dependency directories
+node_modules/
+jspm_packages/
+.npm/
+
+# Build and Dist
+dist/
+dist-ssr/
+build/
+out/
+.next/
+main.jsbundle
+
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.test
+.xcode.env.local
+MIGRATION_PLAN.md
+
+# Mac OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# AI and Agent Tools
+.agents/
+.gemini/
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# React Native macOS / iOS
+apps/macos-app/macos/Pods/
+apps/macos-app/macos/Podfile.lock
+apps/macos-app/macos/build/
+apps/macos-app/macos/build_release/
+apps/macos-app/macos/build_debug/
+apps/macos-app/macos/DerivedData/
+apps/macos-app/macos/*.xcworkspace/xcuserdata/
+apps/macos-app/macos/*.xcodeproj/xcuserdata/
+apps/macos-app/macos/*.xcodeproj/project.xcworkspace/xcuserdata/
+apps/macos-app/ios/Pods/
+apps/macos-app/ios/Podfile.lock
+apps/macos-app/ios/build/
+apps/macos-app/ios/DerivedData/
+apps/macos-app/ios/*.xcworkspace/xcuserdata/
+apps/macos-app/ios/*.xcodeproj/xcuserdata/
+apps/macos-app/ios/*.xcodeproj/project.xcworkspace/xcuserdata/
