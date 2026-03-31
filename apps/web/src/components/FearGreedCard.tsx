@@ -1,4 +1,4 @@
-import React from 'react';
+
 import type { FearGreed, FearGreedClassification } from '../types';
 import { FEAR_GREED_COLORS } from '../constants';
 import { formatAbsoluteTime } from '../services/time.utils';

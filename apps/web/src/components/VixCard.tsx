@@ -1,4 +1,4 @@
-import React from 'react';
+
 import type { Vix } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { Shimmer } from './Shimmer';
