@@ -25,6 +25,7 @@ app.use(cors({
   allowedHeaders: ["X-API-KEY"],
 }));
 app.use(express.json({ limit: "10kb" })); // Request size limit
+app.set("trust proxy", 1); // Trust first proxy
 app.use(globalRateLimiter); // Apply rate limiting to all requests
 
 // Routes
