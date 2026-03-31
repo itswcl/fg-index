@@ -24,6 +24,59 @@ interface UseMarketIndicatorsOptions {
   onAlertTriggered?: (msg: AlertTriggeredMessage) => void;
 }
 
+function evaluateAlertsLocally(
+  alerts: Alert[],
+  fearGreedScore: number | null,
+  vixPrice: number | null,
+  onTriggered: (msg: AlertTriggeredMessage) => void,
+) {
+  for (const alert of alerts) {
+    if (!alert.enabled) continue;
+
+    const results = alert.conditions.map((cond) => {
+      const metricValue = cond.metric === 'fearGreed' ? fearGreedScore : vixPrice;
+      if (metricValue === null) return null; // skip if data unavailable
+
+      switch (cond.operator) {
+        case '<':  return metricValue < cond.value;
+        case '>':  return metricValue > cond.value;
+        case '<=': return metricValue <= cond.value;
+        case '>=': return metricValue >= cond.value;
+        case '==': return metricValue === cond.value;
+        default:   return false;
+      }
+    });
+
+    const definedResults = results.filter((r): r is boolean => r !== null);
+    if (definedResults.length === 0) continue;
+
+    const triggered =
+      alert.logic === 'AND'
+        ? definedResults.every(Boolean)
+        : definedResults.some(Boolean);
+
+    if (triggered) {
+      const parts = alert.conditions
+        .map((c) => {
+          const val = c.metric === 'fearGreed' ? fearGreedScore : vixPrice;
+          if (val === null) return null;
+          const label = c.metric === 'fearGreed' ? 'F&G' : 'VIX';
+          return `${label} is ${val} (${c.operator} ${c.value})`;
+        })
+        .filter(Boolean);
+      const message = parts.join(` ${alert.logic} `);
+
+      onTriggered({
+        type: 'alert_triggered',
+        alertId: alert.id,
+        alertName: alert.name,
+        message,
+        triggeredAt: new Date().toISOString(),
+      });
+    }
+  }
+}
+
 export function useMarketIndicators(
   options: UseMarketIndicatorsOptions = {},
 ): UseMarketIndicatorsReturn {
@@ -42,6 +95,8 @@ export function useMarketIndicators(
   // Keep latest callback/alerts in a ref so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
   const alertsRef = useRef(alerts);
+  const latestFearGreedScoreRef = useRef<number | null>(null);
+  const latestVixPriceRef = useRef<number | null>(null);
 
   useEffect(() => {
     onAlertTriggeredRef.current = onAlertTriggered;
@@ -63,10 +118,6 @@ export function useMarketIndicators(
     ws.onopen = () => {
       setWsStatus('connected');
       reconnectDelayRef.current = 3000; // Reset on success
-      // Send current alerts on connect
-      if (alertsRef.current && alertsRef.current.length > 0) {
-        ws.send(JSON.stringify({ type: 'set_alerts', alerts: alertsRef.current }));
-      }
     };
 
     ws.onmessage = (event) => {
@@ -74,8 +125,19 @@ export function useMarketIndicators(
         const message = JSON.parse(event.data as string) as WsMarketMessage | AlertTriggeredMessage;
 
         if (message.type === 'FEAR_GREED_UPDATE' && 'payload' in message && message.payload) {
-          setFearGreed(message.payload as FearGreed);
+          const fg = message.payload as FearGreed;
+          setFearGreed(fg);
           setLastFearGreedUpdate(new Date());
+          latestFearGreedScoreRef.current = fg.score;
+          // evaluate alerts with latest values
+          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+            evaluateAlertsLocally(
+              alertsRef.current,
+              fg.score,
+              latestVixPriceRef.current,
+              onAlertTriggeredRef.current,
+            );
+          }
         }
 
         if (message.type === 'VIX_UPDATE' && 'payload' in message) {
@@ -83,8 +145,19 @@ export function useMarketIndicators(
           setVix(payload);
           setVixAvailable(payload !== null);
           setLastVixUpdate(new Date());
+          latestVixPriceRef.current = payload?.price ?? null;
+          // evaluate alerts with latest values
+          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+            evaluateAlertsLocally(
+              alertsRef.current,
+              latestFearGreedScoreRef.current,
+              payload?.price ?? null,
+              onAlertTriggeredRef.current,
+            );
+          }
         }
 
+        // keep alert_triggered handler in case backend adds it later
         if (message.type === 'alert_triggered') {
           onAlertTriggeredRef.current?.(message as AlertTriggeredMessage);
         }
@@ -113,13 +186,6 @@ export function useMarketIndicators(
       wsRef.current?.close();
     };
   }, [connect]);
-
-  // Re-send alerts whenever the alerts array changes (and WS is open)
-  useEffect(() => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'set_alerts', alerts: alerts ?? [] }));
-  }, [alerts]);
 
   return { fearGreed, vix, vixAvailable, wsStatus, lastFearGreedUpdate, lastVixUpdate };
 }
