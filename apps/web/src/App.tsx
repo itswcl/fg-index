@@ -4,14 +4,30 @@ import { useMarketIndicators } from './hooks/useMarketIndicators';
 import { useFearGreed } from './hooks/useFearGreed';
 import { useVix } from './hooks/useVix';
 import { useAppColorScheme } from './hooks/useAppColorScheme';
+import { useAlerts } from './hooks/useAlerts';
+import { useNotifications } from './hooks/useNotifications';
 import { FearGreedCard } from './components/FearGreedCard';
 import { VixCard } from './components/VixCard';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
+import { AlertsPanel } from './components/alerts';
+import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
 const queryClient = new QueryClient();
 
 function MarketIndicators() {
+  const { alerts, addAlert, updateAlert, deleteAlert, toggleAlert } = useAlerts();
+  const { permission, requestPermission, notify } = useNotifications();
+
+  const handleAlertTriggered = useCallback(
+    (msg: AlertTriggeredMessage) => {
+      notify(msg.alertName, msg.message);
+      // Update lastTriggeredAt for the matching alert
+      updateAlert(msg.alertId, { lastTriggeredAt: msg.triggeredAt });
+    },
+    [notify, updateAlert],
+  );
+
   const {
     fearGreed: wsFearGreed,
     vix: wsVix,
@@ -19,7 +35,7 @@ function MarketIndicators() {
     wsStatus,
     lastFearGreedUpdate,
     lastVixUpdate,
-  } = useMarketIndicators();
+  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered });
 
   const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
   const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
@@ -95,6 +111,16 @@ function MarketIndicators() {
             isDark={isDark}
           />
         </div>
+        <AlertsPanel
+          alerts={alerts}
+          onAdd={addAlert}
+          onUpdate={updateAlert}
+          onDelete={deleteAlert}
+          onToggle={toggleAlert}
+          notificationPermission={permission}
+          onRequestPermission={requestPermission}
+          isDark={isDark}
+        />
       </div>
     </div>
   );
