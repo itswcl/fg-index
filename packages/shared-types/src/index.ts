@@ -41,3 +41,37 @@ export type FearGreedClassification = z.infer<
 export type FearGreed = z.infer<typeof FearGreedSchema>;
 export type Vix = z.infer<typeof VixSchema>;
 export type MarketIndicators = z.infer<typeof MarketIndicatorsSchema>;
+
+// ─── Alerts ────────────────────────────────────────────────────────
+export const ConditionSchema = z.object({
+  metric: z.enum(["fearGreed", "vix"]),
+  operator: z.enum(["<", ">", "<=", ">=", "=="]),
+  value: z.number(),
+});
+export type Condition = z.infer<typeof ConditionSchema>;
+
+export const AlertSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(80),
+  conditions: z.array(ConditionSchema).min(1).max(10),
+  logic: z.enum(["AND", "OR"]),
+  enabled: z.boolean(),
+  createdAt: z.string(),
+  lastTriggeredAt: z.string().optional(),
+});
+export type Alert = z.infer<typeof AlertSchema>;
+
+export const SetAlertsMessageSchema = z.object({
+  type: z.literal("set_alerts"),
+  alerts: z.array(AlertSchema),
+});
+export type SetAlertsMessage = z.infer<typeof SetAlertsMessageSchema>;
+
+export const AlertTriggeredMessageSchema = z.object({
+  type: z.literal("alert_triggered"),
+  alertId: z.string(),
+  alertName: z.string(),
+  message: z.string(),
+  triggeredAt: z.string(),
+});
+export type AlertTriggeredMessage = z.infer<typeof AlertTriggeredMessageSchema>;

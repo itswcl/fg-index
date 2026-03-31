@@ -3,9 +3,37 @@ import http from "http";
 import { subscribeToFearGreed, getCachedFearGreed } from "./schedulers/fear-greed.scheduler.js";
 import { subscribeToVix, getCachedVix } from "./schedulers/vix.scheduler.js";
 import { MAX_WS_CONNECTIONS } from "./middlewares/rateLimit.js";
+import { SetAlertsMessageSchema, type Alert } from "@shared/types";
+import { evaluateAlerts } from "./services/alertEvaluator.js";
+
+// Per-connection alert storage
+const connectionAlerts = new Map<WebSocket, Alert[]>();
+
+// Cached reference to the WSS for external broadcast
+let wssInstance: WebSocketServer | null = null;
+
+export function broadcastWithAlertEvaluation(
+  fearGreedScore: number | null,
+  vixPrice: number | null
+): void {
+  if (!wssInstance) return;
+
+  wssInstance.clients.forEach((client) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+
+    const alerts = connectionAlerts.get(client) ?? [];
+    if (alerts.length > 0) {
+      const triggered = evaluateAlerts(alerts, fearGreedScore, vixPrice);
+      for (const msg of triggered) {
+        client.send(JSON.stringify(msg));
+      }
+    }
+  });
+}
 
 export function startWsServer(server: http.Server) {
   const wss = new WebSocketServer({ server });
+  wssInstance = wss;
 
   wss.on("connection", (ws) => {
     // Check connection limit
@@ -23,9 +51,28 @@ export function startWsServer(server: http.Server) {
     const vix = getCachedVix();
     ws.send(JSON.stringify({ type: "VIX_UPDATE", payload: vix }));
 
-    // Reject any client messages (broadcast-only server)
+    // Accept set_alerts messages; reject anything else
     ws.on("message", (data) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data.toString());
+      } catch {
+        // Ignore malformed JSON — don't crash or close
+        return;
+      }
+
+      const result = SetAlertsMessageSchema.safeParse(parsed);
+      if (result.success) {
+        connectionAlerts.set(ws, result.data.alerts);
+        return;
+      }
+
+      // Unknown message type — close as before for unsupported data
       ws.close(1003, "Unsupported data");
+    });
+
+    ws.on("close", () => {
+      connectionAlerts.delete(ws);
     });
 
     ws.on("error", (err) => {
@@ -39,6 +86,10 @@ export function startWsServer(server: http.Server) {
         client.send(JSON.stringify({ type: "FEAR_GREED_UPDATE", payload: data }));
       }
     });
+
+    // Evaluate alerts with freshly updated fear & greed, use latest cached VIX
+    const vix = getCachedVix();
+    broadcastWithAlertEvaluation(data.score, vix?.price ?? null);
   });
 
   subscribeToVix((data) => {
@@ -47,6 +98,10 @@ export function startWsServer(server: http.Server) {
         client.send(JSON.stringify({ type: "VIX_UPDATE", payload: data }));
       }
     });
+
+    // Evaluate alerts with freshly updated VIX, use latest cached fear & greed
+    const fg = getCachedFearGreed();
+    broadcastWithAlertEvaluation(fg?.score ?? null, data?.price ?? null);
   });
 
   process.stdout.write("WebSocket server started on same port as HTTP\n");
