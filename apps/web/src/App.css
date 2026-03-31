@@ -1,0 +1,236 @@
+/* ── Layout ───────────────────────────────────────────── */
+.app-container {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.app-dark  { background: #000000; }
+.app-light { background: #F2F2F7; }
+
+.widget {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cards-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+}
+
+/* Stack vertically on narrow screens */
+@media (max-width: 480px) {
+  .cards-row {
+    flex-direction: column;
+  }
+}
+
+.status-area {
+  display: flex;
+  justify-content: center;
+}
+
+/* ── Cards ────────────────────────────────────────────── */
+.card {
+  flex: 1;
+  border-radius: 28px;
+  border-width: 1.5px;
+  border-style: solid;
+  overflow: hidden;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  /* Minimum width prevents cards from getting too narrow on desktop */
+  min-width: 120px;
+}
+
+.card-dark {
+  background: rgba(28, 28, 30, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.35);
+}
+
+.card-light {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.card-dark:hover  { background: rgba(44, 44, 46, 0.95); border-color: rgba(255,255,255,0.2); }
+.card-light:hover { background: #ffffff; border-color: rgba(0,0,0,0.12); }
+
+.card-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px;
+  /* Maintain a pleasant aspect ratio — tall enough on mobile */
+  min-height: 100px;
+  gap: 6px;
+}
+
+/* On mobile the cards are full-width; give them a fixed height for balance */
+@media (max-width: 480px) {
+  .card-inner {
+    min-height: 110px;
+    padding: 14px 16px;
+  }
+}
+
+/* ── Card labels ──────────────────────────────────────── */
+.card-label {
+  font-size: 7.5px;
+  font-weight: 800;
+  color: #8E8E93;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+/* ── Score (Fear & Greed) ─────────────────────────────── */
+.score-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.score {
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1;
+}
+
+.classification {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+@media (max-width: 480px) {
+  .score { font-size: 32px; }
+  .classification { font-size: 11px; }
+}
+
+/* ── Price (VIX) ──────────────────────────────────────── */
+.price-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.price {
+  font-size: 34px;
+  font-weight: 700;
+  color: #FFFFFF;
+  letter-spacing: -0.5px;
+  line-height: 1;
+}
+
+.price-light { color: #000000; }
+
+.change-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.change {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.change-pct {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+@media (max-width: 480px) {
+  .price { font-size: 28px; }
+}
+
+/* ── N/A state ────────────────────────────────────────── */
+.na-text {
+  font-size: 32px;
+  font-weight: 800;
+  color: #636366;
+  letter-spacing: -0.5px;
+}
+
+.na-subtext {
+  font-size: 9px;
+  color: #636366;
+  font-weight: 600;
+}
+
+/* ── Footer row ───────────────────────────────────────── */
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.updated-at {
+  font-size: 7.5px;
+  color: #636366;
+  font-weight: 500;
+}
+
+.updated-at-light { color: #8E8E93; }
+
+/* ── Shimmer helper ───────────────────────────────────── */
+.shimmer-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Status / Refresh button ──────────────────────────── */
+.status-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* Minimum 44×44px tap target (Apple HIG / WCAG) */
+  min-width: 164px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border-width: 1px;
+  border-style: solid;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  /* Reset browser button styles */
+  font-family: inherit;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.status-btn:hover  { opacity: 0.85; }
+.status-btn:active { opacity: 0.6; transform: scale(0.98); }
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-text {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}

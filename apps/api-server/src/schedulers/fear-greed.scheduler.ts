@@ -1,6 +1,7 @@
 import { fetchCnnData } from "../services/cnn.service.js";
 import { FearGreed } from "@shared/types";
 import { env } from "../config/env.js";
+import { recordFearGreedFetch } from "../controllers/health.controller.js";
 
 let fearGreedCache: FearGreed | null = null;
 let listeners: ((data: FearGreed) => void)[] = [];
@@ -17,6 +18,7 @@ async function refreshFearGreed() {
   try {
     const data = await fetchCnnData();
     fearGreedCache = data;
+    recordFearGreedFetch();
     listeners.forEach((cb) => cb(data));
   } catch (error) {
     process.stderr.write(`FearGreed Scheduler Error: ${error}\n`);

@@ -24,6 +24,8 @@ export const handleError = (res: Response, error: unknown) => {
     });
   }
 
+  const isProd = process.env.NODE_ENV === "production";
+
   // Structured logging instead of console.log
   const logData = {
     message: error instanceof Error ? error.message : "Internal Server Error",
@@ -36,5 +38,6 @@ export const handleError = (res: Response, error: unknown) => {
   return res.status(500).json({
     error: "Internal Server Error",
     code: "INTERNAL_ERROR",
+    ...(isProd ? {} : { detail: logData.message }),
   });
 };

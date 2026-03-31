@@ -1,0 +1,21 @@
+name: Keep Alive
+
+on:
+  schedule:
+    # Every 14 minutes — keeps Render free tier awake (sleeps after 15 min idle)
+    - cron: "*/14 * * * *"
+  workflow_dispatch: # Allow manual trigger for testing
+
+jobs:
+  ping:
+    name: Ping API Health
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping health endpoint
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.KEEP_ALIVE_URL }}")
+          echo "Health check returned HTTP $STATUS"
+          if [ "$STATUS" -ge 500 ]; then
+            echo "::warning::Health check returned $STATUS — server may be degraded"
+          fi

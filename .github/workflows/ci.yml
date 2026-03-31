@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Lint, Type-check & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── API Server ───────────────────────────────────────────────────────────
+      - name: Setup Node (api-server)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/api-server/package-lock.json
+
+      - name: Install api-server deps
+        working-directory: apps/api-server
+        run: |
+          npm install --prefix ../../packages/shared-types
+          npm install
+
+      - name: Type-check api-server
+        working-directory: apps/api-server
+        run: npx tsc --noEmit
+
+      - name: Test api-server
+        working-directory: apps/api-server
+        # Provide dummy env vars so Zod schema passes during test startup
+        env:
+          CNN_FEAR_GREED_URL: https://example.com/fear-greed
+          GOOGLE_FINANCE_VIX_URL: https://example.com/vix
+          YAHOO_FINANCE_VIX_URL: https://example.com/vix-fallback
+          SCRAPER_USER_AGENT: test-agent
+          NODE_ENV: test
+        run: npm test
+
+      # ── Web App ──────────────────────────────────────────────────────────────
+      - name: Setup Node (web)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install web deps
+        working-directory: apps/web
+        run: npm install
+
+      - name: Type-check web
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Build web (smoke test)
+        working-directory: apps/web
+        env:
+          VITE_API_URL: https://fg-index.onrender.com
+          VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
+        run: npm run build
