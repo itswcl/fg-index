@@ -53,6 +53,7 @@ Temporary Items
 # AI and Agent Tools
 .agents/
 .gemini/
+.claude/
 
 # IDEs and Editors
 .idea/
