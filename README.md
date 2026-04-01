@@ -1,138 +1,206 @@
-# Fear & Greed & VIX index macOS App
+# fg-index
 
-A native macOS application providing real-time financial sentiment metrics, including the CNN Fear & Greed Index and the Volatility Index (VIX).
+Real-time Fear & Greed Index + VIX dashboard with customisable market alerts and webhook notifications.
 
-## Project Overview
+## Live
 
-This project is a full-stack monorepo designed for low-latency market sentiment tracking. It features a Node.js backend that aggregates data from multiple financial sources and a native macOS frontend built with React Native.
-
-### Key Features
-
-- **Real-time Updates**: Live scores pushed via WebSockets.
-- **Native macOS Experience**: Hover states, platform-specific typography, and system dark/light mode support.
-- **Resilient Data Flow**: WebSocket primary transport with automatic REST API fallbacks and manual refresh capabilities.
-- **Compact UI**: Designed to fit unobtrusively on the desktop.
+| App | URL |
+|-----|-----|
+| Web dashboard | https://itswcl.github.io/fg-index/ |
+| API | https://fg-index.onrender.com |
 
 ---
 
-## Architecture Diagram
+## Features
 
-```mermaid
-graph TD
-    subgraph "External Sources"
-        CNN[CNN Fear & Greed]
-        GOOG[Google Finance VIX]
-        YHOO[Yahoo Finance VIX]
-    end
+- **Real-time data** — CNN Fear & Greed Index (30 min) + CBOE VIX (10 sec) streamed over WebSocket
+- **HTTP fallback** — TanStack Query polling if WebSocket disconnects
+- **Custom alerts** — Threshold conditions with AND / OR logic (e.g. `F&G < 10 AND VIX > 30`)
+- **Webhook notifications** — Receive alerts via Discord, Slack, or Telegram
+- **Dark / light mode** — Follows system preference
 
-    subgraph "Backend (Node.js/Express)"
-        API[REST API Handlers]
-        WS[WebSocket Hub]
-        SCHED[Schedulers]
-        SCRAPE[Scraper Services]
-    end
+---
 
-    subgraph "macOS Client (React Native)"
-        UI[Native UI Components]
-        HOOKS[useMarketIndicators Hook]
-        QUERY[TanStack Query]
-    end
+## Monorepo Structure
 
-    CNN --> SCRAPE
-    GOOG --> SCRAPE
-    YHOO --> SCRAPE
-    SCRAPE --> SCHED
-    SCHED --> WS
-    WS -- WS Events --> HOOKS
-    API -- HTTP GET --> QUERY
-    QUERY --> HOOKS
-    HOOKS --> UI
+```
+apps/
+  api-server/     Node.js/Express — REST API + WebSocket server (Render)
+  web/            React + Vite web app (GitHub Pages)
+  macos-app/      React Native macOS desktop companion (local)
+packages/
+  shared-types/   Zod schemas + TypeScript types shared across apps
 ```
 
 ---
 
-## Data Flow
+## Architecture
 
-1. **Ingestion**: The Backend Schedulers trigger Scraper Services at defined intervals (e.g., 30 mins for F&G, 10 seconds for VIX).
-2. **Distribution**:
-   - **Push**: Updates are broadcast immediately to all connected macOS clients via WebSockets (`WS_PORT: 8081`).
-   - **Pull**: The macOS app uses TanStack Query as a fallback to fetch the latest data via REST API if the WebSocket is disconnected or stale.
-3. **Manual Trigger**: Users can press the refresh button in the macOS app, which triggers a manual REST request to fetch the most recent cached data from the server.
+```mermaid
+graph TD
+    subgraph Sources["External Sources"]
+        CNN[CNN Fear & Greed]
+        GOOG[Google Finance VIX]
+        YHOO[Yahoo Finance VIX fallback]
+    end
 
----
+    subgraph Backend["API Server — Render"]
+        SCHED[Schedulers]
+        API[REST API]
+        WS[WebSocket Hub]
+        WEBHOOK[Webhook Delivery]
+    end
 
-## Technical Stack
+    subgraph Clients
+        WEB[Web App — GitHub Pages]
+        MACOS[macOS App — local]
+    end
 
-- **Frontend**: React Native macOS, TypeScript, TanStack Query.
-- **Backend**: Node.js, Express, `ws` (WebSockets), Zod (Validation).
-- **Shared**: Common TypeScript types and schemas in `packages/shared-types`.
+    subgraph Destinations["Alert Destinations"]
+        DISCORD[Discord]
+        SLACK[Slack]
+        TG[Telegram]
+    end
+
+    CNN --> SCHED
+    GOOG --> SCHED
+    YHOO --> SCHED
+    SCHED --> WS
+    SCHED --> API
+    WS -->|FEAR_GREED_UPDATE / VIX_UPDATE / alert_triggered| WEB
+    WS -->|FEAR_GREED_UPDATE / VIX_UPDATE| MACOS
+    API -->|HTTP fallback| WEB
+    WEB -->|set_alerts / set_webhook| WS
+    WS --> WEBHOOK
+    WEBHOOK --> DISCORD
+    WEBHOOK --> SLACK
+    WEBHOOK --> TG
+```
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) (v18+)
-- [Xcode](https://developer.apple.com/xcode/) (for macOS development)
-- [CocoaPods](https://cocoapods.org/)
-- [pnpm](https://pnpm.io/) (used for monorepo management)
-
-### 1. Run the Local Backend Server
-
-The backend is a Node.js service that provides both a REST API for data fetching and a WebSocket server for real-time updates.
+### API Server
 
 ```bash
-# Navigate to the api-server directory
 cd apps/api-server
-
-# Install dependencies
+cp .env.example .env.local
 npm install
-
-# Start the server in development mode (with auto-reload)
 npm run dev
+# Runs on http://localhost:8080 (REST + WebSocket on same port)
 ```
 
-Once running, the backend exposes:
+**Environment variables** (`apps/api-server/.env.local`):
 
-- **REST API**: `http://localhost:8080`
-- **WebSockets**: `ws://localhost:8081`
-
-The server will automatically begin scraping market data (Fear & Greed and VIX) upon startup.
-
-### 2. Set up the macOS App
-
-```bash
-cd apps/macos-app
-npm install
-cd macos && pod install && cd ..
-```
-
-### 3. Run the App
-
-To start the Metro bundler:
-
-```bash
-npm run start -- --port 8081
-```
-
-To launch the application, open `apps/macos-app/macos/macos-app.xcworkspace` in Xcode and click **Run**, or use the CLI:
-
-```bash
-xcodebuild -workspace apps/macos-app/macos/macos-app.xcworkspace \
-           -scheme macos-app-macOS \
-           -configuration Debug build
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | HTTP + WS port |
+| `INTERNAL_API_KEY` | `dev-key-123` | API key — auth skipped in dev |
+| `CORS_ORIGIN` | `*` | Allowed CORS origin |
+| `CNN_FEAR_GREED_URL` | — | CNN DataViz endpoint |
+| `GOOGLE_FINANCE_VIX_URL` | — | Google Finance VIX page |
+| `YAHOO_FINANCE_VIX_URL` | — | Yahoo Finance VIX fallback |
+| `SCRAPER_USER_AGENT` | — | Browser User-Agent for scraping |
+| `FEAR_GREED_INTERVAL_MS` | `1800000` | F&G polling interval (30 min) |
+| `VIX_REALTIME_INTERVAL_MS` | `10000` | VIX real-time polling (10 sec) |
+| `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX fallback interval (5 min) |
 
 ---
 
-## Configuration
+### Web App
 
-Environment variables are managed via `.env.local` files in each app directory.
+```bash
+cd apps/web
+npm install
+npm run dev
+```
 
-**Backend (.env.local):**
+Create `apps/web/.env.local`:
 
-- `PORT`: REST API port (default 8080)
-- `WS_PORT`: WebSocket port (default 8081)
-- `FEAR_GREED_INTERVAL_MS`: Scraping frequency for Fear & Greed.
-- `VIX_REALTIME_INTERVAL_MS`: Scraping frequency for VIX.
+```
+VITE_API_URL=http://localhost:8080
+VITE_API_KEY=dev-key-123
+```
+
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_URL` | Backend base URL |
+| `VITE_API_KEY` | Sent as `X-API-KEY` header |
+| `VITE_WS_URL` | Optional explicit WS URL (derived from `VITE_API_URL` if omitted) |
+
+---
+
+### macOS App
+
+See [`docs/README-macos-legacy.md`](docs/README-macos-legacy.md) for full setup (requires Xcode + CocoaPods).
+
+---
+
+## WebSocket Protocol
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| `FEAR_GREED_UPDATE` | Server → Client | New Fear & Greed snapshot |
+| `VIX_UPDATE` | Server → Client | New VIX snapshot (payload may be `null`) |
+| `alert_triggered` | Server → Client | Alert condition matched |
+| `set_alerts` | Client → Server | Register alert configs for this connection |
+| `set_webhook` | Client → Server | Register webhook config for this connection |
+
+---
+
+## Alerts & Webhooks
+
+Create alerts in the **Alerts** panel of the web app. Each alert has one or more conditions:
+
+```
+Fear & Greed < 10   AND   VIX > 30
+```
+
+**Operators:** `<` `>` `<=` `>=` `==`
+**Logic:** `AND` (all must match) or `OR` (any triggers)
+
+### Webhook Setup
+
+| Platform | Required | Where to get it |
+|----------|---------|-----------------|
+| **Discord** | Webhook URL | Server Settings → Integrations → Webhooks |
+| **Slack** | Incoming Webhook URL | api.slack.com → Your Apps → Incoming Webhooks |
+| **Telegram** | Bot Token + Chat ID | Token: @BotFather · Chat ID: @userinfobot |
+
+Configure in the web app: **Alerts → ⚡ Webhook**.
+
+---
+
+## API Reference
+
+| Endpoint | Method | Description | Cache |
+|----------|--------|-------------|-------|
+| `/api/fear-greed` | GET | Fear & Greed snapshot | 30 min |
+| `/api/vix` | GET | VIX snapshot | 5 min |
+| `/health` | GET | Health check | — |
+
+All endpoints require `X-API-KEY` header in production.
+
+---
+
+## Deployment
+
+| Service | Platform | Trigger |
+|---------|----------|---------|
+| API Server | Render (free tier) | Push to `main` |
+| Web App | GitHub Pages | Push to `main` |
+| Keep-alive | GitHub Actions cron (every 14 min) | Pings `/health` to prevent Render sleep |
+
+---
+
+## Contributing
+
+```bash
+git checkout -b feat/your-change   # branch off main
+# make changes, test locally
+git push origin feat/your-change
+# open PR → review → merge → delete branch
+```
+
+CI runs on every PR: lint, type-check, unit tests.
