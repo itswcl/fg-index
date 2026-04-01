@@ -75,3 +75,27 @@ export const AlertTriggeredMessageSchema = z.object({
   triggeredAt: z.string(),
 });
 export type AlertTriggeredMessage = z.infer<typeof AlertTriggeredMessageSchema>;
+
+// ─── Webhook config ────────────────────────────────────────────────
+export const WebhookConfigSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("discord"),
+    url: z.string().url(),
+  }),
+  z.object({
+    type: z.literal("slack"),
+    url: z.string().url(),
+  }),
+  z.object({
+    type: z.literal("telegram"),
+    botToken: z.string().min(1),
+    chatId: z.string().min(1),
+  }),
+]);
+export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
+
+export const SetWebhookMessageSchema = z.object({
+  type: z.literal("set_webhook"),
+  webhook: WebhookConfigSchema.nullable(), // null = remove webhook
+});
+export type SetWebhookMessage = z.infer<typeof SetWebhookMessageSchema>;
