@@ -3,11 +3,15 @@ import http from "http";
 import { subscribeToFearGreed, getCachedFearGreed } from "./schedulers/fear-greed.scheduler.js";
 import { subscribeToVix, getCachedVix } from "./schedulers/vix.scheduler.js";
 import { MAX_WS_CONNECTIONS } from "./middlewares/rateLimit.js";
-import { SetAlertsMessageSchema, type Alert } from "@shared/types";
+import { SetAlertsMessageSchema, SetWebhookMessageSchema, type Alert, type WebhookConfig } from "@shared/types";
 import { evaluateAlerts } from "./services/alertEvaluator.js";
+import { deliverWebhook } from "./services/webhookDelivery.js";
 
 // Per-connection alert storage
 const connectionAlerts = new Map<WebSocket, Alert[]>();
+
+// Per-connection webhook config storage
+const connectionWebhooks = new Map<WebSocket, WebhookConfig | null>();
 
 // Cached reference to the WSS for external broadcast
 let wssInstance: WebSocketServer | null = null;
@@ -26,6 +30,14 @@ export function broadcastWithAlertEvaluation(
       const triggered = evaluateAlerts(alerts, fearGreedScore, vixPrice);
       for (const msg of triggered) {
         client.send(JSON.stringify(msg));
+      }
+
+      // Deliver webhook for each triggered alert if this connection has one configured
+      const webhookConfig = connectionWebhooks.get(client);
+      if (webhookConfig) {
+        for (const msg of triggered) {
+          void deliverWebhook(webhookConfig, msg.alertName, msg.message);
+        }
       }
     }
   });
@@ -61,6 +73,24 @@ export function startWsServer(server: http.Server) {
         return;
       }
 
+      // Dispatch on message type
+      const msgType =
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "type" in (parsed as Record<string, unknown>)
+          ? (parsed as Record<string, unknown>).type
+          : undefined;
+
+      if (msgType === "set_webhook") {
+        const webhookResult = SetWebhookMessageSchema.safeParse(parsed);
+        if (webhookResult.success) {
+          connectionWebhooks.set(ws, webhookResult.data.webhook);
+          return;
+        }
+        ws.close(1003, "Unsupported data");
+        return;
+      }
+
       const result = SetAlertsMessageSchema.safeParse(parsed);
       if (result.success) {
         connectionAlerts.set(ws, result.data.alerts);
@@ -73,6 +103,7 @@ export function startWsServer(server: http.Server) {
 
     ws.on("close", () => {
       connectionAlerts.delete(ws);
+      connectionWebhooks.delete(ws);
     });
 
     ws.on("error", (err) => {
