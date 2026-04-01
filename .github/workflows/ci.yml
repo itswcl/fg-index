@@ -42,7 +42,9 @@ jobs:
           YAHOO_FINANCE_VIX_URL: https://example.com/vix-fallback
           SCRAPER_USER_AGENT: test-agent
           NODE_ENV: test
-        run: npm test
+        # Integration tests require a running server + live network; run them locally only.
+        # Unit tests (alertEvaluator, webhookDelivery, vix) run here.
+        run: npx vitest run --exclude 'src/__tests__/integration/**' --exclude 'src/services/cnn.test.ts'
 
       # ── Web App ──────────────────────────────────────────────────────────────
       - name: Setup Node (web)
