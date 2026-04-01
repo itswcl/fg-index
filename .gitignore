@@ -19,7 +19,6 @@ dist/
 dist-ssr/
 build/
 out/
-docs/
 .next/
 main.jsbundle
 
