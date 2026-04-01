@@ -5,7 +5,7 @@ import { useFearGreed } from './hooks/useFearGreed';
 import { useVix } from './hooks/useVix';
 import { useAppColorScheme } from './hooks/useAppColorScheme';
 import { useAlerts } from './hooks/useAlerts';
-import { useNotifications } from './hooks/useNotifications';
+import { useWebhook } from './hooks/useWebhook';
 import { FearGreedCard } from './components/FearGreedCard';
 import { VixCard } from './components/VixCard';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
@@ -17,15 +17,14 @@ const queryClient = new QueryClient();
 
 function MarketIndicators() {
   const { alerts, addAlert, updateAlert, deleteAlert, toggleAlert } = useAlerts();
-  const { permission, requestPermission, notify } = useNotifications();
+  const { webhook, setWebhook, clearWebhook } = useWebhook();
 
   const handleAlertTriggered = useCallback(
     (msg: AlertTriggeredMessage) => {
-      notify(msg.alertName, msg.message);
-      // Update lastTriggeredAt for the matching alert
+      // Update lastTriggeredAt for the matching alert; backend handles webhook delivery
       updateAlert(msg.alertId, { lastTriggeredAt: msg.triggeredAt });
     },
-    [notify, updateAlert],
+    [updateAlert],
   );
 
   const {
@@ -35,7 +34,7 @@ function MarketIndicators() {
     wsStatus,
     lastFearGreedUpdate,
     lastVixUpdate,
-  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered });
+  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered, webhook });
 
   const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
   const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
@@ -117,8 +116,9 @@ function MarketIndicators() {
           onUpdate={updateAlert}
           onDelete={deleteAlert}
           onToggle={toggleAlert}
-          notificationPermission={permission}
-          onRequestPermission={requestPermission}
+          webhook={webhook}
+          onSaveWebhook={setWebhook}
+          onRemoveWebhook={clearWebhook}
           isDark={isDark}
         />
       </div>

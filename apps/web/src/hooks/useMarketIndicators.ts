@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FearGreed, Vix } from '../types';
-import type { Alert, AlertTriggeredMessage } from '../types/alerts';
+import type { Alert, AlertTriggeredMessage, WebhookConfig } from '../types/alerts';
 import { WS_URL, API_KEY } from '../constants';
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
@@ -22,6 +22,7 @@ interface UseMarketIndicatorsReturn {
 interface UseMarketIndicatorsOptions {
   alerts?: Alert[];
   onAlertTriggered?: (msg: AlertTriggeredMessage) => void;
+  webhook?: WebhookConfig | null;
 }
 
 function evaluateAlertsLocally(
@@ -80,7 +81,7 @@ function evaluateAlertsLocally(
 export function useMarketIndicators(
   options: UseMarketIndicatorsOptions = {},
 ): UseMarketIndicatorsReturn {
-  const { alerts, onAlertTriggered } = options;
+  const { alerts, onAlertTriggered, webhook } = options;
 
   const [fearGreed, setFearGreed] = useState<FearGreed | null>(null);
   const [vix, setVix] = useState<Vix | null>(null);
@@ -92,9 +93,10 @@ export function useMarketIndicators(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(3000);
-  // Keep latest callback/alerts in a ref so the stable `connect` closure can access them
+  // Keep latest callback/alerts/webhook in refs so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
   const alertsRef = useRef(alerts);
+  const webhookRef = useRef(webhook);
   const latestFearGreedScoreRef = useRef<number | null>(null);
   const latestVixPriceRef = useRef<number | null>(null);
 
@@ -105,6 +107,14 @@ export function useMarketIndicators(
   useEffect(() => {
     alertsRef.current = alerts;
   }, [alerts]);
+
+  useEffect(() => {
+    webhookRef.current = webhook;
+    // Send updated config immediately if WS is already open
+    if (wsRef.current?.readyState === WebSocket.OPEN && webhook) {
+      wsRef.current.send(JSON.stringify({ type: 'set_webhook', webhook }));
+    }
+  }, [webhook]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -118,6 +128,10 @@ export function useMarketIndicators(
     ws.onopen = () => {
       setWsStatus('connected');
       reconnectDelayRef.current = 3000; // Reset on success
+      // Sync webhook config to backend on connect
+      if (webhookRef.current) {
+        ws.send(JSON.stringify({ type: 'set_webhook', webhook: webhookRef.current }));
+      }
     };
 
     ws.onmessage = (event) => {

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { Alert } from '../../types/alerts';
+import type { Alert, WebhookConfig } from '../../types/alerts';
 import { AlertForm } from './AlertForm';
 import { AlertItem } from './AlertItem';
+import { WebhookForm } from './WebhookForm';
 
 interface AlertsPanelProps {
   alerts: Alert[];
@@ -9,8 +10,9 @@ interface AlertsPanelProps {
   onUpdate: (id: string, updates: Partial<Alert>) => void;
   onDelete: (id: string) => void;
   onToggle: (id: string) => void;
-  notificationPermission: NotificationPermission;
-  onRequestPermission: () => Promise<void>;
+  webhook: WebhookConfig | null;
+  onSaveWebhook: (cfg: WebhookConfig) => void;
+  onRemoveWebhook: () => void;
   isDark: boolean;
 }
 
@@ -25,15 +27,16 @@ export function AlertsPanel({
   onUpdate,
   onDelete,
   onToggle,
-  notificationPermission,
-  onRequestPermission,
+  webhook,
+  onSaveWebhook,
+  onRemoveWebhook,
   isDark,
 }: AlertsPanelProps) {
   const [modal, setModal] = useState<ModalState>({ mode: 'none' });
+  const [webhookOpen, setWebhookOpen] = useState(false);
 
   const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
   const panelBg = isDark ? 'rgba(18,18,20,0.6)' : 'rgba(242,242,247,0.8)';
-  const textColor = isDark ? '#FFFFFF' : '#000000';
   const subTextColor = '#8E8E93';
   const accentColor = '#007AFF';
 
@@ -75,36 +78,45 @@ export function AlertsPanel({
           Alerts
         </span>
 
-        {/* Notification bell */}
-        {notificationPermission !== 'granted' && (
-          <button
-            type="button"
-            onClick={onRequestPermission}
-            title={
-              notificationPermission === 'denied'
-                ? 'Notifications blocked — enable in browser settings'
-                : 'Enable browser notifications'
-            }
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: notificationPermission === 'denied' ? 'not-allowed' : 'pointer',
-              fontSize: 14,
-              padding: '2px 4px',
-              lineHeight: 1,
-              opacity: notificationPermission === 'denied' ? 0.4 : 0.7,
-              transition: 'opacity 0.15s',
-            }}
-            aria-label="Enable notifications"
-          >
-            🔔
-          </button>
-        )}
-        {notificationPermission === 'granted' && (
-          <span style={{ fontSize: 13, opacity: 0.6 }} title="Notifications enabled">
-            🔔
-          </span>
-        )}
+        {/* Webhook toggle button */}
+        <button
+          type="button"
+          onClick={() => setWebhookOpen((o) => !o)}
+          title={webhook ? 'Webhook configured' : 'Configure webhook notifications'}
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: webhookOpen ? '#FFFFFF' : subTextColor,
+            background: webhookOpen
+              ? accentColor
+              : isDark
+                ? 'rgba(255,255,255,0.07)'
+                : 'rgba(0,0,0,0.05)',
+            border: `1px solid ${webhookOpen ? accentColor : borderColor}`,
+            borderRadius: 8,
+            padding: '4px 9px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.15s',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          {webhook && (
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: '#34C759',
+                display: 'inline-block',
+                flexShrink: 0,
+              }}
+            />
+          )}
+          ⚡ Webhook
+        </button>
 
         {/* New alert button */}
         <button
@@ -127,40 +139,41 @@ export function AlertsPanel({
         </button>
       </div>
 
-      {/* Permission prompt */}
-      {notificationPermission === 'default' && (
+      {/* Webhook section (collapsible) */}
+      {webhookOpen && (
         <div
           style={{
-            background: isDark ? 'rgba(0,122,255,0.12)' : 'rgba(0,122,255,0.08)',
-            border: '1px solid rgba(0,122,255,0.25)',
-            borderRadius: 10,
-            padding: '8px 10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
+            background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+            border: `1px solid ${borderColor}`,
+            borderRadius: 12,
+            padding: '12px 12px',
           }}
         >
-          <span style={{ fontSize: 10, color: textColor, flex: 1 }}>
-            Enable browser notifications to get alerted when conditions trigger.
-          </span>
-          <button
-            type="button"
-            onClick={onRequestPermission}
+          <span
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#FFFFFF',
-              background: accentColor,
-              border: 'none',
-              borderRadius: 6,
-              padding: '4px 10px',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-              whiteSpace: 'nowrap',
+              fontSize: 9,
+              fontWeight: 800,
+              color: subTextColor,
+              textTransform: 'uppercase',
+              letterSpacing: 1.5,
+              display: 'block',
+              marginBottom: 10,
             }}
           >
-            Allow
-          </button>
+            Webhook Notifications
+          </span>
+          <WebhookForm
+            webhook={webhook}
+            onSave={(cfg) => {
+              onSaveWebhook(cfg);
+              setWebhookOpen(false);
+            }}
+            onRemove={() => {
+              onRemoveWebhook();
+              setWebhookOpen(false);
+            }}
+            isDark={isDark}
+          />
         </div>
       )}
 
