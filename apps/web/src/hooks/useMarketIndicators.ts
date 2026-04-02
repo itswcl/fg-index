@@ -106,6 +106,9 @@ export function useMarketIndicators(
 
   useEffect(() => {
     alertsRef.current = alerts;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'set_alerts', alerts: alerts ?? [] }));
+    }
   }, [alerts]);
 
   useEffect(() => {
@@ -131,6 +134,10 @@ export function useMarketIndicators(
       // Sync webhook config to backend on connect
       if (webhookRef.current) {
         ws.send(JSON.stringify({ type: 'set_webhook', webhook: webhookRef.current }));
+      }
+      // Sync alerts so server can fire webhooks server-side
+      if (alertsRef.current?.length) {
+        ws.send(JSON.stringify({ type: 'set_alerts', alerts: alertsRef.current }));
       }
     };
 
