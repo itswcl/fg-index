@@ -8,34 +8,34 @@ export async function deliverWebhook(
   // Build the text
   const text = `🔔 ${alertName}: ${message}`;
 
-  try {
-    if (config.type === "discord") {
-      await fetch(config.url, {
+  let response: globalThis.Response;
+
+  if (config.type === "discord") {
+    response = await fetch(config.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: text, username: "fg-index" }),
+    });
+  } else if (config.type === "slack") {
+    response = await fetch(config.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  } else if (config.type === "telegram") {
+    response = await fetch(
+      `https://api.telegram.org/bot${config.botToken}/sendMessage`,
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text, username: "fg-index" }),
-      });
-    } else if (config.type === "slack") {
-      await fetch(config.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-    } else if (config.type === "telegram") {
-      await fetch(
-        `https://api.telegram.org/bot${config.botToken}/sendMessage`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: config.chatId, text }),
-        }
-      );
-    }
-  } catch (err) {
-    // Log but never throw — webhook failure must not crash the server
-    process.stderr.write(
-      JSON.stringify({ event: "webhook_delivery_error", error: String(err) }) +
-        "\n"
+        body: JSON.stringify({ chat_id: config.chatId, text }),
+      }
     );
+  } else {
+    throw new Error("Unsupported webhook type");
+  }
+
+  if (!response.ok) {
+    throw new Error(`Webhook delivery failed: HTTP ${response.status}`);
   }
 }

@@ -5,6 +5,7 @@ import http from "http";
 import { env } from "./config/env.js";
 import fearGreedRouter from "./routes/fear-greed.routes.js";
 import vixRouter from "./routes/vix.routes.js";
+import webhookRoutes from "./routes/webhook.routes.js";
 import { startFearGreedScheduler } from "./schedulers/fear-greed.scheduler.js";
 import { startVixScheduler } from "./schedulers/vix.scheduler.js";
 import { startWsServer } from "./ws.js";
@@ -31,6 +32,7 @@ app.use(globalRateLimiter); // Apply rate limiting to all requests
 // Routes
 app.use("/api/fear-greed", fearGreedRouter);
 app.use("/api/vix", vixRouter);
+app.use("/api/webhooks", webhookRoutes);
 
 // Health check
 app.get("/api/health", getHealth);

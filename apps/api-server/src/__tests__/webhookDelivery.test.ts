@@ -8,7 +8,7 @@ describe("deliverWebhook()", () => {
   const mockFetch = vi.fn();
 
   beforeEach(() => {
-    mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    mockFetch.mockResolvedValue(new Response(null, { status: 200, statusText: "OK" }));
     vi.stubGlobal("fetch", mockFetch);
   });
 
@@ -81,8 +81,7 @@ describe("deliverWebhook()", () => {
     });
   });
 
-  it("does not throw when fetch rejects, and logs to stderr", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  it("throws when fetch rejects with a network error", async () => {
     mockFetch.mockRejectedValue(new Error("Network error"));
 
     const config: WebhookConfig = {
@@ -90,17 +89,21 @@ describe("deliverWebhook()", () => {
       url: "https://discord.com/api/webhooks/fail/test",
     };
 
-    // Should not throw
     await expect(
       deliverWebhook(config, "Alert", "some message")
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Network error");
+  });
 
-    expect(stderrSpy).toHaveBeenCalledOnce();
-    const loggedOutput = stderrSpy.mock.calls[0][0] as string;
-    const parsed = JSON.parse(loggedOutput);
-    expect(parsed.event).toBe("webhook_delivery_error");
-    expect(parsed.error).toContain("Network error");
+  it("throws when the HTTP response is not ok", async () => {
+    mockFetch.mockResolvedValue(new Response(null, { status: 400, statusText: "Bad Request" }));
 
-    stderrSpy.mockRestore();
+    const config: WebhookConfig = {
+      type: "slack",
+      url: "https://hooks.slack.com/services/T000/B000/xxxx",
+    };
+
+    await expect(
+      deliverWebhook(config, "Alert", "some message")
+    ).rejects.toThrow("HTTP 400");
   });
 });
