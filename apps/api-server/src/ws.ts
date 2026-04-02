@@ -36,7 +36,11 @@ export function broadcastWithAlertEvaluation(
       const webhookConfig = connectionWebhooks.get(client);
       if (webhookConfig) {
         for (const msg of triggered) {
-          void deliverWebhook(webhookConfig, msg.alertName, msg.message);
+          void deliverWebhook(webhookConfig, msg.alertName, msg.message).catch((err: unknown) => {
+            process.stderr.write(
+              JSON.stringify({ event: "webhook_delivery_error", error: String(err) }) + "\n"
+            );
+          });
         }
       }
     }
