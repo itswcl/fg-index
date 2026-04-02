@@ -22,8 +22,8 @@ const ALLOWED_ORIGINS = env.CORS_ORIGIN === "*"
 app.use(helmet()); // Set secure HTTP headers
 app.use(cors({
   origin: ALLOWED_ORIGINS,
-  methods: ["GET"],
-  allowedHeaders: ["X-API-KEY"],
+  methods: ["GET", "POST"],
+  allowedHeaders: ["X-API-KEY", "Content-Type"],
 }));
 app.use(express.json({ limit: "10kb" })); // Request size limit
 app.set("trust proxy", 1); // Trust first proxy
