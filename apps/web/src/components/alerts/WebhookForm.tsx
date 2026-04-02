@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { WebhookConfig, WebhookType } from '../../types/alerts';
+import { API_BASE_URL, API_KEY } from '../../constants';
 
 interface WebhookFormProps {
   webhook: WebhookConfig | null;
@@ -33,6 +34,10 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
   const [chatId, setChatId] = useState(webhook?.chatId ?? '');
   const [error, setError] = useState<string | null>(null);
 
+  type TestState = 'idle' | 'loading' | 'success' | 'error';
+  const [testState, setTestState] = useState<TestState>('idle');
+  const [testError, setTestError] = useState('');
+
   const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
   const textColor = isDark ? '#FFFFFF' : '#000000';
   const subTextColor = '#8E8E93';
@@ -64,6 +69,49 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
     color: subTextColor,
     lineHeight: 1.5,
     marginTop: 5,
+  };
+
+  const buildCurrentConfig = (): WebhookConfig | null => {
+    if (selectedType === 'discord' || selectedType === 'slack') {
+      if (!url.trim()) return null;
+      return { type: selectedType, url: url.trim() };
+    }
+    if (selectedType === 'telegram') {
+      if (!botToken.trim() || !chatId.trim()) return null;
+      return { type: 'telegram', botToken: botToken.trim(), chatId: chatId.trim() };
+    }
+    return null;
+  };
+
+  const handleTest = async () => {
+    const config = buildCurrentConfig();
+    if (!config) return;
+
+    setTestState('loading');
+    setTestError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/webhooks/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(API_KEY ? { 'X-API-KEY': API_KEY } : {}),
+        },
+        body: JSON.stringify({ webhook: config }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string };
+      if (data.ok) {
+        setTestState('success');
+        setTimeout(() => setTestState('idle'), 3000);
+      } else {
+        setTestState('error');
+        setTestError(data.error ?? 'Unknown error');
+        setTimeout(() => { setTestState('idle'); setTestError(''); }, 5000);
+      }
+    } catch {
+      setTestState('error');
+      setTestError('Could not reach server');
+      setTimeout(() => { setTestState('idle'); setTestError(''); }, 5000);
+    }
   };
 
   const handlePlatformChange = (type: WebhookType) => {
@@ -206,7 +254,7 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
       )}
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button
           type="button"
           onClick={handleSave}
@@ -224,6 +272,28 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
         >
           Save
         </button>
+        {buildCurrentConfig() && (
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testState === 'loading'}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: accentColor,
+              background: 'transparent',
+              border: `1.5px solid ${accentColor}`,
+              borderRadius: 8,
+              padding: '4px 10px',
+              cursor: testState === 'loading' ? 'default' : 'pointer',
+              fontFamily: 'inherit',
+              opacity: testState === 'loading' ? 0.6 : 1,
+              transition: 'opacity 0.15s',
+            }}
+          >
+            {testState === 'loading' ? 'Sending…' : 'Test'}
+          </button>
+        )}
         {isConfigured && (
           <button
             type="button"
@@ -244,6 +314,18 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
           </button>
         )}
       </div>
+
+      {/* Test feedback */}
+      {testState === 'success' && (
+        <p style={{ fontSize: 11, color: '#34C759', margin: '6px 0 0' }}>
+          ✅ Test message sent!
+        </p>
+      )}
+      {testState === 'error' && (
+        <p style={{ fontSize: 11, color: '#FF3B30', margin: '6px 0 0' }}>
+          ❌ {testError}
+        </p>
+      )}
     </div>
   );
 }
