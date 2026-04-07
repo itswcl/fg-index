@@ -116,6 +116,116 @@ describe("evaluateAlerts()", () => {
     expect(result).toHaveLength(0);
   });
 
+  // ─── BTC ────────────────────────────────────────────────────────────────────
+
+  it("btc > 100000 with price 105000 → triggers", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "btc", operator: ">", value: 100000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, 105000, null);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toContain("BTC is 105000 (> 100000)");
+  });
+
+  it("btc > 100000 with price 95000 → does not trigger", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "btc", operator: ">", value: 100000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, 95000, null);
+    expect(result).toHaveLength(0);
+  });
+
+  it("null btc → skips btc condition in AND; other passing conditions still fire", () => {
+    const alert = makeAlert({
+      logic: "AND",
+      conditions: [
+        { metric: "fearGreed", operator: "<", value: 10 },
+        { metric: "btc", operator: ">", value: 100000 },
+      ],
+    });
+    const result = evaluateAlerts([alert], 8, null, null, null);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).not.toContain("BTC");
+  });
+
+  it("null btc with only btc condition → does not trigger", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "btc", operator: ">", value: 100000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, null, null);
+    expect(result).toHaveLength(0);
+  });
+
+  // ─── SPX ────────────────────────────────────────────────────────────────────
+
+  it("spx < 5000 with price 4800 → triggers", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "spx", operator: "<", value: 5000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, null, 4800);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toContain("SPX is 4800 (< 5000)");
+  });
+
+  it("spx < 5000 with price 5200 → does not trigger", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "spx", operator: "<", value: 5000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, null, 5200);
+    expect(result).toHaveLength(0);
+  });
+
+  it("null spx → skips spx condition in AND; other passing conditions still fire", () => {
+    const alert = makeAlert({
+      logic: "AND",
+      conditions: [
+        { metric: "vix", operator: ">", value: 30 },
+        { metric: "spx", operator: "<", value: 5000 },
+      ],
+    });
+    const result = evaluateAlerts([alert], null, 35, null, null);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).not.toContain("SPX");
+  });
+
+  it("null spx with only spx condition → does not trigger", () => {
+    const alert = makeAlert({
+      conditions: [{ metric: "spx", operator: "<", value: 5000 }],
+    });
+    const result = evaluateAlerts([alert], null, null, null, null);
+    expect(result).toHaveLength(0);
+  });
+
+  // ─── Cross-metric ─────────────────────────────────────────────────────────
+
+  it("OR: btc > threshold OR fearGreed < threshold — fires when only btc passes", () => {
+    const alert = makeAlert({
+      logic: "OR",
+      conditions: [
+        { metric: "btc", operator: ">", value: 100000 },
+        { metric: "fearGreed", operator: "<", value: 10 },
+      ],
+    });
+    const result = evaluateAlerts([alert], 50, null, 105000, null);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toContain("BTC");
+  });
+
+  it("AND: all four metrics — triggers when all pass", () => {
+    const alert = makeAlert({
+      logic: "AND",
+      conditions: [
+        { metric: "fearGreed", operator: "<", value: 30 },
+        { metric: "vix", operator: ">", value: 25 },
+        { metric: "btc", operator: "<", value: 80000 },
+        { metric: "spx", operator: "<", value: 5000 },
+      ],
+    });
+    const result = evaluateAlerts([alert], 20, 28, 75000, 4900);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toContain("AND");
+  });
+
   it("disabled alert → never triggers", () => {
     const alert = makeAlert({
       enabled: false,
