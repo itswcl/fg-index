@@ -36,19 +36,25 @@ function MarketIndicators() {
     fearGreed: wsFearGreed,
     vix: wsVix,
     vixAvailable,
+    btc: wsBtc,
+    spx: wsSpx,
+    spxAvailable,
     wsStatus,
     lastFearGreedUpdate,
     lastVixUpdate,
+    lastBtcUpdate,
+    lastSpxUpdate,
   } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered, webhook });
 
   const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
   const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
-  const { data: btcData, isLoading: btcLoading, isFetching: btcFetching } = useBtc();
-  const { data: spxData, isLoading: spxLoading, isFetching: spxFetching } = useSpx();
+  const { data: httpBtc, isLoading: btcLoading, isFetching: btcFetching } = useBtc();
+  const { data: httpSpx, isLoading: spxLoading, isFetching: spxFetching } = useSpx();
 
   const fearGreedData = wsFearGreed ?? httpFearGreed ?? null;
   const vixData = wsVix ?? httpVix ?? null;
-  const spxAvailable = !spxLoading && spxData !== null;
+  const btcData = wsBtc ?? httpBtc ?? null;
+  const spxData = wsSpx ?? httpSpx ?? null;
 
   const colorScheme = useAppColorScheme();
   const isDark = colorScheme === 'dark';
@@ -88,8 +94,8 @@ function MarketIndicators() {
     ? new Date(manualVixUpdateMs)
     : lastVixUpdate;
 
-  const btcDisplayUpdate = btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null;
-  const spxDisplayUpdate = spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null;
+  const btcDisplayUpdate = lastBtcUpdate ?? (btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null);
+  const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
   const isRefreshing = fgFetching || vixFetching || isManualRefreshing;
 
@@ -113,17 +119,17 @@ function MarketIndicators() {
             isDark={isDark}
           />
           <BtcCard
-            data={btcData ?? null}
+            data={btcData}
             lastUpdate={btcDisplayUpdate}
-            isLoading={btcLoading}
+            isLoading={btcLoading && !wsBtc && !httpBtc}
             isRefreshing={btcFetching}
             isDark={isDark}
           />
           <SpxCard
-            data={spxData ?? null}
+            data={spxData}
             spxAvailable={spxAvailable}
             lastUpdate={spxDisplayUpdate}
-            isLoading={spxLoading}
+            isLoading={spxLoading && !wsSpx && !httpSpx}
             isRefreshing={spxFetching}
             isDark={isDark}
           />
