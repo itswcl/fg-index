@@ -3,6 +3,7 @@ import http from "http";
 import { subscribeToFearGreed, getCachedFearGreed } from "./schedulers/fear-greed.scheduler.js";
 import { subscribeToVix, getCachedVix } from "./schedulers/vix.scheduler.js";
 import { subscribeToBtc, getCachedBtc } from "./schedulers/btc.scheduler.js";
+import { subscribeToSpx, getCachedSpx } from "./schedulers/spx.scheduler.js";
 import { MAX_WS_CONNECTIONS } from "./middlewares/rateLimit.js";
 import { SetAlertsMessageSchema, SetWebhookMessageSchema, type Alert, type WebhookConfig } from "@shared/types";
 import { evaluateAlerts } from "./services/alertEvaluator.js";
@@ -70,6 +71,9 @@ export function startWsServer(server: http.Server) {
 
     const btc = getCachedBtc();
     ws.send(JSON.stringify({ type: "BTC_UPDATE", payload: btc }));
+
+    const spx = getCachedSpx();
+    ws.send(JSON.stringify({ type: "SPX_UPDATE", payload: spx }));
 
     // Accept set_alerts messages; reject anything else
     ws.on("message", (data) => {
@@ -147,6 +151,14 @@ export function startWsServer(server: http.Server) {
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({ type: "BTC_UPDATE", payload: data }));
+      }
+    });
+  });
+
+  subscribeToSpx((data) => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: "SPX_UPDATE", payload: data }));
       }
     });
   });
