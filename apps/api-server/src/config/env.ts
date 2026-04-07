@@ -9,6 +9,7 @@ const envSchema = z.object({
   GOOGLE_FINANCE_VIX_URL: z.string().url(),
   YAHOO_FINANCE_VIX_URL: z.string().url(),
   GOOGLE_FINANCE_BTC_URL: z.string().url(),
+  YAHOO_FINANCE_BTC_URL: z.string().url(),
   SCRAPER_USER_AGENT: z.string(),
   PORT: z.string().transform(Number).default("8080"),
   FEAR_GREED_INTERVAL_MS: z.string().transform(Number).default("1800000"),
