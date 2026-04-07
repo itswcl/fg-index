@@ -8,7 +8,7 @@ export interface WebhookConfig {
 }
 
 export interface Condition {
-  metric: 'fearGreed' | 'vix';
+  metric: 'fearGreed' | 'vix' | 'btc' | 'spx';
   operator: '<' | '>' | '<=' | '>=' | '==';
   value: number;
 }

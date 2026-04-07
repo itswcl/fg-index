@@ -10,9 +10,15 @@ interface AlertFormProps {
 
 const EMPTY_CONDITION: Condition = { metric: 'fearGreed', operator: '<', value: 25 };
 
+const METRIC_LABELS: Record<Condition['metric'], string> = {
+  fearGreed: 'F&G',
+  vix: 'VIX',
+  btc: 'BTC',
+  spx: 'SPX',
+};
+
 function conditionLabel(c: Condition): string {
-  const metricLabel = c.metric === 'fearGreed' ? 'F&G' : 'VIX';
-  return `${metricLabel} ${c.operator} ${c.value}`;
+  return `${METRIC_LABELS[c.metric]} ${c.operator} ${c.value}`;
 }
 // Exported for use in AlertItem
 export { conditionLabel };
@@ -178,6 +184,8 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
               >
                 <option value="fearGreed">F&amp;G</option>
                 <option value="vix">VIX</option>
+                <option value="btc">BTC</option>
+                <option value="spx">SPX</option>
               </select>
 
               {/* Operator */}
