@@ -259,14 +259,14 @@
 
 .bmc-btn-dark {
   background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .bmc-btn-light {
   background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.08);
-  color: rgba(0, 0, 0, 0.35);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #636366;
 }
 
 .bmc-icon {
