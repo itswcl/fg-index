@@ -30,18 +30,41 @@ interface UseMarketIndicatorsOptions {
   webhook?: WebhookConfig | null;
 }
 
+interface MarketPrices {
+  fearGreedScore: number | null;
+  vixPrice: number | null;
+  btcPrice: number | null;
+  spxPrice: number | null;
+}
+
+const METRIC_LABELS: Record<string, string> = {
+  fearGreed: 'F&G',
+  vix: 'VIX',
+  btc: 'BTC',
+  spx: 'SPX',
+};
+
+function getMetricValue(metric: string, prices: MarketPrices): number | null {
+  switch (metric) {
+    case 'fearGreed': return prices.fearGreedScore;
+    case 'vix':       return prices.vixPrice;
+    case 'btc':       return prices.btcPrice;
+    case 'spx':       return prices.spxPrice;
+    default:          return null;
+  }
+}
+
 function evaluateAlertsLocally(
   alerts: Alert[],
-  fearGreedScore: number | null,
-  vixPrice: number | null,
+  prices: MarketPrices,
   onTriggered: (msg: AlertTriggeredMessage) => void,
 ) {
   for (const alert of alerts) {
     if (!alert.enabled) continue;
 
     const results = alert.conditions.map((cond) => {
-      const metricValue = cond.metric === 'fearGreed' ? fearGreedScore : vixPrice;
-      if (metricValue === null) return null; // skip if data unavailable
+      const metricValue = getMetricValue(cond.metric, prices);
+      if (metricValue === null) return null;
 
       switch (cond.operator) {
         case '<':  return metricValue < cond.value;
@@ -64,9 +87,9 @@ function evaluateAlertsLocally(
     if (triggered) {
       const parts = alert.conditions
         .map((c) => {
-          const val = c.metric === 'fearGreed' ? fearGreedScore : vixPrice;
+          const val = getMetricValue(c.metric, prices);
           if (val === null) return null;
-          const label = c.metric === 'fearGreed' ? 'F&G' : 'VIX';
+          const label = METRIC_LABELS[c.metric] ?? c.metric;
           return `${label} is ${val} (${c.operator} ${c.value})`;
         })
         .filter(Boolean);
@@ -109,6 +132,8 @@ export function useMarketIndicators(
   const webhookRef = useRef(webhook);
   const latestFearGreedScoreRef = useRef<number | null>(null);
   const latestVixPriceRef = useRef<number | null>(null);
+  const latestBtcPriceRef = useRef<number | null>(null);
+  const latestSpxPriceRef = useRef<number | null>(null);
 
   useEffect(() => {
     onAlertTriggeredRef.current = onAlertTriggered;
@@ -160,14 +185,13 @@ export function useMarketIndicators(
           setFearGreed(fg);
           setLastFearGreedUpdate(new Date());
           latestFearGreedScoreRef.current = fg.score;
-          // evaluate alerts with latest values
           if (onAlertTriggeredRef.current && alertsRef.current?.length) {
-            evaluateAlertsLocally(
-              alertsRef.current,
-              fg.score,
-              latestVixPriceRef.current,
-              onAlertTriggeredRef.current,
-            );
+            evaluateAlertsLocally(alertsRef.current, {
+              fearGreedScore: fg.score,
+              vixPrice: latestVixPriceRef.current,
+              btcPrice: latestBtcPriceRef.current,
+              spxPrice: latestSpxPriceRef.current,
+            }, onAlertTriggeredRef.current);
           }
         }
 
@@ -177,14 +201,13 @@ export function useMarketIndicators(
           setVixAvailable(payload !== null);
           setLastVixUpdate(new Date());
           latestVixPriceRef.current = payload?.price ?? null;
-          // evaluate alerts with latest values
           if (onAlertTriggeredRef.current && alertsRef.current?.length) {
-            evaluateAlertsLocally(
-              alertsRef.current,
-              latestFearGreedScoreRef.current,
-              payload?.price ?? null,
-              onAlertTriggeredRef.current,
-            );
+            evaluateAlertsLocally(alertsRef.current, {
+              fearGreedScore: latestFearGreedScoreRef.current,
+              vixPrice: payload?.price ?? null,
+              btcPrice: latestBtcPriceRef.current,
+              spxPrice: latestSpxPriceRef.current,
+            }, onAlertTriggeredRef.current);
           }
         }
 
@@ -192,6 +215,15 @@ export function useMarketIndicators(
           const payload = (message as WsMarketMessage).payload as Btc | null;
           setBtc(payload);
           setLastBtcUpdate(new Date());
+          latestBtcPriceRef.current = payload?.price ?? null;
+          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+            evaluateAlertsLocally(alertsRef.current, {
+              fearGreedScore: latestFearGreedScoreRef.current,
+              vixPrice: latestVixPriceRef.current,
+              btcPrice: payload?.price ?? null,
+              spxPrice: latestSpxPriceRef.current,
+            }, onAlertTriggeredRef.current);
+          }
         }
 
         if (message.type === 'SPX_UPDATE' && 'payload' in message) {
@@ -199,6 +231,15 @@ export function useMarketIndicators(
           setSpx(payload);
           setSpxAvailable(payload !== null);
           setLastSpxUpdate(new Date());
+          latestSpxPriceRef.current = payload?.price ?? null;
+          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+            evaluateAlertsLocally(alertsRef.current, {
+              fearGreedScore: latestFearGreedScoreRef.current,
+              vixPrice: latestVixPriceRef.current,
+              btcPrice: latestBtcPriceRef.current,
+              spxPrice: payload?.price ?? null,
+            }, onAlertTriggeredRef.current);
+          }
         }
 
         // keep alert_triggered handler in case backend adds it later
