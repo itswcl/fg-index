@@ -61,8 +61,7 @@ export function AlertsPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
-        flex: 1,
-        minHeight: 0,
+        maxHeight: 'calc(100dvh - 380px)',
         overflow: 'hidden',
       }}
     >
@@ -204,7 +203,7 @@ export function AlertsPanel({
           No alerts yet. Create one to get notified when market conditions match.
         </p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', flex: 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', maxHeight: 'inherit', minHeight: 0 }}>
           {alerts.map((alert) => (
             <AlertItem
               key={alert.id}

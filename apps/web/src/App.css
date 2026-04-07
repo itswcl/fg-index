@@ -15,8 +15,6 @@
 .widget {
   width: 100%;
   max-width: 420px;
-  height: 100%;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
