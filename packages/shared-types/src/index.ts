@@ -42,6 +42,16 @@ export type FearGreed = z.infer<typeof FearGreedSchema>;
 export type Vix = z.infer<typeof VixSchema>;
 export type MarketIndicators = z.infer<typeof MarketIndicatorsSchema>;
 
+// ─── BTC ──────────────────────────────────────────────────────────
+export const BtcSchema = z.object({
+  price: z.number().positive(),
+  change: z.number(),
+  changePercent: z.number(),
+  fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
+});
+
+export type Btc = z.infer<typeof BtcSchema>;
+
 // ─── Alerts ────────────────────────────────────────────────────────
 export const ConditionSchema = z.object({
   metric: z.enum(["fearGreed", "vix"]),

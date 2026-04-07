@@ -5,9 +5,11 @@ import http from "http";
 import { env } from "./config/env.js";
 import fearGreedRouter from "./routes/fear-greed.routes.js";
 import vixRouter from "./routes/vix.routes.js";
+import btcRouter from "./routes/btc.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
 import { startFearGreedScheduler } from "./schedulers/fear-greed.scheduler.js";
 import { startVixScheduler } from "./schedulers/vix.scheduler.js";
+import { startBtcScheduler } from "./schedulers/btc.scheduler.js";
 import { startWsServer } from "./ws.js";
 import { getHealth } from "./controllers/health.controller.js";
 import { globalRateLimiter } from "./middlewares/rateLimit.js";
@@ -32,6 +34,7 @@ app.use(globalRateLimiter); // Apply rate limiting to all requests
 // Routes
 app.use("/api/fear-greed", fearGreedRouter);
 app.use("/api/vix", vixRouter);
+app.use("/api/btc", btcRouter);
 app.use("/api/webhooks", webhookRoutes);
 
 // Health check
@@ -41,6 +44,7 @@ app.get("/health", getHealth); // Backward compatibility
 // Start Schedulers
 startFearGreedScheduler();
 startVixScheduler();
+startBtcScheduler();
 
 // Create HTTP server
 const server = http.createServer(app);

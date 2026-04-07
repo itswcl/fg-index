@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import { subscribeToFearGreed, getCachedFearGreed } from "./schedulers/fear-greed.scheduler.js";
 import { subscribeToVix, getCachedVix } from "./schedulers/vix.scheduler.js";
+import { subscribeToBtc, getCachedBtc } from "./schedulers/btc.scheduler.js";
 import { MAX_WS_CONNECTIONS } from "./middlewares/rateLimit.js";
 import { SetAlertsMessageSchema, SetWebhookMessageSchema, type Alert, type WebhookConfig } from "@shared/types";
 import { evaluateAlerts } from "./services/alertEvaluator.js";
@@ -66,6 +67,9 @@ export function startWsServer(server: http.Server) {
 
     const vix = getCachedVix();
     ws.send(JSON.stringify({ type: "VIX_UPDATE", payload: vix }));
+
+    const btc = getCachedBtc();
+    ws.send(JSON.stringify({ type: "BTC_UPDATE", payload: btc }));
 
     // Accept set_alerts messages; reject anything else
     ws.on("message", (data) => {
@@ -137,6 +141,14 @@ export function startWsServer(server: http.Server) {
     // Evaluate alerts with freshly updated VIX, use latest cached fear & greed
     const fg = getCachedFearGreed();
     broadcastWithAlertEvaluation(fg?.score ?? null, data?.price ?? null);
+  });
+
+  subscribeToBtc((data) => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: "BTC_UPDATE", payload: data }));
+      }
+    });
   });
 
   process.stdout.write("WebSocket server started on same port as HTTP\n");
