@@ -10,6 +10,7 @@ import { FearGreedCard } from './components/FearGreedCard';
 import { VixCard } from './components/VixCard';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
 import { AlertsPanel } from './components/alerts';
+import { BuyMeCoffeeButton } from './components/BuyMeCoffeeButton';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
@@ -121,6 +122,7 @@ function MarketIndicators() {
           onRemoveWebhook={clearWebhook}
           isDark={isDark}
         />
+        <BuyMeCoffeeButton isDark={isDark} />
       </div>
     </div>
   );
