@@ -25,5 +25,11 @@ export const API_KEY: string = import.meta.env.VITE_API_KEY ?? '';
 /** Re-try HTTP fallback every 5 min */
 export const VIX_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
 
+/** BTC poll every 60s */
+export const BTC_REFETCH_INTERVAL_MS = 60 * 1000;
+
+/** SPX poll every 5 min */
+export const SPX_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
+
 /** Consider data stale after 10 min */
 export const STALENESS_THRESHOLD_MS = 10 * 60 * 1000;

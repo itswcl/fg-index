@@ -17,3 +17,19 @@ export interface Vix {
   changePercent: number;
   fetchedAt: string;
 }
+
+export interface Btc {
+  price: number;
+  previousClose: number;
+  change: number;
+  changePercent: number;
+  fetchedAt: string;
+}
+
+export interface Spx {
+  price: number;
+  previousClose: number;
+  change: number;
+  changePercent: number;
+  fetchedAt: string;
+}

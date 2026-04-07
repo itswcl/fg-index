@@ -3,11 +3,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMarketIndicators } from './hooks/useMarketIndicators';
 import { useFearGreed } from './hooks/useFearGreed';
 import { useVix } from './hooks/useVix';
+import { useBtc } from './hooks/useBtc';
+import { useSpx } from './hooks/useSpx';
 import { useAppColorScheme } from './hooks/useAppColorScheme';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { FearGreedCard } from './components/FearGreedCard';
 import { VixCard } from './components/VixCard';
+import { BtcCard } from './components/BtcCard';
+import { SpxCard } from './components/SpxCard';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
 import { AlertsPanel } from './components/alerts';
 import { BuyMeCoffeeButton } from './components/BuyMeCoffeeButton';
@@ -39,9 +43,12 @@ function MarketIndicators() {
 
   const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
   const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
+  const { data: btcData, isLoading: btcLoading, isFetching: btcFetching } = useBtc();
+  const { data: spxData, isLoading: spxLoading, isFetching: spxFetching } = useSpx();
 
   const fearGreedData = wsFearGreed ?? httpFearGreed ?? null;
   const vixData = wsVix ?? httpVix ?? null;
+  const spxAvailable = !spxLoading && spxData !== null;
 
   const colorScheme = useAppColorScheme();
   const isDark = colorScheme === 'dark';
@@ -81,12 +88,15 @@ function MarketIndicators() {
     ? new Date(manualVixUpdateMs)
     : lastVixUpdate;
 
+  const btcDisplayUpdate = btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null;
+  const spxDisplayUpdate = spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null;
+
   const isRefreshing = fgFetching || vixFetching || isManualRefreshing;
 
   return (
     <div className={`app-container ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
-        <div className="cards-row">
+        <div className="cards-grid">
           <FearGreedCard
             data={fearGreedData}
             lastUpdate={fgDisplayUpdate}
@@ -100,6 +110,21 @@ function MarketIndicators() {
             lastUpdate={vixDisplayUpdate}
             isLoading={vixLoading && !wsVix && !httpVix}
             isRefreshing={vixFetching}
+            isDark={isDark}
+          />
+          <BtcCard
+            data={btcData ?? null}
+            lastUpdate={btcDisplayUpdate}
+            isLoading={btcLoading}
+            isRefreshing={btcFetching}
+            isDark={isDark}
+          />
+          <SpxCard
+            data={spxData ?? null}
+            spxAvailable={spxAvailable}
+            lastUpdate={spxDisplayUpdate}
+            isLoading={spxLoading}
+            isRefreshing={spxFetching}
             isDark={isDark}
           />
         </div>

@@ -20,16 +20,15 @@
   gap: 10px;
 }
 
-.cards-row {
-  display: flex;
-  flex-direction: row;
+.cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-/* Stack vertically on narrow screens */
 @media (max-width: 480px) {
-  .cards-row {
-    flex-direction: column;
+  .cards-grid {
+    grid-template-columns: 1fr;
   }
 }
 

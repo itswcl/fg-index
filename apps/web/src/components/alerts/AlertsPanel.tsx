@@ -61,7 +61,7 @@ export function AlertsPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
-        maxHeight: 'calc(100dvh - 380px)',
+        maxHeight: 'calc(100dvh - 520px)',
         overflow: 'hidden',
       }}
     >
