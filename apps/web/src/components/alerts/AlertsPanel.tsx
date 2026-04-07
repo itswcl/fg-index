@@ -65,8 +65,8 @@ export function AlertsPanel({
         overflow: 'hidden',
       }}
     >
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {/* Header — always visible, never scrolls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <span
           style={{
             fontSize: 9,
@@ -141,6 +141,9 @@ export function AlertsPanel({
         </button>
       </div>
 
+      {/* Scrollable body — webhook panel + form + list all scroll together */}
+      <div style={{ overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+
       {/* Webhook section (collapsible) */}
       {webhookOpen && (
         <div
@@ -203,7 +206,7 @@ export function AlertsPanel({
           No alerts yet. Create one to get notified when market conditions match.
         </p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', maxHeight: 'inherit', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {alerts.map((alert) => (
             <AlertItem
               key={alert.id}
@@ -216,6 +219,8 @@ export function AlertsPanel({
           ))}
         </div>
       )}
+
+      </div>{/* end scrollable body */}
     </div>
   );
 }
