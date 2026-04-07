@@ -52,6 +52,17 @@ export const BtcSchema = z.object({
 
 export type Btc = z.infer<typeof BtcSchema>;
 
+// ─── SPX ──────────────────────────────────────────────────────────
+export const SpxSchema = z.object({
+  price: z.number().positive(),
+  previousClose: z.number().positive(),
+  change: z.number(),
+  changePercent: z.number(),
+  fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
+});
+
+export type Spx = z.infer<typeof SpxSchema>;
+
 // ─── Alerts ────────────────────────────────────────────────────────
 export const ConditionSchema = z.object({
   metric: z.enum(["fearGreed", "vix"]),
