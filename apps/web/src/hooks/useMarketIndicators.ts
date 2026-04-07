@@ -1,22 +1,27 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { FearGreed, Vix } from '../types';
+import type { FearGreed, Vix, Btc, Spx } from '../types';
 import type { Alert, AlertTriggeredMessage, WebhookConfig } from '../types/alerts';
 import { WS_URL, API_KEY } from '../constants';
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
 interface WsMarketMessage {
-  type: 'FEAR_GREED_UPDATE' | 'VIX_UPDATE';
-  payload: FearGreed | Vix | null;
+  type: 'FEAR_GREED_UPDATE' | 'VIX_UPDATE' | 'BTC_UPDATE' | 'SPX_UPDATE';
+  payload: FearGreed | Vix | Btc | Spx | null;
 }
 
 interface UseMarketIndicatorsReturn {
   fearGreed: FearGreed | null;
   vix: Vix | null;
   vixAvailable: boolean;
+  btc: Btc | null;
+  spx: Spx | null;
+  spxAvailable: boolean;
   wsStatus: WsStatus;
   lastFearGreedUpdate: Date | null;
   lastVixUpdate: Date | null;
+  lastBtcUpdate: Date | null;
+  lastSpxUpdate: Date | null;
 }
 
 interface UseMarketIndicatorsOptions {
@@ -86,9 +91,14 @@ export function useMarketIndicators(
   const [fearGreed, setFearGreed] = useState<FearGreed | null>(null);
   const [vix, setVix] = useState<Vix | null>(null);
   const [vixAvailable, setVixAvailable] = useState(true);
+  const [btc, setBtc] = useState<Btc | null>(null);
+  const [spx, setSpx] = useState<Spx | null>(null);
+  const [spxAvailable, setSpxAvailable] = useState(true);
   const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
   const [lastFearGreedUpdate, setLastFearGreedUpdate] = useState<Date | null>(null);
   const [lastVixUpdate, setLastVixUpdate] = useState<Date | null>(null);
+  const [lastBtcUpdate, setLastBtcUpdate] = useState<Date | null>(null);
+  const [lastSpxUpdate, setLastSpxUpdate] = useState<Date | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -178,6 +188,19 @@ export function useMarketIndicators(
           }
         }
 
+        if (message.type === 'BTC_UPDATE' && 'payload' in message) {
+          const payload = (message as WsMarketMessage).payload as Btc | null;
+          setBtc(payload);
+          setLastBtcUpdate(new Date());
+        }
+
+        if (message.type === 'SPX_UPDATE' && 'payload' in message) {
+          const payload = (message as WsMarketMessage).payload as Spx | null;
+          setSpx(payload);
+          setSpxAvailable(payload !== null);
+          setLastSpxUpdate(new Date());
+        }
+
         // keep alert_triggered handler in case backend adds it later
         if (message.type === 'alert_triggered') {
           onAlertTriggeredRef.current?.(message as AlertTriggeredMessage);
@@ -208,5 +231,5 @@ export function useMarketIndicators(
     };
   }, [connect]);
 
-  return { fearGreed, vix, vixAvailable, wsStatus, lastFearGreedUpdate, lastVixUpdate };
+  return { fearGreed, vix, vixAvailable, btc, spx, spxAvailable, wsStatus, lastFearGreedUpdate, lastVixUpdate, lastBtcUpdate, lastSpxUpdate };
 }

@@ -20,7 +20,6 @@ export interface Vix {
 
 export interface Btc {
   price: number;
-  previousClose: number;
   change: number;
   changePercent: number;
   fetchedAt: string;
