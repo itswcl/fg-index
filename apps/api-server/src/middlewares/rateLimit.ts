@@ -26,6 +26,32 @@ export const vixRateLimiter = rateLimit({
   },
 });
 
+// BTC: crypto trades 24/7; 30s poll — moderate limit
+export const btcRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 429,
+    message: "Too many requests, please try again later.",
+    code: "TOO_MANY_REQUESTS",
+  },
+});
+
+// SPX: real-time poll like VIX — moderate limit
+export const spxRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 429,
+    message: "Too many requests, please try again later.",
+    code: "TOO_MANY_REQUESTS",
+  },
+});
+
 // General API limiter (health check etc)
 export const globalRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
