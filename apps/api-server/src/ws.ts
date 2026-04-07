@@ -20,7 +20,9 @@ let wssInstance: WebSocketServer | null = null;
 
 export function broadcastWithAlertEvaluation(
   fearGreedScore: number | null,
-  vixPrice: number | null
+  vixPrice: number | null,
+  btcPrice: number | null = null,
+  spxPrice: number | null = null
 ): void {
   if (!wssInstance) return;
 
@@ -29,7 +31,7 @@ export function broadcastWithAlertEvaluation(
 
     const alerts = connectionAlerts.get(client) ?? [];
     if (alerts.length > 0) {
-      const triggered = evaluateAlerts(alerts, fearGreedScore, vixPrice);
+      const triggered = evaluateAlerts(alerts, fearGreedScore, vixPrice, btcPrice, spxPrice);
       for (const msg of triggered) {
         client.send(JSON.stringify(msg));
       }
@@ -130,9 +132,11 @@ export function startWsServer(server: http.Server) {
       }
     });
 
-    // Evaluate alerts with freshly updated fear & greed, use latest cached VIX
+    // Evaluate alerts with freshly updated fear & greed
     const vix = getCachedVix();
-    broadcastWithAlertEvaluation(data.score, vix?.price ?? null);
+    const btc = getCachedBtc();
+    const spx = getCachedSpx();
+    broadcastWithAlertEvaluation(data.score, vix?.price ?? null, btc?.price ?? null, spx?.price ?? null);
   });
 
   subscribeToVix((data) => {
@@ -142,9 +146,11 @@ export function startWsServer(server: http.Server) {
       }
     });
 
-    // Evaluate alerts with freshly updated VIX, use latest cached fear & greed
+    // Evaluate alerts with freshly updated VIX
     const fg = getCachedFearGreed();
-    broadcastWithAlertEvaluation(fg?.score ?? null, data?.price ?? null);
+    const btc = getCachedBtc();
+    const spx = getCachedSpx();
+    broadcastWithAlertEvaluation(fg?.score ?? null, data?.price ?? null, btc?.price ?? null, spx?.price ?? null);
   });
 
   subscribeToBtc((data) => {
@@ -153,6 +159,12 @@ export function startWsServer(server: http.Server) {
         client.send(JSON.stringify({ type: "BTC_UPDATE", payload: data }));
       }
     });
+
+    // Evaluate alerts with freshly updated BTC
+    const fg = getCachedFearGreed();
+    const vix = getCachedVix();
+    const spx = getCachedSpx();
+    broadcastWithAlertEvaluation(fg?.score ?? null, vix?.price ?? null, data?.price ?? null, spx?.price ?? null);
   });
 
   subscribeToSpx((data) => {
@@ -161,6 +173,12 @@ export function startWsServer(server: http.Server) {
         client.send(JSON.stringify({ type: "SPX_UPDATE", payload: data }));
       }
     });
+
+    // Evaluate alerts with freshly updated SPX
+    const fg = getCachedFearGreed();
+    const vix = getCachedVix();
+    const btc = getCachedBtc();
+    broadcastWithAlertEvaluation(fg?.score ?? null, vix?.price ?? null, btc?.price ?? null, data?.price ?? null);
   });
 
   process.stdout.write("WebSocket server started on same port as HTTP\n");

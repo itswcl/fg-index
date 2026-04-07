@@ -65,7 +65,7 @@ export type Spx = z.infer<typeof SpxSchema>;
 
 // ─── Alerts ────────────────────────────────────────────────────────
 export const ConditionSchema = z.object({
-  metric: z.enum(["fearGreed", "vix"]),
+  metric: z.enum(["fearGreed", "vix", "btc", "spx"]),
   operator: z.enum(["<", ">", "<=", ">=", "=="]),
   value: z.number(),
 });
