@@ -5,7 +5,7 @@ import { useFearGreed } from './hooks/useFearGreed';
 import { useVix } from './hooks/useVix';
 import { useBtc } from './hooks/useBtc';
 import { useSpx } from './hooks/useSpx';
-import { useAppColorScheme } from './hooks/useAppColorScheme';
+import { useTheme } from './hooks/useTheme';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { FearGreedCard } from './components/FearGreedCard';
@@ -15,6 +15,7 @@ import { SpxCard } from './components/SpxCard';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
 import { AlertsPanel } from './components/alerts';
 import { BuyMeCoffeeButton } from './components/BuyMeCoffeeButton';
+import { ThemeSwitcher } from './components/ThemeSwitcher';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
@@ -56,8 +57,7 @@ function MarketIndicators() {
   const btcData = wsBtc ?? httpBtc ?? null;
   const spxData = wsSpx ?? httpSpx ?? null;
 
-  const colorScheme = useAppColorScheme();
-  const isDark = colorScheme === 'dark';
+  const { theme, setTheme, isDark } = useTheme();
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
   const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
@@ -102,6 +102,9 @@ function MarketIndicators() {
   return (
     <div className={`app-container ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
+        <div className="theme-switcher-row">
+          <ThemeSwitcher theme={theme} onSelect={setTheme} isDark={isDark} />
+        </div>
         <div className="cards-grid">
           <FearGreedCard
             data={fearGreedData}
