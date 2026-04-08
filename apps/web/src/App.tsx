@@ -6,12 +6,10 @@ import { useVix } from './hooks/useVix';
 import { useBtc } from './hooks/useBtc';
 import { useSpx } from './hooks/useSpx';
 import { useTheme } from './hooks/useTheme';
+import { useCardOrder } from './hooks/useCardOrder';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
-import { FearGreedCard } from './components/FearGreedCard';
-import { VixCard } from './components/VixCard';
-import { BtcCard } from './components/BtcCard';
-import { SpxCard } from './components/SpxCard';
+import { CardGrid } from './components/CardGrid';
 import { StatusRefreshButton } from './components/StatusRefreshButton';
 import { AlertsPanel } from './components/alerts';
 import { BuyMeCoffeeButton } from './components/BuyMeCoffeeButton';
@@ -58,6 +56,7 @@ function MarketIndicators() {
   const spxData = wsSpx ?? httpSpx ?? null;
 
   const { theme, setTheme, isDark } = useTheme();
+  const { order, setOrder } = useCardOrder();
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
   const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
@@ -105,38 +104,29 @@ function MarketIndicators() {
         <div className="theme-switcher-row">
           <ThemeSwitcher theme={theme} onSelect={setTheme} isDark={isDark} />
         </div>
-        <div className="cards-grid">
-          <FearGreedCard
-            data={fearGreedData}
-            lastUpdate={fgDisplayUpdate}
-            isLoading={fgLoading && !wsFearGreed && !httpFearGreed}
-            isRefreshing={fgFetching}
-            isDark={isDark}
-          />
-          <VixCard
-            data={vixData}
-            vixAvailable={vixAvailable}
-            lastUpdate={vixDisplayUpdate}
-            isLoading={vixLoading && !wsVix && !httpVix}
-            isRefreshing={vixFetching}
-            isDark={isDark}
-          />
-          <BtcCard
-            data={btcData}
-            lastUpdate={btcDisplayUpdate}
-            isLoading={btcLoading && !wsBtc && !httpBtc}
-            isRefreshing={btcFetching}
-            isDark={isDark}
-          />
-          <SpxCard
-            data={spxData}
-            spxAvailable={spxAvailable}
-            lastUpdate={spxDisplayUpdate}
-            isLoading={spxLoading && !wsSpx && !httpSpx}
-            isRefreshing={spxFetching}
-            isDark={isDark}
-          />
-        </div>
+        <CardGrid
+          order={order}
+          onReorder={setOrder}
+          isDark={isDark}
+          fearGreedData={fearGreedData}
+          fgLastUpdate={fgDisplayUpdate}
+          fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
+          fgIsRefreshing={fgFetching}
+          vixData={vixData}
+          vixAvailable={vixAvailable}
+          vixLastUpdate={vixDisplayUpdate}
+          vixIsLoading={vixLoading && !wsVix && !httpVix}
+          vixIsRefreshing={vixFetching}
+          btcData={btcData}
+          btcLastUpdate={btcDisplayUpdate}
+          btcIsLoading={btcLoading && !wsBtc && !httpBtc}
+          btcIsRefreshing={btcFetching}
+          spxData={spxData}
+          spxAvailable={spxAvailable}
+          spxLastUpdate={spxDisplayUpdate}
+          spxIsLoading={spxLoading && !wsSpx && !httpSpx}
+          spxIsRefreshing={spxFetching}
+        />
         <div className="status-area">
           <StatusRefreshButton
             status={wsStatus}
