@@ -235,6 +235,25 @@
   text-transform: uppercase;
 }
 
+/* ── Drag & Drop ──────────────────────────────────────────── */
+.card-ghost {
+  border-radius: 28px;
+  border-width: 2px;
+  border-style: dashed;
+  /* Match the card's min-height so the grid slot doesn't collapse */
+  min-height: 100px;
+}
+
+.card-ghost-dark {
+  background: rgba(95, 127, 255, 0.06);
+  border-color: rgba(95, 127, 255, 0.35);
+}
+
+.card-ghost-light {
+  background: rgba(95, 127, 255, 0.05);
+  border-color: rgba(95, 127, 255, 0.30);
+}
+
 /* ── Theme Switcher ───────────────────────────────────────── */
 .theme-switcher-row {
   display: flex;
