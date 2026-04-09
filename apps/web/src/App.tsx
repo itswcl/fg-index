@@ -10,9 +10,8 @@ import { useCardOrder } from './hooks/useCardOrder';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { CardGrid } from './components/CardGrid';
-import { StatusRefreshButton } from './components/StatusRefreshButton';
+import { IconBar } from './components/IconBar';
 import { AlertsPanel } from './components/alerts';
-import { BuyMeCoffeeButton } from './components/BuyMeCoffeeButton';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
@@ -97,12 +96,20 @@ function MarketIndicators() {
   const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
   const isRefreshing = fgFetching || vixFetching || isManualRefreshing;
+  const activeAlertCount = alerts.filter(a => a.enabled).length;
 
   return (
     <div className={`app-container ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
-        <div className="theme-switcher-row">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <ThemeSwitcher theme={theme} onSelect={setTheme} isDark={isDark} />
+          <IconBar
+            isDark={isDark}
+            wsStatus={wsStatus}
+            onStatusClick={handleRefreshAll}
+            activeAlertCount={activeAlertCount}
+            onAlertsClick={() => {}}
+          />
         </div>
         <CardGrid
           order={order}
@@ -127,14 +134,6 @@ function MarketIndicators() {
           spxIsLoading={spxLoading && !wsSpx && !httpSpx}
           spxIsRefreshing={spxFetching}
         />
-        <div className="status-area">
-          <StatusRefreshButton
-            status={wsStatus}
-            onPress={handleRefreshAll}
-            isRefreshing={isRefreshing}
-            isDark={isDark}
-          />
-        </div>
         <AlertsPanel
           alerts={alerts}
           onAdd={addAlert}
@@ -146,7 +145,6 @@ function MarketIndicators() {
           onRemoveWebhook={clearWebhook}
           isDark={isDark}
         />
-        <BuyMeCoffeeButton isDark={isDark} />
       </div>
     </div>
   );
