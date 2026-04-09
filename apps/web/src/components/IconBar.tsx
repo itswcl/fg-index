@@ -9,11 +9,6 @@ const STATUS_COLOR: Record<WsStatus, string> = {
   disconnected: '#E74C3C',
 };
 
-const STATUS_TOOLTIP: Record<WsStatus, string> = {
-  connected:    'Live',
-  connecting:   'Connecting…',
-  disconnected: 'Disconnected · Click to retry',
-};
 
 interface IconBarProps {
   isDark: boolean;
@@ -44,7 +39,6 @@ export function IconBar({
         className={`icon-btn ${isDark ? 'icon-btn-dark' : 'icon-btn-light'}`}
         onClick={onAlertsClick}
         aria-label="Alerts"
-        style={{ position: 'relative' }}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
           stroke={iconColor} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
@@ -66,6 +60,7 @@ export function IconBar({
             }}
           />
         )}
+        <span className={`tooltip ${isDark ? 'tooltip-dark' : 'tooltip-light'}`}>Alerts</span>
       </button>
 
       {/* Coffee — Buy Me a Coffee */}
@@ -83,14 +78,14 @@ export function IconBar({
           <path d="M4 7h14v9a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V7z" strokeLinejoin="round" />
           <path d="M18 9h1a3 3 0 0 1 0 6h-1" />
         </svg>
+        <span className={`tooltip tooltip-right ${isDark ? 'tooltip-dark' : 'tooltip-light'}`}>Coffee</span>
       </a>
 
       {/* Status dot */}
       <button
         className={`icon-btn ${isDark ? 'icon-btn-dark' : 'icon-btn-light'}`}
         onClick={onStatusClick}
-        title={STATUS_TOOLTIP[wsStatus]}
-        aria-label={STATUS_TOOLTIP[wsStatus]}
+        aria-label="Refresh data"
       >
         <span
           className={wsStatus === 'connecting' ? 'status-dot-pulse' : undefined}
@@ -102,6 +97,7 @@ export function IconBar({
             background: STATUS_COLOR[wsStatus],
           }}
         />
+        <span className={`tooltip tooltip-right ${isDark ? 'tooltip-dark' : 'tooltip-light'}`}>Refresh</span>
       </button>
 
       {/* Theme switcher — last in row */}

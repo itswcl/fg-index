@@ -73,6 +73,77 @@
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* ── Icon tooltips ────────────────────────────────────────── */
+@keyframes tooltip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-3px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.icon-btn {
+  position: relative;
+}
+
+.tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 40;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+  opacity: 0;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 0s 400ms; /* 400ms delay before showing */
+}
+
+.tooltip-dark {
+  background: rgba(30, 30, 32, 0.95);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.tooltip-light {
+  background: rgba(255, 255, 255, 0.97);
+  border-color: rgba(0, 0, 0, 0.10);
+  color: rgba(0, 0, 0, 0.75);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.icon-btn:hover .tooltip {
+  opacity: 1;
+  animation: tooltip-in 120ms ease-out;
+  transition: none; /* animation handles the entrance; no transition on hover */
+}
+
+/* Coffee tooltip — right-aligned to avoid right-edge clip */
+.tooltip-right {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+@keyframes tooltip-in-right {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.icon-btn:hover .tooltip-right {
+  animation: tooltip-in-right 120ms ease-out;
+}
+
+/* Touch devices: hide tooltips (no hover state) */
+@media (hover: none) {
+  .tooltip { display: none; }
+}
+
 /* ── Cards ────────────────────────────────────────────── */
 .card {
   flex: 1;
