@@ -11,7 +11,7 @@ import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { CardGrid } from './components/CardGrid';
 import { IconBar } from './components/IconBar';
-import { AlertsPanel } from './components/alerts';
+import { AlertsPopup } from './components/AlertsPopup';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
@@ -56,6 +56,7 @@ function MarketIndicators() {
 
   const { theme, setTheme, isDark } = useTheme();
   const { order, setOrder } = useCardOrder();
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
   const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
@@ -108,8 +109,22 @@ function MarketIndicators() {
             wsStatus={wsStatus}
             onStatusClick={handleRefreshAll}
             activeAlertCount={activeAlertCount}
-            onAlertsClick={() => {}}
+            onAlertsClick={() => setAlertsOpen(v => !v)}
           />
+          {alertsOpen && (
+            <AlertsPopup
+              isDark={isDark}
+              alerts={alerts}
+              onAdd={addAlert}
+              onUpdate={updateAlert}
+              onDelete={deleteAlert}
+              onToggle={toggleAlert}
+              webhook={webhook}
+              onSaveWebhook={setWebhook}
+              onRemoveWebhook={clearWebhook}
+              onClose={() => setAlertsOpen(false)}
+            />
+          )}
         </div>
         <CardGrid
           order={order}
@@ -133,17 +148,6 @@ function MarketIndicators() {
           spxLastUpdate={spxDisplayUpdate}
           spxIsLoading={spxLoading && !wsSpx && !httpSpx}
           spxIsRefreshing={spxFetching}
-        />
-        <AlertsPanel
-          alerts={alerts}
-          onAdd={addAlert}
-          onUpdate={updateAlert}
-          onDelete={deleteAlert}
-          onToggle={toggleAlert}
-          webhook={webhook}
-          onSaveWebhook={setWebhook}
-          onRemoveWebhook={clearWebhook}
-          isDark={isDark}
         />
       </div>
     </div>
