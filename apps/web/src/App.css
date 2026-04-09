@@ -13,6 +13,7 @@
 .app-light { background: #F2F2F7; }
 
 .widget {
+  position: relative;
   width: 100%;
   max-width: 420px;
   display: flex;
@@ -32,9 +33,44 @@
   }
 }
 
-.status-area {
+/* ── Icon Bar ─────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+.icon-bar {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  width: 100%;
+  padding-bottom: 4px;
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
   justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 150ms ease, border-color 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.icon-btn-dark:hover  { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.10); }
+.icon-btn-light:hover { background: rgba(0,0,0,0.05);       border-color: rgba(0,0,0,0.08); }
+.icon-btn:active      { opacity: 0.6; transform: scale(0.94); }
+
+.status-dot-pulse {
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 /* ── Cards ────────────────────────────────────────────── */
@@ -197,43 +233,6 @@
   gap: 6px;
 }
 
-/* ── Status / Refresh button ──────────────────────────── */
-.status-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  /* Minimum 44×44px tap target (Apple HIG / WCAG) */
-  min-width: 164px;
-  min-height: 44px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border-width: 1px;
-  border-style: solid;
-  cursor: pointer;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  /* Reset browser button styles */
-  font-family: inherit;
-  outline: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.status-btn:hover  { opacity: 0.85; }
-.status-btn:active { opacity: 0.6; transform: scale(0.98); }
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-text {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-}
 
 /* ── Drag & Drop ──────────────────────────────────────────── */
 .card-ghost {
@@ -255,11 +254,6 @@
 }
 
 /* ── Theme Switcher ───────────────────────────────────────── */
-.theme-switcher-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .theme-switcher {
   position: relative;
 }
@@ -361,46 +355,3 @@
 .theme-option-active.theme-option-dark  { color: #FFFFFF; background: rgba(255, 255, 255, 0.1); }
 .theme-option-active.theme-option-light { color: #000000; background: rgba(0, 0, 0, 0.06); }
 
-/* ── Buy Me a Coffee ──────────────────────────────────────── */
-.bmc-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 38px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border-width: 1px;
-  border-style: solid;
-  cursor: pointer;
-  text-decoration: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  -webkit-tap-highlight-color: transparent;
-  font-family: inherit;
-}
-
-.bmc-btn:hover  { opacity: 0.65; }
-.bmc-btn:active { opacity: 0.45; transform: scale(0.98); }
-
-.bmc-btn-dark {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.bmc-btn-light {
-  background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.12);
-  color: #636366;
-}
-
-.bmc-icon {
-  flex-shrink: 0;
-}
-
-.bmc-text {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-}
