@@ -94,7 +94,6 @@ function MarketIndicators() {
   const btcDisplayUpdate = lastBtcUpdate ?? (btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null);
   const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
-  const isRefreshing = fgFetching || vixFetching || isManualRefreshing;
   const activeAlertCount = alerts.filter(a => a.enabled).length;
 
   return (
