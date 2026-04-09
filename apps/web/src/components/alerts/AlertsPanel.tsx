@@ -14,6 +14,8 @@ interface AlertsPanelProps {
   onSaveWebhook: (cfg: WebhookConfig) => void;
   onRemoveWebhook: () => void;
   isDark: boolean;
+  /** When true, strips the outer card border/background — the popup provides its own container */
+  inPopup?: boolean;
 }
 
 type ModalState =
@@ -31,6 +33,7 @@ export function AlertsPanel({
   onSaveWebhook,
   onRemoveWebhook,
   isDark,
+  inPopup = false,
 }: AlertsPanelProps) {
   const [modal, setModal] = useState<ModalState>({ mode: 'none' });
   const [webhookOpen, setWebhookOpen] = useState(false);
@@ -54,9 +57,9 @@ export function AlertsPanel({
   return (
     <div
       style={{
-        background: panelBg,
-        border: `1.5px solid ${borderColor}`,
-        borderRadius: 20,
+        background: inPopup ? 'transparent' : panelBg,
+        border: inPopup ? 'none' : `1.5px solid ${borderColor}`,
+        borderRadius: inPopup ? 0 : 20,
         padding: '14px 14px',
         display: 'flex',
         flexDirection: 'column',
