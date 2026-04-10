@@ -111,7 +111,7 @@ export function AlertsPanel({
                   : 'rgba(0,0,0,0.05)',
             border: `1px solid ${viewState.view === 'webhook' ? accentColor : borderColor}`,
             borderRadius: 8,
-            padding: '4px 9px',
+            padding: '4px 10px',
             cursor: 'pointer',
             fontFamily: 'inherit',
             transition: 'all 0.15s',

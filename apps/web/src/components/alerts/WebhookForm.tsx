@@ -168,7 +168,7 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
       {/* Platform selector */}
       <div>
         <span style={labelStyle}>Platform</span>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
           {PLATFORMS.map(({ type, label }) => {
             const active = selectedType === type;
             return (
@@ -254,7 +254,7 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
       )}
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
         <button
           type="button"
           onClick={handleSave}
@@ -265,7 +265,7 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             background: accentColor,
             border: 'none',
             borderRadius: 8,
-            padding: '5px 14px',
+            padding: '4px 10px',
             cursor: 'pointer',
             fontFamily: 'inherit',
           }}
@@ -278,11 +278,11 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             onClick={handleTest}
             disabled={testState === 'loading'}
             style={{
-              fontSize: 11,
-              fontWeight: 600,
+              fontSize: 10,
+              fontWeight: 700,
               color: accentColor,
               background: 'transparent',
-              border: `1.5px solid ${accentColor}`,
+              border: `1px solid ${accentColor}`,
               borderRadius: 8,
               padding: '4px 10px',
               cursor: testState === 'loading' ? 'default' : 'pointer',
@@ -305,7 +305,7 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
               background: 'transparent',
               border: '1px solid rgba(255,59,48,0.4)',
               borderRadius: 8,
-              padding: '5px 14px',
+              padding: '4px 10px',
               cursor: 'pointer',
               fontFamily: 'inherit',
             }}
