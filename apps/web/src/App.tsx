@@ -60,7 +60,6 @@ function MarketIndicators() {
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
   const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   // Update browser tab title with live data
   useEffect(() => {
@@ -76,13 +75,10 @@ function MarketIndicators() {
   }, [fearGreedData, vixData]);
 
   const handleRefreshAll = useCallback(() => {
-    setIsManualRefreshing(true);
-    const minDelay = new Promise<void>(resolve => setTimeout(resolve, 800));
     Promise.all([
       refetchFg().then(() => setManualFgUpdateMs(Date.now())),
       refetchVix().then(() => setManualVixUpdateMs(Date.now())),
-      minDelay,
-    ]).finally(() => setIsManualRefreshing(false));
+    ]);
   }, [refetchFg, refetchVix]);
 
   const fgDisplayUpdate = manualFgUpdateMs > (lastFearGreedUpdate?.getTime() ?? 0)
@@ -96,7 +92,6 @@ function MarketIndicators() {
   const btcDisplayUpdate = lastBtcUpdate ?? (btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null);
   const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
-  const isRefreshing = fgFetching || vixFetching || isManualRefreshing;
   const activeAlertCount = alerts.filter(a => a.enabled).length;
 
   return (

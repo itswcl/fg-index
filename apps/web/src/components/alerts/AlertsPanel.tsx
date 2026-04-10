@@ -16,6 +16,8 @@ interface AlertsPanelProps {
   isDark: boolean;
   /** When true, strips the outer card border/background — the popup provides its own container */
   inPopup?: boolean;
+  /** When provided, renders a × close button at the end of the header row */
+  onClose?: () => void;
 }
 
 type ModalState =
@@ -34,6 +36,7 @@ export function AlertsPanel({
   onRemoveWebhook,
   isDark,
   inPopup = false,
+  onClose,
 }: AlertsPanelProps) {
   const [modal, setModal] = useState<ModalState>({ mode: 'none' });
   const [webhookOpen, setWebhookOpen] = useState(false);
@@ -142,6 +145,43 @@ export function AlertsPanel({
         >
           + New
         </button>
+
+        {/* Close button — only rendered inside popup */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close alerts"
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: isDark ? 'rgba(255,255,255,0.40)' : 'rgba(0,0,0,0.35)',
+              flexShrink: 0,
+              transition: 'background 150ms ease',
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = isDark
+                ? 'rgba(255,255,255,0.08)'
+                : 'rgba(0,0,0,0.06)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Scrollable body — webhook panel + form + list all scroll together */}
