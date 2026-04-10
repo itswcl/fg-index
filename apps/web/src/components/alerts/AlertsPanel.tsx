@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import type { Alert, WebhookConfig } from '../../types/alerts';
 import { AlertForm } from './AlertForm';
 import { AlertItem } from './AlertItem';
 import { WebhookForm } from './WebhookForm';
+import { useState } from 'react';
 
 interface AlertsPanelProps {
   alerts: Alert[];
@@ -20,10 +20,11 @@ interface AlertsPanelProps {
   onClose?: () => void;
 }
 
-type ModalState =
-  | { mode: 'none' }
-  | { mode: 'create' }
-  | { mode: 'edit'; alert: Alert };
+type ViewState =
+  | { view: 'list' }
+  | { view: 'create' }
+  | { view: 'edit'; alert: Alert }
+  | { view: 'webhook' };
 
 export function AlertsPanel({
   alerts,
@@ -38,23 +39,24 @@ export function AlertsPanel({
   inPopup = false,
   onClose,
 }: AlertsPanelProps) {
-  const [modal, setModal] = useState<ModalState>({ mode: 'none' });
-  const [webhookOpen, setWebhookOpen] = useState(false);
+  const [viewState, setViewState] = useState<ViewState>({ view: 'list' });
 
   const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
   const panelBg = isDark ? 'rgba(18,18,20,0.6)' : 'rgba(242,242,247,0.8)';
   const subTextColor = '#8E8E93';
   const accentColor = '#007AFF';
 
+  const isFormMode = viewState.view !== 'list';
+
   const handleCreate = (data: Omit<Alert, 'id' | 'createdAt'>) => {
     onAdd(data);
-    setModal({ mode: 'none' });
+    setViewState({ view: 'list' });
   };
 
   const handleEdit = (data: Omit<Alert, 'id' | 'createdAt'>) => {
-    if (modal.mode !== 'edit') return;
-    onUpdate(modal.alert.id, data);
-    setModal({ mode: 'none' });
+    if (viewState.view !== 'edit') return;
+    onUpdate(viewState.alert.id, data);
+    setViewState({ view: 'list' });
   };
 
   return (
@@ -67,11 +69,15 @@ export function AlertsPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
-        maxHeight: 'calc(100dvh - 520px)',
+        // Adaptive height: constrained in list mode, auto in form mode
+        maxHeight: inPopup
+          ? (isFormMode ? '90dvh' : '420px')
+          : 'calc(100dvh - 520px)',
         overflow: 'hidden',
+        transition: inPopup ? 'max-height 200ms ease-out' : undefined,
       }}
     >
-      {/* Header — always visible, never scrolls */}
+      {/* ── Header — always visible ─────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <span
           style={{
@@ -86,21 +92,24 @@ export function AlertsPanel({
           Alerts
         </span>
 
-        {/* Webhook toggle button */}
+        {/* Webhook button — acts as view switcher */}
         <button
           type="button"
-          onClick={() => setWebhookOpen((o) => !o)}
+          onClick={() =>
+            setViewState((v) => (v.view === 'webhook' ? { view: 'list' } : { view: 'webhook' }))
+          }
           title={webhook ? 'Webhook configured' : 'Configure webhook notifications'}
           style={{
             fontSize: 10,
             fontWeight: 700,
-            color: webhookOpen ? '#FFFFFF' : subTextColor,
-            background: webhookOpen
-              ? accentColor
-              : isDark
-                ? 'rgba(255,255,255,0.07)'
-                : 'rgba(0,0,0,0.05)',
-            border: `1px solid ${webhookOpen ? accentColor : borderColor}`,
+            color: viewState.view === 'webhook' ? '#FFFFFF' : subTextColor,
+            background:
+              viewState.view === 'webhook'
+                ? accentColor
+                : isDark
+                  ? 'rgba(255,255,255,0.07)'
+                  : 'rgba(0,0,0,0.05)',
+            border: `1px solid ${viewState.view === 'webhook' ? accentColor : borderColor}`,
             borderRadius: 8,
             padding: '4px 9px',
             cursor: 'pointer',
@@ -126,10 +135,10 @@ export function AlertsPanel({
           ⚡ Webhook
         </button>
 
-        {/* New alert button */}
+        {/* + New button — switches to create view */}
         <button
           type="button"
-          onClick={() => setModal({ mode: 'create' })}
+          onClick={() => setViewState({ view: 'create' })}
           style={{
             fontSize: 10,
             fontWeight: 700,
@@ -146,7 +155,7 @@ export function AlertsPanel({
           + New
         </button>
 
-        {/* Close button — only rendered inside popup */}
+        {/* × close button — only in popup */}
         {onClose && (
           <button
             type="button"
@@ -166,17 +175,25 @@ export function AlertsPanel({
               flexShrink: 0,
               transition: 'background 150ms ease',
             }}
-            onMouseEnter={e => {
+            onMouseEnter={(e) => {
               (e.currentTarget as HTMLButtonElement).style.background = isDark
                 ? 'rgba(255,255,255,0.08)'
                 : 'rgba(0,0,0,0.06)';
             }}
-            onMouseLeave={e => {
+            onMouseLeave={(e) => {
               (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
             }}
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -184,86 +201,110 @@ export function AlertsPanel({
         )}
       </div>
 
-      {/* Scrollable body — webhook panel + form + list all scroll together */}
-      <div style={{ overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* ── Body — one view at a time ───────────────────────────── */}
 
-      {/* Webhook section (collapsible) */}
-      {webhookOpen && (
-        <div
-          style={{
-            background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-            border: `1px solid ${borderColor}`,
-            borderRadius: 12,
-            padding: '12px 12px',
-          }}
-        >
-          <span
+      {/* Webhook view */}
+      {viewState.view === 'webhook' && (
+        <div style={{ overflowY: 'auto', minHeight: 0 }}>
+          <div
             style={{
-              fontSize: 9,
-              fontWeight: 800,
-              color: subTextColor,
-              textTransform: 'uppercase',
-              letterSpacing: 1.5,
-              display: 'block',
-              marginBottom: 10,
+              background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${borderColor}`,
+              borderRadius: 12,
+              padding: '12px 12px',
             }}
           >
-            Webhook Notifications
-          </span>
-          <WebhookForm
-            webhook={webhook}
-            onSave={(cfg) => {
-              onSaveWebhook(cfg);
-              setWebhookOpen(false);
-            }}
-            onRemove={() => {
-              onRemoveWebhook();
-              setWebhookOpen(false);
-            }}
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 800,
+                color: subTextColor,
+                textTransform: 'uppercase',
+                letterSpacing: 1.5,
+                display: 'block',
+                marginBottom: 10,
+              }}
+            >
+              Webhook Notifications
+            </span>
+            <WebhookForm
+              webhook={webhook}
+              onSave={(cfg) => {
+                onSaveWebhook(cfg);
+                setViewState({ view: 'list' });
+              }}
+              onRemove={() => {
+                onRemoveWebhook();
+                setViewState({ view: 'list' });
+              }}
+              isDark={isDark}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Create view */}
+      {viewState.view === 'create' && (
+        <div style={{ overflowY: 'auto', minHeight: 0 }}>
+          <AlertForm
+            onSubmit={handleCreate}
+            onCancel={() => setViewState({ view: 'list' })}
             isDark={isDark}
           />
         </div>
       )}
 
-      {/* Modal: create or edit */}
-      {modal.mode !== 'none' && (
-        <AlertForm
-          initial={modal.mode === 'edit' ? modal.alert : undefined}
-          onSubmit={modal.mode === 'edit' ? handleEdit : handleCreate}
-          onCancel={() => setModal({ mode: 'none' })}
-          isDark={isDark}
-        />
-      )}
-
-      {/* Alert list */}
-      {alerts.length === 0 && modal.mode === 'none' ? (
-        <p
-          style={{
-            fontSize: 11,
-            color: subTextColor,
-            textAlign: 'center',
-            padding: '10px 0 4px',
-            lineHeight: 1.5,
-          }}
-        >
-          No alerts yet. Create one to get notified when market conditions match.
-        </p>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {alerts.map((alert) => (
-            <AlertItem
-              key={alert.id}
-              alert={alert}
-              onToggle={onToggle}
-              onEdit={(a) => setModal({ mode: 'edit', alert: a })}
-              onDelete={onDelete}
-              isDark={isDark}
-            />
-          ))}
+      {/* Edit view */}
+      {viewState.view === 'edit' && (
+        <div style={{ overflowY: 'auto', minHeight: 0 }}>
+          <AlertForm
+            initial={viewState.alert}
+            onSubmit={handleEdit}
+            onCancel={() => setViewState({ view: 'list' })}
+            isDark={isDark}
+          />
         </div>
       )}
 
-      </div>{/* end scrollable body */}
+      {/* List view */}
+      {viewState.view === 'list' && (
+        <div
+          style={{
+            overflowY: 'auto',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          {alerts.length === 0 ? (
+            <p
+              style={{
+                fontSize: 11,
+                color: subTextColor,
+                textAlign: 'center',
+                padding: '10px 0 4px',
+                lineHeight: 1.5,
+              }}
+            >
+              No alerts yet. Create one to get notified when market conditions match.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {alerts.map((alert) => (
+                <AlertItem
+                  key={alert.id}
+                  alert={alert}
+                  onToggle={onToggle}
+                  onEdit={(a) => setViewState({ view: 'edit', alert: a })}
+                  onDelete={onDelete}
+                  isDark={isDark}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
