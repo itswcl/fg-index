@@ -45,16 +45,16 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
   const inputBg = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.04)';
   const labelStyle = {
     fontSize: 10,
-    fontWeight: 600,
+    fontWeight: 700,
     color: subTextColor,
     textTransform: 'uppercase' as const,
-    letterSpacing: 0.8,
+    letterSpacing: 1,
     marginBottom: 4,
     display: 'block',
   };
   const inputStyle = {
     width: '100%',
-    fontSize: 11,
+    fontSize: 13,
     color: textColor,
     background: inputBg,
     border: `1px solid ${borderColor}`,
@@ -259,13 +259,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
           type="button"
           onClick={handleSave}
           style={{
-            fontSize: 10,
+            fontSize: 12,
             fontWeight: 700,
             color: '#FFFFFF',
             background: accentColor,
             border: 'none',
             borderRadius: 8,
-            padding: '4px 10px',
+            padding: '6px 14px',
             cursor: 'pointer',
             fontFamily: 'inherit',
           }}
@@ -278,13 +278,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             onClick={handleTest}
             disabled={testState === 'loading'}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
+              fontSize: 12,
+              fontWeight: 600,
               color: accentColor,
               background: 'transparent',
               border: `1px solid ${accentColor}`,
               borderRadius: 8,
-              padding: '4px 10px',
+              padding: '6px 14px',
               cursor: testState === 'loading' ? 'default' : 'pointer',
               fontFamily: 'inherit',
               opacity: testState === 'loading' ? 0.6 : 1,
@@ -299,13 +299,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             type="button"
             onClick={onRemove}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
+              fontSize: 12,
+              fontWeight: 600,
               color: '#FF3B30',
               background: 'transparent',
               border: '1px solid rgba(255,59,48,0.4)',
               borderRadius: 8,
-              padding: '4px 10px',
+              padding: '6px 14px',
               cursor: 'pointer',
               fontFamily: 'inherit',
             }}
