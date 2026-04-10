@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Alert, Condition } from '../../types/alerts';
+import { FORM_TOKENS } from './formTokens';
 
 interface AlertFormProps {
   initial?: Alert;
@@ -100,7 +101,7 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {/* Name */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, color: subTextColor, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <label style={{ fontSize: FORM_TOKENS.labelFontSize, fontWeight: FORM_TOKENS.labelFontWeight, color: subTextColor, textTransform: 'uppercase', letterSpacing: FORM_TOKENS.labelLetterSpacing }}>
             Name
           </label>
           <input
@@ -111,9 +112,9 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
             style={{
               background: inputBg,
               border: `1px solid ${errors.name ? errorColor : inputBorder}`,
-              borderRadius: 8,
-              padding: '7px 10px',
-              fontSize: 13,
+              borderRadius: FORM_TOKENS.inputBorderRadius,
+              padding: FORM_TOKENS.inputPadding,
+              fontSize: FORM_TOKENS.inputFontSize,
               color: textColor,
               fontFamily: 'inherit',
               outline: 'none',
@@ -127,7 +128,7 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
         {/* Conditions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <label style={{ fontSize: 10, fontWeight: 700, color: subTextColor, textTransform: 'uppercase', letterSpacing: 1 }}>
+            <label style={{ fontSize: FORM_TOKENS.labelFontSize, fontWeight: FORM_TOKENS.labelFontWeight, color: subTextColor, textTransform: 'uppercase', letterSpacing: FORM_TOKENS.labelLetterSpacing }}>
               Conditions
             </label>
             <button
@@ -333,13 +334,13 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
             type="button"
             onClick={onCancel}
             style={{
-              fontSize: 12,
+              fontSize: FORM_TOKENS.actionBtnFontSize,
               fontWeight: 600,
               color: subTextColor,
               background: 'transparent',
               border: `1px solid ${borderColor}`,
-              borderRadius: 8,
-              padding: '6px 14px',
+              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+              padding: FORM_TOKENS.actionBtnPaddingSecondary,
               cursor: 'pointer',
               fontFamily: 'inherit',
               transition: 'opacity 0.15s',
@@ -350,13 +351,13 @@ export function AlertForm({ initial, onSubmit, onCancel, isDark }: AlertFormProp
           <button
             type="submit"
             style={{
-              fontSize: 12,
+              fontSize: FORM_TOKENS.actionBtnFontSize,
               fontWeight: 700,
               color: '#FFFFFF',
               background: accentColor,
               border: 'none',
-              borderRadius: 8,
-              padding: '6px 16px',
+              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+              padding: FORM_TOKENS.actionBtnPaddingPrimary,
               cursor: 'pointer',
               fontFamily: 'inherit',
               transition: 'opacity 0.15s',

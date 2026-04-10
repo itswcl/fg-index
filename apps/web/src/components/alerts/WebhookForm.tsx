@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { WebhookConfig, WebhookType } from '../../types/alerts';
+import { FORM_TOKENS } from './formTokens';
 import { API_BASE_URL, API_KEY } from '../../constants';
 
 interface WebhookFormProps {
@@ -44,22 +45,22 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
   const accentColor = '#007AFF';
   const inputBg = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.04)';
   const labelStyle = {
-    fontSize: 10,
-    fontWeight: 600,
+    fontSize: FORM_TOKENS.labelFontSize,
+    fontWeight: FORM_TOKENS.labelFontWeight,
     color: subTextColor,
     textTransform: 'uppercase' as const,
-    letterSpacing: 0.8,
+    letterSpacing: FORM_TOKENS.labelLetterSpacing,
     marginBottom: 4,
     display: 'block',
   };
   const inputStyle = {
     width: '100%',
-    fontSize: 11,
+    fontSize: FORM_TOKENS.inputFontSize,
     color: textColor,
     background: inputBg,
     border: `1px solid ${borderColor}`,
-    borderRadius: 8,
-    padding: '7px 10px',
+    borderRadius: FORM_TOKENS.inputBorderRadius,
+    padding: FORM_TOKENS.inputPadding,
     fontFamily: 'inherit',
     outline: 'none',
     boxSizing: 'border-box' as const,
@@ -259,13 +260,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
           type="button"
           onClick={handleSave}
           style={{
-            fontSize: 10,
+            fontSize: FORM_TOKENS.actionBtnFontSize,
             fontWeight: 700,
             color: '#FFFFFF',
             background: accentColor,
             border: 'none',
-            borderRadius: 8,
-            padding: '4px 10px',
+            borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+            padding: FORM_TOKENS.actionBtnPaddingPrimary,
             cursor: 'pointer',
             fontFamily: 'inherit',
           }}
@@ -278,13 +279,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             onClick={handleTest}
             disabled={testState === 'loading'}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
+              fontSize: FORM_TOKENS.actionBtnFontSize,
+              fontWeight: 600,
               color: accentColor,
               background: 'transparent',
               border: `1px solid ${accentColor}`,
-              borderRadius: 8,
-              padding: '4px 10px',
+              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+              padding: FORM_TOKENS.actionBtnPaddingSecondary,
               cursor: testState === 'loading' ? 'default' : 'pointer',
               fontFamily: 'inherit',
               opacity: testState === 'loading' ? 0.6 : 1,
@@ -299,13 +300,13 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             type="button"
             onClick={onRemove}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
+              fontSize: FORM_TOKENS.actionBtnFontSize,
+              fontWeight: 600,
               color: '#FF3B30',
               background: 'transparent',
               border: '1px solid rgba(255,59,48,0.4)',
-              borderRadius: 8,
-              padding: '4px 10px',
+              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+              padding: FORM_TOKENS.actionBtnPaddingSecondary,
               cursor: 'pointer',
               fontFamily: 'inherit',
             }}
