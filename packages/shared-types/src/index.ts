@@ -63,6 +63,19 @@ export const SpxSchema = z.object({
 
 export type Spx = z.infer<typeof SpxSchema>;
 
+// ─── Ticker Quote ─────────────────────────────────────────────────
+export const TickerQuoteSchema = z.object({
+  ticker: z.string(),
+  name: z.string().optional(),
+  price: z.number().positive(),
+  previousClose: z.number().positive(),
+  change: z.number(),
+  changePercent: z.number(),
+  fetchedAt: z.string().datetime({ offset: true }),
+});
+
+export type TickerQuote = z.infer<typeof TickerQuoteSchema>;
+
 // ─── Alerts ────────────────────────────────────────────────────────
 export const ConditionSchema = z.object({
   metric: z.enum(["fearGreed", "vix", "btc", "spx"]),

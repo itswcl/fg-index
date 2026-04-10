@@ -52,6 +52,19 @@ export const spxRateLimiter = rateLimit({
   },
 });
 
+// Custom ticker: on-demand fetch with 15s cache — tighter limit
+export const tickerRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 429,
+    message: "Too many requests, please try again later.",
+    code: "TOO_MANY_REQUESTS",
+  },
+});
+
 // General API limiter (health check etc)
 export const globalRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
