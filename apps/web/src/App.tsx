@@ -9,9 +9,12 @@ import { useTheme } from './hooks/useTheme';
 import { useCardOrder } from './hooks/useCardOrder';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
+import { useTickerList } from './hooks/useTickerList';
 import { CardGrid } from './components/CardGrid';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
+import { TickerCardWrapper } from './components/TickerCardWrapper';
+import { AddTickerInput } from './components/AddTickerInput';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
@@ -54,6 +57,7 @@ function MarketIndicators() {
 
   const { theme, setTheme, isDark } = useTheme();
   const { order, setOrder } = useCardOrder();
+  const { tickers, addTicker, removeTicker } = useTickerList();
   const [alertsOpen, setAlertsOpen] = useState(false);
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
@@ -140,6 +144,25 @@ function MarketIndicators() {
           spxLastUpdate={spxDisplayUpdate}
           spxIsLoading={spxLoading && !wsSpx && !httpSpx}
           spxIsRefreshing={spxFetching}
+        />
+
+        {tickers.length > 0 && (
+          <div className="custom-tickers-row">
+            {tickers.map((t) => (
+              <TickerCardWrapper
+                key={t}
+                ticker={t}
+                isDark={isDark}
+                onRemove={removeTicker}
+              />
+            ))}
+          </div>
+        )}
+
+        <AddTickerInput
+          tickerCount={tickers.length}
+          isDark={isDark}
+          onAdd={addTicker}
         />
       </div>
     </div>

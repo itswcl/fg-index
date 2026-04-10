@@ -33,3 +33,12 @@ export const SPX_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Consider data stale after 10 min */
 export const STALENESS_THRESHOLD_MS = 10 * 60 * 1000;
+
+/** Custom ticker poll every 30s */
+export const TICKER_REFETCH_INTERVAL_MS = 30 * 1000;
+
+/** Max number of custom ticker cards */
+export const MAX_CUSTOM_TICKERS = 8;
+
+/** localStorage key for custom ticker list */
+export const TICKER_STORAGE_KEY = 'fg-index-tickers';

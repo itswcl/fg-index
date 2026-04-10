@@ -32,3 +32,13 @@ export interface Spx {
   changePercent: number;
   fetchedAt: string;
 }
+
+export interface TickerQuote {
+  ticker: string;
+  name?: string;
+  price: number;
+  previousClose: number;
+  change: number;
+  changePercent: number;
+  fetchedAt: string;
+}
