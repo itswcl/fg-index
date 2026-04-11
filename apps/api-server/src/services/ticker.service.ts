@@ -114,7 +114,7 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
 }
 
 // ─── Auto-resolution strategy ──────────────────────────────────────
-const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", "-USD"];
+const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME", "-USD"];
 
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   // 1. Check resolved format cache
@@ -148,10 +148,19 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 4. Yahoo Finance fallback
+  // 4. Yahoo Finance fallback — try as-is
   const yahoo = await scrapeYahooFinance(rawTicker);
   if (yahoo) {
     return yahoo;
+  }
+
+  // 5. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
+  if (!rawTicker.includes("=") && !rawTicker.includes(":")) {
+    const yahooFutures = await scrapeYahooFinance(`${rawTicker}=F`);
+    if (yahooFutures) {
+      resolvedFormatCache.set(rawTicker, `${rawTicker}=F`);
+      return yahooFutures;
+    }
   }
 
   return null;

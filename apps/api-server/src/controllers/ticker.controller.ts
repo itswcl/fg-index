@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { fetchTickerQuote } from "../services/ticker.service.js";
 
-const TICKER_REGEX = /^[A-Za-z0-9:.\-^]{1,20}$/;
+const TICKER_REGEX = /^[A-Za-z0-9:.\-^=_]{1,20}$/;
 
 export async function getTicker(req: Request, res: Response): Promise<void> {
   const { ticker } = req.params;
