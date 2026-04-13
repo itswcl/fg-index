@@ -25,7 +25,7 @@ export function AddTickerInput({ tickerCount, isDark, onAdd }: AddTickerInputPro
   };
 
   return (
-    <div>
+    <div style={{ flex: 1, minWidth: 0 }}>
       <form className="add-ticker-form" onSubmit={handleSubmit}>
         <input
           className={`add-ticker-input ${isDark ? '' : 'add-ticker-input-light'}`}
