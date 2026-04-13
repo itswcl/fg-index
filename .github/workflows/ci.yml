@@ -40,11 +40,14 @@ jobs:
           CNN_FEAR_GREED_URL: https://example.com/fear-greed
           GOOGLE_FINANCE_VIX_URL: https://example.com/vix
           YAHOO_FINANCE_VIX_URL: https://example.com/vix-fallback
+          GOOGLE_FINANCE_BTC_URL: https://example.com/btc
+          YAHOO_FINANCE_BTC_URL: https://example.com/btc-fallback
+          GOOGLE_FINANCE_SPX_URL: https://example.com/spx
+          YAHOO_FINANCE_SPX_URL: https://example.com/spx-fallback
           SCRAPER_USER_AGENT: test-agent
           NODE_ENV: test
-        # Integration tests require a running server + live network; run them locally only.
-        # Unit tests (alertEvaluator, webhookDelivery, vix) run here.
-        run: npx vitest run --exclude 'src/__tests__/integration/**' --exclude 'src/services/cnn.test.ts'
+        # Excludes are configured in vitest.config.ts (integration + CNN tests require live network).
+        run: npx vitest run
 
       # ── Web App ──────────────────────────────────────────────────────────────
       - name: Setup Node (web)
