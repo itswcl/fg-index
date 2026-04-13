@@ -2,7 +2,7 @@
 import type { FearGreed, FearGreedClassification } from '../types';
 import { FEAR_GREED_COLORS } from '../constants';
 import { formatAbsoluteTime } from '../services/time.utils';
-import { Shimmer } from './Shimmer';
+import { CardShimmer } from './CardShimmer';
 
 interface FearGreedCardProps {
   data: FearGreed | null;
@@ -30,29 +30,23 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
       <div className="card-inner">
         <span className="card-label">Fear & Greed</span>
 
-        <div className="price-container">
-          {showLoading ? (
-            <div className="shimmer-stack">
-              <Shimmer width={70} height={38} borderRadius={8} />
-              <Shimmer width={55} height={12} borderRadius={4} />
-            </div>
-          ) : (
-            <>
+        {(showLoading || showRefreshing) ? (
+          <CardShimmer variant="score" />
+        ) : (
+          <>
+            <div className="price-container">
               <span className="price" style={{ color }}>{score}</span>
               <span className="classification" style={{ color }}>{label}</span>
-            </>
-          )}
-        </div>
-
-        <div className="footer-row">
-          {(showRefreshing || showLoading) ? (
-            <Shimmer width={100} height={8} borderRadius={2} />
-          ) : lastUpdate ? (
-            <span className={`updated-at ${isDark ? '' : 'updated-at-light'}`}>
-              Updated {formatAbsoluteTime(lastUpdate)}
-            </span>
-          ) : null}
-        </div>
+            </div>
+            <div className="footer-row">
+              {lastUpdate && (
+                <span className={`updated-at ${isDark ? '' : 'updated-at-light'}`}>
+                  Updated {formatAbsoluteTime(lastUpdate)}
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
