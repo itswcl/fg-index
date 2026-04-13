@@ -23,18 +23,16 @@ import { BtcCard } from './BtcCard';
 import { SpxCard } from './SpxCard';
 import { TickerCard } from './TickerCard';
 import { TickerCardWrapper } from './TickerCardWrapper';
-import type { CardId } from '../hooks/useCardOrder';
+import { DEFAULT_CARD_IDS } from '../hooks/useUnifiedOrder';
 import type { FearGreed, Vix, Btc, Spx } from '../types';
-
-const DEFAULT_CARD_IDS: readonly CardId[] = ['feargreed', 'vix', 'btc', 'spx'];
+// Note: 'CardId' type no longer needed — order is string[] now
 
 interface CardGridProps {
-  // Default card order + reorder callback
-  order: CardId[];
-  onReorder: (newDefaultOrder: CardId[], newTickerOrder: string[]) => void;
+  /** Unified order — all card IDs (default + custom) in display order. */
+  order: string[];
+  /** Called with the full reordered array on drag end. */
+  onReorder: (newOrder: string[]) => void;
   isDark: boolean;
-  // Custom tickers
-  tickers: string[];
   onRemoveTicker: (ticker: string) => void;
   // Default card data
   fearGreedData: FearGreed | null;
@@ -102,7 +100,7 @@ function SortableCardSlot({
 
 // ── Renders content for a given card id ───────────────────
 function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
-  switch (id as CardId) {
+  switch (id) {
     case 'feargreed':
       return (
         <FearGreedCard
@@ -179,7 +177,7 @@ function LiftedCard({
     outlineOffset: '-1.5px',
   };
 
-  const isCustom = !DEFAULT_CARD_IDS.includes(id as CardId);
+  const isCustom = !(DEFAULT_CARD_IDS as readonly string[]).includes(id);
 
   return (
     <div style={liftedStyle}>
@@ -202,11 +200,8 @@ function LiftedCard({
 
 // ── CardGrid (unified — default + custom in one context) ──
 export function CardGrid(props: CardGridProps) {
-  const { order, tickers, onReorder, isDark } = props;
+  const { order, onReorder, isDark } = props;
   const [activeId, setActiveId] = useState<string | null>(null);
-
-  // Single flat list: default cards first, then custom tickers
-  const items = [...order, ...tickers];
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -220,19 +215,9 @@ export function CardGrid(props: CardGridProps) {
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (over && active.id !== over.id) {
-      const oldIndex = items.indexOf(active.id as string);
-      const newIndex = items.indexOf(over.id as string);
-      const reordered = arrayMove(items, oldIndex, newIndex);
-
-      // Split back into default order and ticker order
-      const newDefaultOrder = reordered.filter((id) =>
-        DEFAULT_CARD_IDS.includes(id as CardId),
-      ) as CardId[];
-      const newTickerOrder = reordered.filter(
-        (id) => !DEFAULT_CARD_IDS.includes(id as CardId),
-      );
-
-      onReorder(newDefaultOrder, newTickerOrder);
+      const oldIndex = order.indexOf(active.id as string);
+      const newIndex = order.indexOf(over.id as string);
+      onReorder(arrayMove(order, oldIndex, newIndex));
     }
     setActiveId(null);
   }
@@ -244,9 +229,9 @@ export function CardGrid(props: CardGridProps) {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <SortableContext items={items} strategy={rectSortingStrategy}>
+      <SortableContext items={order} strategy={rectSortingStrategy}>
         <div className="cards-grid">
-          {items.map((id) => (
+          {order.map((id) => (
             <SortableCardSlot key={id} id={id} isDark={isDark}>
               {renderCardContent(id, isDark, props)}
             </SortableCardSlot>

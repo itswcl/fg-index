@@ -6,10 +6,9 @@ import { useVix } from './hooks/useVix';
 import { useBtc } from './hooks/useBtc';
 import { useSpx } from './hooks/useSpx';
 import { useTheme } from './hooks/useTheme';
-import { useCardOrder } from './hooks/useCardOrder';
+import { useUnifiedOrder } from './hooks/useUnifiedOrder';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
-import { useTickerList } from './hooks/useTickerList';
 import { CardGrid } from './components/CardGrid';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
@@ -55,8 +54,7 @@ function MarketIndicators() {
   const spxData = wsSpx ?? httpSpx ?? null;
 
   const { theme, setTheme, isDark } = useTheme();
-  const { order, setOrder } = useCardOrder();
-  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
+  const { order, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
   const [alertsOpen, setAlertsOpen] = useState(false);
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
@@ -123,11 +121,7 @@ function MarketIndicators() {
         )}
         <CardGrid
           order={order}
-          tickers={tickers}
-          onReorder={(newDefaultOrder, newTickerOrder) => {
-            setOrder(newDefaultOrder);
-            reorderTickers(newTickerOrder);
-          }}
+          onReorder={reorder}
           onRemoveTicker={removeTicker}
           isDark={isDark}
           fearGreedData={fearGreedData}
