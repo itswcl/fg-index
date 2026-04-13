@@ -1,6 +1,6 @@
 import type { Btc } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
-import { Shimmer } from './Shimmer';
+import { CardShimmer } from './CardShimmer';
 
 interface BtcCardProps {
   data: Btc | null;
@@ -31,14 +31,11 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
       <div className="card-inner">
         <span className="card-label">BTC</span>
 
-        <div className="price-container">
-          {(showRefreshing || showLoading) ? (
-            <div className="shimmer-stack">
-              <Shimmer width={90} height={38} borderRadius={8} />
-              <Shimmer width={70} height={13} borderRadius={4} />
-            </div>
-          ) : (
-            <>
+        {(showRefreshing || showLoading) ? (
+          <CardShimmer />
+        ) : (
+          <>
+            <div className="price-container">
               <span className={`price ${isDark ? '' : 'price-light'}`}>
                 {data ? formatBtcPrice(data.price) : '–'}
               </span>
@@ -50,19 +47,16 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
                   {' '}({Math.abs(changePct).toFixed(2)}%)
                 </span>
               </div>
-            </>
-          )}
-        </div>
-
-        <div className="footer-row">
-          {(showRefreshing || showLoading) ? (
-            <Shimmer width={110} height={8} borderRadius={2} />
-          ) : lastUpdate ? (
-            <span className={`updated-at ${isDark ? '' : 'updated-at-light'}`}>
-              Updated {formatAbsoluteTime(lastUpdate)}
-            </span>
-          ) : null}
-        </div>
+            </div>
+            <div className="footer-row">
+              {lastUpdate && (
+                <span className={`updated-at ${isDark ? '' : 'updated-at-light'}`}>
+                  Updated {formatAbsoluteTime(lastUpdate)}
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
