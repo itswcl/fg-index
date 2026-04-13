@@ -96,15 +96,22 @@ function MarketIndicators() {
   return (
     <div className={`app-container ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
-        <IconBar
-          isDark={isDark}
-          wsStatus={wsStatus}
-          onStatusClick={handleRefreshAll}
-          activeAlertCount={activeAlertCount}
-          onAlertsClick={() => setAlertsOpen(v => !v)}
-          theme={theme}
-          onThemeSelect={setTheme}
-        />
+        <div className="top-bar">
+          <AddTickerInput
+            tickerCount={tickers.length}
+            isDark={isDark}
+            onAdd={addTicker}
+          />
+          <IconBar
+            isDark={isDark}
+            wsStatus={wsStatus}
+            onStatusClick={handleRefreshAll}
+            activeAlertCount={activeAlertCount}
+            onAlertsClick={() => setAlertsOpen(v => !v)}
+            theme={theme}
+            onThemeSelect={setTheme}
+          />
+        </div>
         {alertsOpen && (
           <AlertsPopup
             isDark={isDark}
@@ -142,12 +149,6 @@ function MarketIndicators() {
           spxLastUpdate={spxDisplayUpdate}
           spxIsLoading={spxLoading && !wsSpx && !httpSpx}
           spxIsRefreshing={spxFetching}
-        />
-
-        <AddTickerInput
-          tickerCount={tickers.length}
-          isDark={isDark}
-          onAdd={addTicker}
         />
       </div>
     </div>
