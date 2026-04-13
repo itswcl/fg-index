@@ -31,5 +31,9 @@ export function useTickerList() {
     save(tickers.filter((t) => t !== ticker));
   };
 
-  return { tickers, addTicker, removeTicker };
+  const reorderTickers = (newOrder: string[]) => {
+    save(newOrder);
+  };
+
+  return { tickers, addTicker, removeTicker, reorderTickers };
 }

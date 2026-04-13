@@ -28,7 +28,7 @@ export function TickerCard({
   if (!isLoading && data === null) {
     return (
       <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
-        <button className="card-remove-btn" onClick={onRemove} aria-label={`Remove ${ticker}`}>
+        <button className="card-remove-btn" onClick={onRemove} onPointerDown={(e) => e.stopPropagation()} aria-label={`Remove ${ticker}`}>
           <svg width="8" height="8" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
