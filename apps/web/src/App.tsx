@@ -13,7 +13,7 @@ import { useTickerList } from './hooks/useTickerList';
 import { CardGrid } from './components/CardGrid';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
-import { TickerCardWrapper } from './components/TickerCardWrapper';
+import { TickerCardGrid } from './components/TickerCardGrid';
 import { AddTickerInput } from './components/AddTickerInput';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
@@ -57,7 +57,7 @@ function MarketIndicators() {
 
   const { theme, setTheme, isDark } = useTheme();
   const { order, setOrder } = useCardOrder();
-  const { tickers, addTicker, removeTicker } = useTickerList();
+  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
   const [alertsOpen, setAlertsOpen] = useState(false);
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
@@ -147,16 +147,12 @@ function MarketIndicators() {
         />
 
         {tickers.length > 0 && (
-          <div className="custom-tickers-row">
-            {tickers.map((t) => (
-              <TickerCardWrapper
-                key={t}
-                ticker={t}
-                isDark={isDark}
-                onRemove={removeTicker}
-              />
-            ))}
-          </div>
+          <TickerCardGrid
+            tickers={tickers}
+            isDark={isDark}
+            onRemove={removeTicker}
+            onReorder={reorderTickers}
+          />
         )}
 
         <AddTickerInput
