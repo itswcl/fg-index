@@ -288,7 +288,7 @@
 }
 
 .price {
-  font-size: 34px;
+  font-size: 30px;
   font-weight: 700;
   color: #FFFFFF;
   letter-spacing: -0.5px;
@@ -315,7 +315,7 @@
 }
 
 @media (max-width: 480px) {
-  .price { font-size: 28px; }
+  .price { font-size: 26px; }
 }
 
 /* ── N/A state ────────────────────────────────────────── */
