@@ -30,7 +30,7 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
       <div className="card-inner">
         <span className="card-label">Fear & Greed</span>
 
-        <div className="score-container">
+        <div className="price-container">
           {showLoading ? (
             <div className="shimmer-stack">
               <Shimmer width={70} height={38} borderRadius={8} />
@@ -38,7 +38,7 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
             </div>
           ) : (
             <>
-              <span className="score" style={{ color }}>{score}</span>
+              <span className="price" style={{ color }}>{score}</span>
               <span className="classification" style={{ color }}>{label}</span>
             </>
           )}
