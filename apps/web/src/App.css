@@ -77,6 +77,15 @@
   }
 }
 
+/* ── Top Bar (ticker input + icon bar) ────────────────────── */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding-bottom: 4px;
+}
+
 /* ── Icon Bar ─────────────────────────────────────────────── */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -88,8 +97,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  width: 100%;
-  padding-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .icon-btn {
@@ -527,17 +535,20 @@
 /* ── Add Ticker Form ──────────────────────────────────────── */
 .add-ticker-form {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
 }
 
 .add-ticker-input {
   flex: 1;
-  padding: 8px 12px;
+  min-width: 0;
+  padding: 6px 10px;
   border-radius: 10px;
   border: 1.5px solid rgba(255, 255, 255, 0.1);
   background: rgba(28, 28, 30, 0.9);
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-family: inherit;
   outline: none;
   transition: border-color 0.15s ease;
@@ -563,13 +574,13 @@
 }
 
 .add-ticker-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   border: none;
   background: #5F7FFF;
   color: #fff;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 400;
   line-height: 1;
   cursor: pointer;
