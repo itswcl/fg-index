@@ -21,13 +21,22 @@ import { FearGreedCard } from './FearGreedCard';
 import { VixCard } from './VixCard';
 import { BtcCard } from './BtcCard';
 import { SpxCard } from './SpxCard';
+import { TickerCard } from './TickerCard';
+import { TickerCardWrapper } from './TickerCardWrapper';
 import type { CardId } from '../hooks/useCardOrder';
 import type { FearGreed, Vix, Btc, Spx } from '../types';
 
+const DEFAULT_CARD_IDS: readonly CardId[] = ['feargreed', 'vix', 'btc', 'spx'];
+
 interface CardGridProps {
+  // Default card order + reorder callback
   order: CardId[];
-  onReorder: (newOrder: CardId[]) => void;
+  onReorder: (newDefaultOrder: CardId[], newTickerOrder: string[]) => void;
   isDark: boolean;
+  // Custom tickers
+  tickers: string[];
+  onRemoveTicker: (ticker: string) => void;
+  // Default card data
   fearGreedData: FearGreed | null;
   fgLastUpdate: Date | null;
   fgIsLoading: boolean;
@@ -48,7 +57,7 @@ interface CardGridProps {
   spxIsRefreshing: boolean;
 }
 
-// ── Per-card slot wrapper ──────────────────────────────────
+// ── Per-card sortable slot ─────────────────────────────────
 function SortableCardSlot({
   id,
   isDark,
@@ -91,37 +100,9 @@ function SortableCardSlot({
   );
 }
 
-// ── Lifted card rendered in DragOverlay ───────────────────
-function LiftedCard({
-  id,
-  isDark,
-  props,
-}: {
-  id: CardId;
-  isDark: boolean;
-  props: CardGridProps;
-}) {
-  const liftedStyle: React.CSSProperties = {
-    transform: 'scale(1.04)',
-    boxShadow: isDark
-      ? '0 20px 40px rgba(0,0,0,0.6)'
-      : '0 20px 40px rgba(0,0,0,0.22)',
-    opacity: isDark ? 0.92 : 0.95,
-    borderRadius: '28px',
-    cursor: 'grabbing',
-    outline: `1.5px solid ${isDark ? 'rgba(95,127,255,0.5)' : 'rgba(95,127,255,0.4)'}`,
-    outlineOffset: '-1.5px',
-  };
-
-  return (
-    <div style={liftedStyle}>
-      {renderCardContent(id, isDark, props)}
-    </div>
-  );
-}
-
-function renderCardContent(id: CardId, isDark: boolean, p: CardGridProps) {
-  switch (id) {
+// ── Renders content for a given card id ───────────────────
+function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
+  switch (id as CardId) {
     case 'feargreed':
       return (
         <FearGreedCard
@@ -164,33 +145,94 @@ function renderCardContent(id: CardId, isDark: boolean, p: CardGridProps) {
           isDark={isDark}
         />
       );
+    default:
+      // Custom ticker
+      return (
+        <TickerCardWrapper
+          ticker={id}
+          isDark={isDark}
+          onRemove={p.onRemoveTicker}
+        />
+      );
   }
 }
 
-// ── CardGrid ───────────────────────────────────────────────
+// ── Lifted card shown in DragOverlay ──────────────────────
+function LiftedCard({
+  id,
+  isDark,
+  props,
+}: {
+  id: string;
+  isDark: boolean;
+  props: CardGridProps;
+}) {
+  const liftedStyle: React.CSSProperties = {
+    transform: 'scale(1.04)',
+    boxShadow: isDark
+      ? '0 20px 40px rgba(0,0,0,0.6)'
+      : '0 20px 40px rgba(0,0,0,0.22)',
+    opacity: isDark ? 0.92 : 0.95,
+    borderRadius: '28px',
+    cursor: 'grabbing',
+    outline: `1.5px solid ${isDark ? 'rgba(95,127,255,0.5)' : 'rgba(95,127,255,0.4)'}`,
+    outlineOffset: '-1.5px',
+  };
+
+  const isCustom = !DEFAULT_CARD_IDS.includes(id as CardId);
+
+  return (
+    <div style={liftedStyle}>
+      {isCustom ? (
+        // Show shimmer snapshot for custom tickers during drag
+        <TickerCard
+          ticker={id}
+          data={undefined}
+          lastUpdate={null}
+          isLoading={true}
+          isDark={isDark}
+          onRemove={() => {}}
+        />
+      ) : (
+        renderCardContent(id, isDark, props)
+      )}
+    </div>
+  );
+}
+
+// ── CardGrid (unified — default + custom in one context) ──
 export function CardGrid(props: CardGridProps) {
-  const { order, onReorder, isDark } = props;
-  const [activeId, setActiveId] = useState<CardId | null>(null);
+  const { order, tickers, onReorder, isDark } = props;
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Single flat list: default cards first, then custom tickers
+  const items = [...order, ...tickers];
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 300, tolerance: 5 },
-    }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 5 } }),
   );
 
   function handleDragStart(event: DragStartEvent) {
-    setActiveId(event.active.id as CardId);
+    setActiveId(event.active.id as string);
   }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (over && active.id !== over.id) {
-      const oldIndex = order.indexOf(active.id as CardId);
-      const newIndex = order.indexOf(over.id as CardId);
-      onReorder(arrayMove(order, oldIndex, newIndex));
+      const oldIndex = items.indexOf(active.id as string);
+      const newIndex = items.indexOf(over.id as string);
+      const reordered = arrayMove(items, oldIndex, newIndex);
+
+      // Split back into default order and ticker order
+      const newDefaultOrder = reordered.filter((id) =>
+        DEFAULT_CARD_IDS.includes(id as CardId),
+      ) as CardId[];
+      const newTickerOrder = reordered.filter(
+        (id) => !DEFAULT_CARD_IDS.includes(id as CardId),
+      );
+
+      onReorder(newDefaultOrder, newTickerOrder);
     }
     setActiveId(null);
   }
@@ -202,9 +244,9 @@ export function CardGrid(props: CardGridProps) {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <SortableContext items={order} strategy={rectSortingStrategy}>
+      <SortableContext items={items} strategy={rectSortingStrategy}>
         <div className="cards-grid">
-          {order.map(id => (
+          {items.map((id) => (
             <SortableCardSlot key={id} id={id} isDark={isDark}>
               {renderCardContent(id, isDark, props)}
             </SortableCardSlot>

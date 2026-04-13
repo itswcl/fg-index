@@ -13,7 +13,6 @@ import { useTickerList } from './hooks/useTickerList';
 import { CardGrid } from './components/CardGrid';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
-import { TickerCardGrid } from './components/TickerCardGrid';
 import { AddTickerInput } from './components/AddTickerInput';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
@@ -124,7 +123,12 @@ function MarketIndicators() {
         )}
         <CardGrid
           order={order}
-          onReorder={setOrder}
+          tickers={tickers}
+          onReorder={(newDefaultOrder, newTickerOrder) => {
+            setOrder(newDefaultOrder);
+            reorderTickers(newTickerOrder);
+          }}
+          onRemoveTicker={removeTicker}
           isDark={isDark}
           fearGreedData={fearGreedData}
           fgLastUpdate={fgDisplayUpdate}
@@ -145,15 +149,6 @@ function MarketIndicators() {
           spxIsLoading={spxLoading && !wsSpx && !httpSpx}
           spxIsRefreshing={spxFetching}
         />
-
-        {tickers.length > 0 && (
-          <TickerCardGrid
-            tickers={tickers}
-            isDark={isDark}
-            onRemove={removeTicker}
-            onReorder={reorderTickers}
-          />
-        )}
 
         <AddTickerInput
           tickerCount={tickers.length}
