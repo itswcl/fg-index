@@ -15,7 +15,7 @@
 .widget {
   position: relative;
   width: 100%;
-  max-width: 420px;
+  max-width: 860px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -23,13 +23,16 @@
 
 .cards-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
 
 @media (max-width: 480px) {
+  .app-container {
+    padding: 10px;
+  }
   .cards-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -458,19 +461,6 @@
 
 .theme-option-active.theme-option-dark  { color: #FFFFFF; background: rgba(255, 255, 255, 0.1); }
 .theme-option-active.theme-option-light { color: #000000; background: rgba(0, 0, 0, 0.06); }
-
-/* ── Custom Ticker Cards ──────────────────────────────────── */
-.custom-tickers-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 480px) {
-  .custom-tickers-row {
-    grid-template-columns: 1fr;
-  }
-}
 
 /* Relative positioning on card needed for remove button */
 .card-custom {
