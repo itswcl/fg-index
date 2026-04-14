@@ -64,9 +64,9 @@ function MarketIndicators() {
   useEffect(() => {
     const fg = fearGreedData?.score;
     const vix = vixData?.price;
-    if (fg !== undefined && vix !== undefined) {
+    if (fg != null && vix != null) {
       document.title = `F&G: ${fg} | VIX: ${vix.toFixed(1)}`;
-    } else if (fg !== undefined) {
+    } else if (fg != null) {
       document.title = `F&G: ${fg} | VIX: –`;
     } else {
       document.title = 'Fear & Greed / VIX';
