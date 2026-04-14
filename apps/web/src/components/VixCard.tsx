@@ -15,7 +15,6 @@ interface VixCardProps {
 
 export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshing, isDark }: VixCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   if (!vixAvailable) {
     return (
@@ -48,7 +47,7 @@ export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshin
       <div className="card-inner">
         <span className="card-label">VIX</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>

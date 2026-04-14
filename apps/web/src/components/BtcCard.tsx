@@ -19,7 +19,6 @@ function formatBtcPrice(price: number): string {
 
 export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: BtcCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
@@ -32,7 +31,7 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
       <div className="card-inner">
         <span className="card-label">BTC</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>

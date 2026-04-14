@@ -23,7 +23,6 @@ export function TickerCard({
   onRemove,
 }: TickerCardProps) {
   const showLoading = isLoading || (isRefreshing && data === undefined);
-  const showRefreshing = isRefreshing && data !== undefined;
 
   // data === null means loaded but ticker not found
   if (!isLoading && data === null) {
@@ -67,7 +66,7 @@ export function TickerCard({
       <div className="card-inner">
         <span className="card-label">{ticker}</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>

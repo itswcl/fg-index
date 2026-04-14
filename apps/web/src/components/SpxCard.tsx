@@ -18,7 +18,6 @@ function formatSpxPrice(price: number): string {
 
 export function SpxCard({ data, spxAvailable, lastUpdate, isLoading, isRefreshing, isDark }: SpxCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   if (!spxAvailable) {
     return (
@@ -52,7 +51,7 @@ export function SpxCard({ data, spxAvailable, lastUpdate, isLoading, isRefreshin
       <div className="card-inner">
         <span className="card-label">S&P 500</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>

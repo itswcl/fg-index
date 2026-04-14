@@ -20,7 +20,6 @@ function getFearGreedColor(classification: FearGreedClassification | string): st
 
 export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: FearGreedCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   const label = data?.classification || 'Fear & Greed';
   const score = data?.score ?? '–';
@@ -31,7 +30,7 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
       <div className="card-inner">
         <span className="card-label">Fear & Greed</span>
 
-        {(showLoading || showRefreshing) ? (
+        {showLoading ? (
           <CardShimmer variant="score" />
         ) : (
           <>
