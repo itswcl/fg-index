@@ -1,6 +1,7 @@
 import type { Btc } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface BtcCardProps {
   data: Btc | null;
@@ -18,7 +19,6 @@ function formatBtcPrice(price: number): string {
 
 export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: BtcCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
@@ -31,21 +31,19 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
       <div className="card-inner">
         <span className="card-label">BTC</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>
             <div className="price-container">
-              <span className={`price ${isDark ? '' : 'price-light'}`}>
-                {data ? formatBtcPrice(data.price) : '–'}
-              </span>
+              {data ? (
+                <AnimatedNumber value={data.price} formatter={formatBtcPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+              ) : (
+                <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
+              )}
               <div className="change-box">
-                <span className="change" style={{ color }}>
-                  {arrow} {Math.abs(change).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-                <span className="change-pct" style={{ color }}>
-                  {' '}({Math.abs(changePct).toFixed(2)}%)
-                </span>
+                <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} className="change" style={{ color }} />
+                <AnimatedNumber value={Math.abs(changePct)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
               </div>
             </div>
             <div className="footer-row">

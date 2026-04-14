@@ -2,6 +2,7 @@
 import type { Vix } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface VixCardProps {
   data: Vix | null;
@@ -14,7 +15,6 @@ interface VixCardProps {
 
 export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshing, isDark }: VixCardProps) {
   const showLoading = isLoading || (isRefreshing && !data);
-  const showRefreshing = isRefreshing && !!data;
 
   if (!vixAvailable) {
     return (
@@ -35,31 +35,31 @@ export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshin
     );
   }
 
-  const price = data?.price ? data.price.toFixed(2) : '–';
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
   const isPositive = change >= 0;
   const color = isPositive ? '#E74C3C' : '#27AE60';
   const arrow = isPositive ? '↑' : '↓';
+  const fmt2 = (n: number) => n.toFixed(2);
 
   return (
     <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
       <div className="card-inner">
         <span className="card-label">VIX</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>
             <div className="price-container">
-              <span className={`price ${isDark ? '' : 'price-light'}`}>{price}</span>
+              {data?.price != null ? (
+                <AnimatedNumber value={data.price} formatter={fmt2} className={`price ${isDark ? '' : 'price-light'}`} />
+              ) : (
+                <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
+              )}
               <div className="change-box">
-                <span className="change" style={{ color }}>
-                  {arrow} {Math.abs(change).toFixed(2)}
-                </span>
-                <span className="change-pct" style={{ color }}>
-                  {' '}({Math.abs(changePct).toFixed(2)}%)
-                </span>
+                <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${n.toFixed(2)}`} className="change" style={{ color }} />
+                <AnimatedNumber value={Math.abs(changePct)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
               </div>
             </div>
             <div className="footer-row">

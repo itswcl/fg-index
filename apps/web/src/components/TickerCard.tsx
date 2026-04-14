@@ -1,6 +1,7 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface TickerCardProps {
   ticker: string;
@@ -22,7 +23,6 @@ export function TickerCard({
   onRemove,
 }: TickerCardProps) {
   const showLoading = isLoading || (isRefreshing && data === undefined);
-  const showRefreshing = isRefreshing && data !== undefined;
 
   // data === null means loaded but ticker not found
   if (!isLoading && data === null) {
@@ -46,13 +46,13 @@ export function TickerCard({
     );
   }
 
-  const price = data?.price != null ? data.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–';
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
   const isPositive = change >= 0;
   // Standard stock coloring: green = up, red = down (opposite of VIX)
   const color = isPositive ? '#27AE60' : '#E74C3C';
   const arrow = isPositive ? '↑' : '↓';
+  const fmtPrice = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
@@ -66,7 +66,7 @@ export function TickerCard({
       <div className="card-inner">
         <span className="card-label">{ticker}</span>
 
-        {(showRefreshing || showLoading) ? (
+        {showLoading ? (
           <CardShimmer />
         ) : (
           <>
@@ -76,14 +76,14 @@ export function TickerCard({
                   {data.name}
                 </span>
               )}
-              <span className={`price ${isDark ? '' : 'price-light'}`}>{price}</span>
+              {data?.price != null ? (
+                <AnimatedNumber value={data.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+              ) : (
+                <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
+              )}
               <div className="change-box">
-                <span className="change" style={{ color }}>
-                  {arrow} {Math.abs(change).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-                <span className="change-pct" style={{ color }}>
-                  {' '}({Math.abs(changePct).toFixed(2)}%)
-                </span>
+                <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${fmtPrice(n)}`} className="change" style={{ color }} />
+                <AnimatedNumber value={Math.abs(changePct)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
               </div>
             </div>
             <div className="footer-row">
