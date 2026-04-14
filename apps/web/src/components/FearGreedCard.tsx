@@ -3,6 +3,7 @@ import type { FearGreed, FearGreedClassification } from '../types';
 import { FEAR_GREED_COLORS } from '../constants';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface FearGreedCardProps {
   data: FearGreed | null;
@@ -35,7 +36,11 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
         ) : (
           <>
             <div className="price-container">
-              <span className="price" style={{ color }}>{score}</span>
+              {typeof score === 'number' ? (
+                <AnimatedNumber value={score} formatter={(n) => Math.round(n).toString()} className="price" style={{ color }} />
+              ) : (
+                <span className="price" style={{ color }}>{score}</span>
+              )}
               <span className="classification" style={{ color }}>{label}</span>
             </div>
             <div className="footer-row">

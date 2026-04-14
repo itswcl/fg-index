@@ -1,6 +1,7 @@
 import type { Spx } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface SpxCardProps {
   data: Spx | null;
@@ -56,16 +57,14 @@ export function SpxCard({ data, spxAvailable, lastUpdate, isLoading, isRefreshin
         ) : (
           <>
             <div className="price-container">
-              <span className={`price ${isDark ? '' : 'price-light'}`}>
-                {data ? formatSpxPrice(data.price) : '–'}
-              </span>
+              {data ? (
+                <AnimatedNumber value={data.price} formatter={formatSpxPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+              ) : (
+                <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
+              )}
               <div className="change-box">
-                <span className="change" style={{ color }}>
-                  {arrow} {Math.abs(change).toFixed(2)}
-                </span>
-                <span className="change-pct" style={{ color }}>
-                  {' '}({Math.abs(changePct).toFixed(2)}%)
-                </span>
+                <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${n.toFixed(2)}`} className="change" style={{ color }} />
+                <AnimatedNumber value={Math.abs(changePct)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
               </div>
             </div>
             <div className="footer-row">
