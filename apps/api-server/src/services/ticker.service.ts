@@ -46,7 +46,7 @@ async function scrapeGoogleFinance(
     const priceMatch = html.match(/data-last-price="([^"]+)"/);
     if (!priceMatch) return null;
 
-    const prevCloseMatch = html.match(/class="P6K39c"[^>]*>([0-9.,]+)</);
+    const prevCloseMatch = html.match(/class="P6K39c"[^>]*>\$?([0-9.,]+)</);
     const nameMatch = html.match(/<div class="zzDege">([^<]+)<\/div>/);
 
     const rawPrice = priceMatch[1].replace(/,/g, "");
