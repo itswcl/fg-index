@@ -1,0 +1,54 @@
+// Feature 6 — Persistent Webhooks
+// See docs/feature-6-spec.md §3
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id // Supabase auth.users.id (UUID)
+  email     String   @unique
+  createdAt DateTime @default(now())
+  alerts    Alert[]
+  webhook   WebhookConfig?
+}
+
+model Alert {
+  id              String      @id @default(uuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  logic           String      // "AND" | "OR"
+  enabled         Boolean     @default(true)
+  cooldownMinutes Int         @default(60)
+  conditions      Condition[]
+  createdAt       DateTime    @default(now())
+  lastTriggeredAt DateTime?
+
+  @@index([userId, enabled])
+}
+
+model Condition {
+  id       String @id @default(uuid())
+  alertId  String
+  alert    Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  metric   String // "fearGreed" | "vix" | "btc" | "spx" | "ticker:AAPL"
+  operator String // "<" | ">" | "<=" | ">=" | "=="
+  value    Float
+}
+
+model WebhookConfig {
+  userId    String   @id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // "discord" | "slack" | "telegram"
+  url       String?
+  botToken  String?
+  chatId    String?
+  updatedAt DateTime @updatedAt
+}

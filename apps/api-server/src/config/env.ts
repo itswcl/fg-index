@@ -21,6 +21,11 @@ const envSchema = z.object({
   SPX_INTERVAL_MS: z.string().transform(Number).default("10000"),
   CORS_ORIGIN: z.string().default("*"),
   INTERNAL_API_KEY: z.string().default("dev-key-123"),
+  // Supabase / Postgres — Feature 6 persistence
+  DATABASE_URL: z.string().url(),
+  DIRECT_URL: z.string().url(),
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_JWKS_URL: z.string().url(),
 });
 
 export const env = envSchema.parse(process.env);

@@ -45,6 +45,10 @@ jobs:
           GOOGLE_FINANCE_SPX_URL: https://example.com/spx
           YAHOO_FINANCE_SPX_URL: https://example.com/spx-fallback
           SCRAPER_USER_AGENT: test-agent
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          DIRECT_URL: postgresql://test:test@localhost:5432/test
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_JWKS_URL: https://example.supabase.co/auth/v1/.well-known/jwks.json
           NODE_ENV: test
         # Excludes are configured in vitest.config.ts (integration + CNN tests require live network).
         run: npx vitest run
