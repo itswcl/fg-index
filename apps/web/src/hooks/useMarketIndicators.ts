@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FearGreed, Vix, Btc, Spx } from '../types';
 import type { Alert, AlertTriggeredMessage, WebhookConfig } from '../types/alerts';
-import { WS_URL, API_KEY } from '../constants';
+import { WS_URL } from '../constants';
+import { buildWsUrl } from '../lib/authFetch';
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -154,12 +155,13 @@ export function useMarketIndicators(
     }
   }, [webhook]);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     setWsStatus('connecting');
-    // Append API key as query param for WS auth (headers not supported in browser WS)
-    const url = API_KEY ? `${WS_URL}?apiKey=${encodeURIComponent(API_KEY)}` : WS_URL;
+    // Build URL with JWT (?token=) and/or API key (?apiKey=) — headers aren't
+    // supported on the browser WebSocket handshake, so we pass via query params.
+    const url = await buildWsUrl(WS_URL);
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
