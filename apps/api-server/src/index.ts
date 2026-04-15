@@ -9,6 +9,7 @@ import btcRouter from "./routes/btc.routes.js";
 import spxRouter from "./routes/spx.routes.js";
 import tickerRouter from "./routes/ticker.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
+import alertsRouter from "./routes/alerts.routes.js";
 import { startFearGreedScheduler } from "./schedulers/fear-greed.scheduler.js";
 import { startVixScheduler } from "./schedulers/vix.scheduler.js";
 import { startBtcScheduler } from "./schedulers/btc.scheduler.js";
@@ -27,8 +28,8 @@ const ALLOWED_ORIGINS = env.CORS_ORIGIN === "*"
 app.use(helmet()); // Set secure HTTP headers
 app.use(cors({
   origin: ALLOWED_ORIGINS,
-  methods: ["GET", "POST"],
-  allowedHeaders: ["X-API-KEY", "Content-Type"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["X-API-KEY", "Content-Type", "Authorization"],
 }));
 app.use(express.json({ limit: "10kb" })); // Request size limit
 app.set("trust proxy", 1); // Trust first proxy
@@ -41,6 +42,7 @@ app.use("/api/btc", btcRouter);
 app.use("/api/spx", spxRouter);
 app.use("/api/quote", tickerRouter);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/alerts", alertsRouter);
 
 // Health check
 app.get("/api/health", getHealth);
