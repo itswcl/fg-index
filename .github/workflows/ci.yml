@@ -72,6 +72,8 @@ jobs:
         env:
           VITE_API_URL: https://fg-index.onrender.com
           VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         # Type-checking already done above; run vite build directly to avoid
         # tsc -b picking up hoisted vite v7 types from api-server.
         run: npx vite build

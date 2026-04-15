@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { WebhookConfig, WebhookType } from '../../types/alerts';
 import { FORM_TOKENS } from './formTokens';
-import { API_BASE_URL, API_KEY } from '../../constants';
+import { API_BASE_URL } from '../../constants';
+import { authFetch } from '../../lib/authFetch';
 
 interface WebhookFormProps {
   webhook: WebhookConfig | null;
@@ -91,12 +92,9 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
     setTestState('loading');
     setTestError('');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/webhooks/test`, {
+      const res = await authFetch(`${API_BASE_URL}/api/webhooks/test`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(API_KEY ? { 'X-API-KEY': API_KEY } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ webhook: config }),
       });
       const data = await res.json() as { ok: boolean; error?: string };

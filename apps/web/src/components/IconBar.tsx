@@ -1,5 +1,6 @@
 import type { ThemePreference } from '../hooks/useTheme';
 import { ThemeSwitcher } from './ThemeSwitcher';
+import { SignInButton } from './SignInButton';
 
 type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -99,6 +100,9 @@ export function IconBar({
         />
         <span className={`tooltip tooltip-right ${isDark ? 'tooltip-dark' : 'tooltip-light'}`}>Refresh</span>
       </button>
+
+      {/* Sign in / account — placed next to alerts per Feature 6 spec */}
+      <SignInButton isDark={isDark} />
 
       {/* Theme switcher — last in row */}
       <ThemeSwitcher theme={theme} onSelect={onThemeSelect} isDark={isDark} />
