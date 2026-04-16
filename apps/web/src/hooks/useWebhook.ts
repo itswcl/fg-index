@@ -50,6 +50,11 @@ export function useWebhook(): UseWebhookReturn {
       const data = (await res.json()) as { webhook: WebhookConfig | null };
       return data.webhook;
     },
+    // Webhook only changes when this user saves/clears it — mutations
+    // invalidate the cache. Disable background refetching.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const invalidate = useCallback(() => {
