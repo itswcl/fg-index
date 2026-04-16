@@ -26,7 +26,7 @@ model Alert {
   name            String
   logic           String      // "AND" | "OR"
   enabled         Boolean     @default(true)
-  cooldownMinutes Int         @default(60)
+  cooldownMinutes Int         @default(5)
   conditions      Condition[]
   createdAt       DateTime    @default(now())
   lastTriggeredAt DateTime?
