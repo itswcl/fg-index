@@ -57,42 +57,23 @@ export function AlertsPopup({
 
   const accent = '#007AFF';
 
-  return (
-    <div
-      ref={ref}
-      className={`alerts-popup ${isDark ? 'alerts-popup-dark' : 'alerts-popup-light'}`}
-    >
-      <AlertsPanel
-        alerts={alerts}
-        onAdd={onAdd}
-        onUpdate={onUpdate}
-        onDelete={onDelete}
-        onToggle={onToggle}
-        webhook={webhook}
-        onSaveWebhook={onSaveWebhook}
-        onRemoveWebhook={onRemoveWebhook}
-        isDark={isDark}
-        inPopup
-        onClose={onClose}
-      />
-
-      {/* ── Sign-in gate overlay (anonymous users) ───────────────── */}
-      {isAnonymous && (
+  // Anonymous users see only the sign-in card — no panel behind, no scroll.
+  if (isAnonymous) {
+    return (
+      <div
+        ref={ref}
+        className={`alerts-popup ${isDark ? 'alerts-popup-dark' : 'alerts-popup-light'}`}
+        style={{ maxHeight: 'none', overflow: 'hidden' }}
+      >
         <div
           style={{
-            position: 'absolute',
-            inset: 0,
-            borderRadius: 'inherit',
-            background: isDark ? 'rgba(18,18,20,0.85)' : 'rgba(242,242,247,0.85)',
-            backdropFilter: 'blur(6px)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             gap: 10,
-            padding: 20,
+            padding: 24,
             textAlign: 'center',
-            zIndex: 2,
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, color: isDark ? '#FFF' : '#000' }}>
@@ -120,7 +101,28 @@ export function AlertsPopup({
             Sign in with Google
           </button>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={`alerts-popup ${isDark ? 'alerts-popup-dark' : 'alerts-popup-light'}`}
+    >
+      <AlertsPanel
+        alerts={alerts}
+        onAdd={onAdd}
+        onUpdate={onUpdate}
+        onDelete={onDelete}
+        onToggle={onToggle}
+        webhook={webhook}
+        onSaveWebhook={onSaveWebhook}
+        onRemoveWebhook={onRemoveWebhook}
+        isDark={isDark}
+        inPopup
+        onClose={onClose}
+      />
 
       {/* ── Migration modal (first-time import prompt) ───────────── */}
       {migrationCandidate && migrationCandidate.length > 0 && !isAnonymous && (
