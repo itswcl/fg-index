@@ -37,7 +37,7 @@ export function __setVerifyOverrideForTests(fn: VerifyFn | null): void {
   verifyOverride = fn;
 }
 
-async function verifySupabaseJwt(token: string): Promise<JWTPayload> {
+export async function verifySupabaseJwt(token: string): Promise<JWTPayload> {
   if (verifyOverride) return verifyOverride(token);
 
   const { payload } = await jwtVerify(token, getJWKS(), {
