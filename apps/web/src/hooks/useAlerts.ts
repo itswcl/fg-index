@@ -79,6 +79,12 @@ export function useAlerts(): UseAlertsReturn {
       const data = (await res.json()) as { alerts?: Alert[] };
       return data.alerts ?? [];
     },
+    // Alerts only change when *this user* mutates them — mutations already
+    // invalidate the cache. Treat data as fresh indefinitely so React Query
+    // stops refetching on window focus / remount / reconnect.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const alerts = user ? (alertsQuery.data ?? []) : [];
