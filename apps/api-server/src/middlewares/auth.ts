@@ -37,11 +37,19 @@ export function __setVerifyOverrideForTests(fn: VerifyFn | null): void {
   verifyOverride = fn;
 }
 
+// Supabase mints access tokens with `iss = "<SUPABASE_URL>/auth/v1"`.
+// Older projects occasionally still carry the bare project URL, so we
+// accept both to avoid breaking existing sessions.
+function expectedIssuers(): string[] {
+  const base = env.SUPABASE_URL.replace(/\/+$/, "");
+  return [`${base}/auth/v1`, base];
+}
+
 export async function verifySupabaseJwt(token: string): Promise<JWTPayload> {
   if (verifyOverride) return verifyOverride(token);
 
   const { payload } = await jwtVerify(token, getJWKS(), {
-    issuer: env.SUPABASE_URL,
+    issuer: expectedIssuers(),
     audience: "authenticated",
   });
   return payload;
