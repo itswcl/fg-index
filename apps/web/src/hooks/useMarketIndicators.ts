@@ -118,7 +118,10 @@ export function useMarketIndicators(
   const [btc, setBtc] = useState<Btc | null>(null);
   const [spx, setSpx] = useState<Spx | null>(null);
   const [spxAvailable, setSpxAvailable] = useState(true);
-  const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
+  // Start optimistic — HTTP fetches deliver data immediately, so showing
+  // yellow before the WS handshake completes misrepresents the real state.
+  // Only flip to 'connecting'/'disconnected' once the socket actually drops.
+  const [wsStatus, setWsStatus] = useState<WsStatus>('connected');
   const [lastFearGreedUpdate, setLastFearGreedUpdate] = useState<Date | null>(null);
   const [lastVixUpdate, setLastVixUpdate] = useState<Date | null>(null);
   const [lastBtcUpdate, setLastBtcUpdate] = useState<Date | null>(null);
@@ -159,7 +162,6 @@ export function useMarketIndicators(
   const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    setWsStatus('connecting');
     // Build URL with JWT (?token=) and/or API key (?apiKey=) — headers aren't
     // supported on the browser WebSocket handshake, so we pass via query params.
     const url = await buildWsUrl(WS_URL);
