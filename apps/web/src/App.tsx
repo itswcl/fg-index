@@ -19,7 +19,17 @@ import './App.css';
 const queryClient = new QueryClient();
 
 function MarketIndicators() {
-  const { alerts, addAlert, updateAlert, deleteAlert, toggleAlert } = useAlerts();
+  const {
+    alerts,
+    addAlert,
+    updateAlert,
+    deleteAlert,
+    toggleAlert,
+    isAnonymous: alertsAnonymous,
+    migrationCandidate: alertsMigrationCandidate,
+    acceptMigration: acceptAlertsMigration,
+    dismissMigration: dismissAlertsMigration,
+  } = useAlerts();
   const { webhook, setWebhook, clearWebhook } = useWebhook();
 
   const handleAlertTriggered = useCallback(
@@ -124,6 +134,10 @@ function MarketIndicators() {
             onSaveWebhook={setWebhook}
             onRemoveWebhook={clearWebhook}
             onClose={() => setAlertsOpen(false)}
+            isAnonymous={alertsAnonymous}
+            migrationCandidate={alertsMigrationCandidate}
+            onAcceptMigration={() => { void acceptAlertsMigration(); }}
+            onDismissMigration={dismissAlertsMigration}
           />
         )}
         <CardGrid
