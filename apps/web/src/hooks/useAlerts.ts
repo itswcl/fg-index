@@ -140,14 +140,20 @@ export function useAlerts(): UseAlertsReturn {
       const {
         id: _id,
         createdAt: _createdAt,
-        lastTriggeredAt: _lastTriggeredAt,
+        lastTriggeredAt,
         ...writable
       } = updates;
-      void _id; void _createdAt; void _lastTriggeredAt;
+      void _id; void _createdAt;
       if (Object.keys(writable).length === 0) {
-        // lastTriggeredAt-only updates come from WS alert_triggered;
-        // the server already persists them — just refresh.
-        invalidate();
+        // lastTriggeredAt-only updates come from WS alert_triggered.
+        // The server already persists the field — don't refetch every time
+        // a trigger fires. Patch the cache in place so the UI still updates.
+        if (lastTriggeredAt !== undefined) {
+          queryClient.setQueryData<Alert[]>(
+            ['alerts', userId],
+            (prev) => prev?.map((a) => (a.id === id ? { ...a, lastTriggeredAt } : a)) ?? prev,
+          );
+        }
         return;
       }
       const res = await authFetch(`${API_BASE_URL}/api/alerts/${id}`, {
