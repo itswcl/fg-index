@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN "cardOrder" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

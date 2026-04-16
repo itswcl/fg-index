@@ -15,6 +15,7 @@ model User {
   id        String   @id // Supabase auth.users.id (UUID)
   email     String   @unique
   createdAt DateTime @default(now())
+  cardOrder String[] @default([])
   alerts    Alert[]
   webhook   WebhookConfig?
   tickers   UserTicker[]
