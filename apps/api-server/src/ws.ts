@@ -1,72 +1,60 @@
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
+import { URL } from "url";
 import { subscribeToFearGreed, getCachedFearGreed } from "./schedulers/fear-greed.scheduler.js";
 import { subscribeToVix, getCachedVix } from "./schedulers/vix.scheduler.js";
 import { subscribeToBtc, getCachedBtc } from "./schedulers/btc.scheduler.js";
 import { subscribeToSpx, getCachedSpx } from "./schedulers/spx.scheduler.js";
 import { MAX_WS_CONNECTIONS } from "./middlewares/rateLimit.js";
-import { SetAlertsMessageSchema, SetWebhookMessageSchema, type Alert, type WebhookConfig } from "@shared/types";
-import { evaluateAlerts } from "./services/alertEvaluator.js";
-import { deliverWebhook } from "./services/webhookDelivery.js";
+import { verifySupabaseJwt } from "./middlewares/auth.js";
+import {
+  registerUserSocket,
+  unregisterUserSocket,
+} from "./services/wsRegistry.js";
+import { evaluateForMetric } from "./services/alertWorker.js";
 
-// Per-connection alert storage
-const connectionAlerts = new Map<WebSocket, Alert[]>();
-
-// Per-connection webhook config storage
-const connectionWebhooks = new Map<WebSocket, WebhookConfig | null>();
-
-// Cached reference to the WSS for external broadcast
-let wssInstance: WebSocketServer | null = null;
-
-export function broadcastWithAlertEvaluation(
-  fearGreedScore: number | null,
-  vixPrice: number | null,
-  btcPrice: number | null = null,
-  spxPrice: number | null = null
-): void {
-  if (!wssInstance) return;
-
-  wssInstance.clients.forEach((client) => {
-    if (client.readyState !== WebSocket.OPEN) return;
-
-    const alerts = connectionAlerts.get(client) ?? [];
-    if (alerts.length > 0) {
-      const triggered = evaluateAlerts(alerts, fearGreedScore, vixPrice, btcPrice, spxPrice);
-      for (const msg of triggered) {
-        client.send(JSON.stringify(msg));
-      }
-
-      // Deliver webhook for each triggered alert if this connection has one configured
-      const webhookConfig = connectionWebhooks.get(client);
-      if (webhookConfig) {
-        for (const msg of triggered) {
-          void deliverWebhook(webhookConfig, msg.alertName, msg.message).catch((err: unknown) => {
-            process.stderr.write(
-              JSON.stringify({ event: "webhook_delivery_error", error: String(err) }) + "\n"
-            );
-          });
-        }
-      }
-    }
-  });
+// Attach userId to the socket once the ?token= is verified.
+interface AuthedSocket extends WebSocket {
+  userId?: string;
 }
 
 export function startWsServer(server: http.Server) {
   const wss = new WebSocketServer({ server });
-  wssInstance = wss;
 
-  wss.on("connection", (ws) => {
-    // Check connection limit
+  wss.on("connection", async (ws: AuthedSocket, req) => {
+    // Connection cap
     if (wss.clients.size > MAX_WS_CONNECTIONS) {
       ws.close(1013, "Server at capacity");
       return;
     }
 
-    // Send initial data
-    const fg = getCachedFearGreed();
-    if (fg) {
-      ws.send(JSON.stringify({ type: "FEAR_GREED_UPDATE", payload: fg }));
+    // Optional JWT via ?token=<jwt>. Anonymous connections are allowed —
+    // they receive market data but no alert pushback.
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const token = url.searchParams.get("token");
+      if (token) {
+        const payload = await verifySupabaseJwt(token);
+        const sub = typeof payload.sub === "string" ? payload.sub : null;
+        if (sub) {
+          ws.userId = sub;
+          registerUserSocket(sub, ws);
+        }
+      }
+    } catch (err) {
+      // Bad token → treat as anonymous. Do not drop the connection; market
+      // data still has value for unauthenticated readers.
+      process.stderr.write(
+        JSON.stringify({
+          event: "ws_token_verify_failed",
+          error: err instanceof Error ? err.message : String(err),
+        }) + "\n"
+      );
     }
+
+    // Send initial market data snapshot
+    const fg = getCachedFearGreed();
+    if (fg) ws.send(JSON.stringify({ type: "FEAR_GREED_UPDATE", payload: fg }));
 
     const vix = getCachedVix();
     ws.send(JSON.stringify({ type: "VIX_UPDATE", payload: vix }));
@@ -77,108 +65,72 @@ export function startWsServer(server: http.Server) {
     const spx = getCachedSpx();
     ws.send(JSON.stringify({ type: "SPX_UPDATE", payload: spx }));
 
-    // Accept set_alerts messages; reject anything else
-    ws.on("message", (data) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(data.toString());
-      } catch {
-        // Ignore malformed JSON — don't crash or close
-        return;
-      }
-
-      // Dispatch on message type
-      const msgType =
-        parsed !== null &&
-        typeof parsed === "object" &&
-        "type" in (parsed as Record<string, unknown>)
-          ? (parsed as Record<string, unknown>).type
-          : undefined;
-
-      if (msgType === "set_webhook") {
-        const webhookResult = SetWebhookMessageSchema.safeParse(parsed);
-        if (webhookResult.success) {
-          connectionWebhooks.set(ws, webhookResult.data.webhook);
-          return;
-        }
-        ws.close(1003, "Unsupported data");
-        return;
-      }
-
-      const result = SetAlertsMessageSchema.safeParse(parsed);
-      if (result.success) {
-        connectionAlerts.set(ws, result.data.alerts);
-        return;
-      }
-
-      // Unknown message type — close as before for unsupported data
+    // Feature 6: alerts + webhooks live in the DB now. We no longer accept
+    // set_alerts / set_webhook client→server messages. Any client message
+    // is a protocol violation — close the connection.
+    ws.on("message", () => {
       ws.close(1003, "Unsupported data");
     });
 
     ws.on("close", () => {
-      connectionAlerts.delete(ws);
-      connectionWebhooks.delete(ws);
+      if (ws.userId) unregisterUserSocket(ws.userId, ws);
     });
 
     ws.on("error", (err) => {
-      process.stderr.write(JSON.stringify({ event: "ws_error", message: err.message }) + "\n");
+      process.stderr.write(
+        JSON.stringify({ event: "ws_error", message: err.message }) + "\n"
+      );
     });
   });
 
-  subscribeToFearGreed((data) => {
+  // ─── Broadcast helper ───────────────────────────────────────────
+  const broadcast = (type: string, payload: unknown) => {
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "FEAR_GREED_UPDATE", payload: data }));
+        client.send(JSON.stringify({ type, payload }));
       }
     });
+  };
 
-    // Evaluate alerts with freshly updated fear & greed
-    const vix = getCachedVix();
-    const btc = getCachedBtc();
-    const spx = getCachedSpx();
-    broadcastWithAlertEvaluation(data.score, vix?.price ?? null, btc?.price ?? null, spx?.price ?? null);
+  // ─── Scheduler subscriptions: broadcast + run alert worker ──────
+  subscribeToFearGreed((data) => {
+    broadcast("FEAR_GREED_UPDATE", data);
+    void evaluateForMetric("fearGreed", {
+      fearGreedScore: data.score ?? null,
+      vixPrice: getCachedVix()?.price ?? null,
+      btcPrice: getCachedBtc()?.price ?? null,
+      spxPrice: getCachedSpx()?.price ?? null,
+    });
   });
 
   subscribeToVix((data) => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "VIX_UPDATE", payload: data }));
-      }
+    broadcast("VIX_UPDATE", data);
+    void evaluateForMetric("vix", {
+      fearGreedScore: getCachedFearGreed()?.score ?? null,
+      vixPrice: data?.price ?? null,
+      btcPrice: getCachedBtc()?.price ?? null,
+      spxPrice: getCachedSpx()?.price ?? null,
     });
-
-    // Evaluate alerts with freshly updated VIX
-    const fg = getCachedFearGreed();
-    const btc = getCachedBtc();
-    const spx = getCachedSpx();
-    broadcastWithAlertEvaluation(fg?.score ?? null, data?.price ?? null, btc?.price ?? null, spx?.price ?? null);
   });
 
   subscribeToBtc((data) => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "BTC_UPDATE", payload: data }));
-      }
+    broadcast("BTC_UPDATE", data);
+    void evaluateForMetric("btc", {
+      fearGreedScore: getCachedFearGreed()?.score ?? null,
+      vixPrice: getCachedVix()?.price ?? null,
+      btcPrice: data?.price ?? null,
+      spxPrice: getCachedSpx()?.price ?? null,
     });
-
-    // Evaluate alerts with freshly updated BTC
-    const fg = getCachedFearGreed();
-    const vix = getCachedVix();
-    const spx = getCachedSpx();
-    broadcastWithAlertEvaluation(fg?.score ?? null, vix?.price ?? null, data?.price ?? null, spx?.price ?? null);
   });
 
   subscribeToSpx((data) => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "SPX_UPDATE", payload: data }));
-      }
+    broadcast("SPX_UPDATE", data);
+    void evaluateForMetric("spx", {
+      fearGreedScore: getCachedFearGreed()?.score ?? null,
+      vixPrice: getCachedVix()?.price ?? null,
+      btcPrice: getCachedBtc()?.price ?? null,
+      spxPrice: data?.price ?? null,
     });
-
-    // Evaluate alerts with freshly updated SPX
-    const fg = getCachedFearGreed();
-    const vix = getCachedVix();
-    const btc = getCachedBtc();
-    broadcastWithAlertEvaluation(fg?.score ?? null, vix?.price ?? null, btc?.price ?? null, data?.price ?? null);
   });
 
   process.stdout.write("WebSocket server started on same port as HTTP\n");
