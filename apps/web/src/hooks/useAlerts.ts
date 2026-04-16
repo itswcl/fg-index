@@ -88,6 +88,28 @@ export function useAlerts(): UseAlertsReturn {
   }, [queryClient, userId]);
 
   // ── Mutations ──────────────────────────────────────────────────
+  // Parse a failed Response into a useful Error so silent mutation failures
+  // become visible in the console and (optionally) to the user.
+  async function throwFromResponse(res: Response, context: string): Promise<never> {
+    let detail = '';
+    try {
+      const body = await res.text();
+      if (body) detail = ` — ${body.slice(0, 300)}`;
+    } catch {
+      // ignore
+    }
+    throw new Error(`${context} (${res.status})${detail}`);
+  }
+
+  const reportError = (action: string) => (err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(`[alerts] ${action} failed:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    if (typeof window !== 'undefined') {
+      window.alert(`Couldn't ${action}: ${msg}`);
+    }
+  };
+
   const createMut = useMutation({
     mutationFn: async (data: Omit<Alert, 'id' | 'createdAt'>) => {
       const body = stripForServer({
@@ -100,9 +122,10 @@ export function useAlerts(): UseAlertsReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`Failed to create alert (${res.status})`);
+      if (!res.ok) await throwFromResponse(res, 'Failed to create alert');
     },
     onSuccess: invalidate,
+    onError: reportError('save alert'),
   });
 
   const updateMut = useMutation({
@@ -126,9 +149,10 @@ export function useAlerts(): UseAlertsReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(writable),
       });
-      if (!res.ok) throw new Error(`Failed to update alert (${res.status})`);
+      if (!res.ok) await throwFromResponse(res, 'Failed to update alert');
     },
     onSuccess: invalidate,
+    onError: reportError('update alert'),
   });
 
   const deleteMut = useMutation({
@@ -137,10 +161,11 @@ export function useAlerts(): UseAlertsReturn {
         method: 'DELETE',
       });
       if (!res.ok && res.status !== 204) {
-        throw new Error(`Failed to delete alert (${res.status})`);
+        await throwFromResponse(res, 'Failed to delete alert');
       }
     },
     onSuccess: invalidate,
+    onError: reportError('delete alert'),
   });
 
   const addAlert = useCallback(

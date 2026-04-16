@@ -56,6 +56,26 @@ export function useWebhook(): UseWebhookReturn {
     void queryClient.invalidateQueries({ queryKey: ['webhook', userId] });
   }, [queryClient, userId]);
 
+  async function throwFromResponse(res: Response, context: string): Promise<never> {
+    let detail = '';
+    try {
+      const body = await res.text();
+      if (body) detail = ` — ${body.slice(0, 300)}`;
+    } catch {
+      // ignore
+    }
+    throw new Error(`${context} (${res.status})${detail}`);
+  }
+
+  const reportError = (action: string) => (err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(`[webhook] ${action} failed:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    if (typeof window !== 'undefined') {
+      window.alert(`Couldn't ${action}: ${msg}`);
+    }
+  };
+
   const putMut = useMutation({
     mutationFn: async (config: WebhookConfig) => {
       const res = await authFetch(`${API_BASE_URL}/api/webhooks/me`, {
@@ -63,9 +83,10 @@ export function useWebhook(): UseWebhookReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ webhook: config }),
       });
-      if (!res.ok) throw new Error(`Failed to save webhook (${res.status})`);
+      if (!res.ok) await throwFromResponse(res, 'Failed to save webhook');
     },
     onSuccess: invalidate,
+    onError: reportError('save webhook'),
   });
 
   const deleteMut = useMutation({
@@ -74,10 +95,11 @@ export function useWebhook(): UseWebhookReturn {
         method: 'DELETE',
       });
       if (!res.ok && res.status !== 204) {
-        throw new Error(`Failed to delete webhook (${res.status})`);
+        await throwFromResponse(res, 'Failed to delete webhook');
       }
     },
     onSuccess: invalidate,
+    onError: reportError('delete webhook'),
   });
 
   const setWebhook = useCallback(
