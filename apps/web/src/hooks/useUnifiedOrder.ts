@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MAX_CUSTOM_TICKERS } from '../constants';
+import { useEffect, useMemo, useState } from 'react';
+import { useTickerList } from './useTickerList';
 
 const STORAGE_KEY = 'fg-unified-order';
 const OLD_CARD_KEY = 'fg-card-order';
@@ -13,7 +13,9 @@ function isDefaultId(id: string): id is DefaultId {
 }
 
 /**
- * Load order from localStorage, migrating from old separate keys if needed.
+ * Load the persisted card-order (defaults + ticker positions) from
+ * localStorage, migrating from older split keys if present. Card order
+ * itself stays local for now — PR 4 will server-persist it.
  */
 function loadOrder(): string[] {
   try {
@@ -21,13 +23,11 @@ function loadOrder(): string[] {
     if (raw) {
       const parsed = JSON.parse(raw) as string[];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Ensure all 4 defaults are present (defensive)
         const missing = DEFAULT_CARD_IDS.filter((id) => !parsed.includes(id));
         return [...missing, ...parsed];
       }
     }
 
-    // Migrate from old keys
     let defaults: string[] = [...DEFAULT_CARD_IDS];
     const oldCards = localStorage.getItem(OLD_CARD_KEY);
     if (oldCards) {
@@ -44,70 +44,64 @@ function loadOrder(): string[] {
         // ignore
       }
     }
-
-    let tickers: string[] = [];
-    const oldTickers = localStorage.getItem(OLD_TICKER_KEY);
-    if (oldTickers) {
-      try {
-        const parsed = JSON.parse(oldTickers) as string[];
-        if (Array.isArray(parsed)) tickers = parsed;
-      } catch {
-        // ignore
-      }
-    }
-
-    return [...defaults, ...tickers];
+    return [...defaults];
   } catch {
     return [...DEFAULT_CARD_IDS];
   }
 }
 
+function saveOrder(order: string[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
+    localStorage.setItem(
+      OLD_CARD_KEY,
+      JSON.stringify(order.filter((id) => isDefaultId(id))),
+    );
+    localStorage.setItem(
+      OLD_TICKER_KEY,
+      JSON.stringify(order.filter((id) => !isDefaultId(id))),
+    );
+  } catch {
+    // ignore
+  }
+}
+
 export function useUnifiedOrder() {
-  const [order, setOrderState] = useState<string[]>(loadOrder);
+  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
+  const [baseOrder, setBaseOrder] = useState<string[]>(loadOrder);
 
-  function save(newOrder: string[]) {
-    setOrderState(newOrder);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newOrder));
-      // Keep old keys in sync for backward compat
-      localStorage.setItem(
-        OLD_CARD_KEY,
-        JSON.stringify(newOrder.filter((id) => isDefaultId(id))),
-      );
-      localStorage.setItem(
-        OLD_TICKER_KEY,
-        JSON.stringify(newOrder.filter((id) => !isDefaultId(id))),
-      );
-    } catch {
-      // ignore
+  // Reconcile the locally-remembered order with the authoritative ticker list
+  // returned by useTickerList (server-backed for signed-in users, localStorage
+  // for anonymous). Unknown tickers get dropped, new ones append at the end,
+  // and the existing positions for known ids are preserved.
+  const order = useMemo(() => {
+    const tickerSet = new Set(tickers);
+    const kept = baseOrder.filter((id) => isDefaultId(id) || tickerSet.has(id));
+    for (const id of DEFAULT_CARD_IDS) {
+      if (!kept.includes(id)) kept.unshift(id);
     }
-  }
+    for (const t of tickers) {
+      if (!kept.includes(t)) kept.push(t);
+    }
+    return kept;
+  }, [baseOrder, tickers]);
 
-  /** Replace the entire order (used by drag-and-drop). */
+  // Persist the reconciled order so a subsequent reload doesn't reintroduce
+  // removed tickers or lose the intended position of new ones.
+  useEffect(() => {
+    saveOrder(order);
+  }, [order]);
+
+  /** Replace the entire order (drag-and-drop). Also persists ticker order. */
   function reorder(newOrder: string[]) {
-    save(newOrder);
+    setBaseOrder(newOrder);
+    const newTickerOrder = newOrder.filter((id) => !isDefaultId(id));
+    const prevTickerOrder = tickers;
+    const changed =
+      newTickerOrder.length !== prevTickerOrder.length ||
+      newTickerOrder.some((t, i) => prevTickerOrder[i] !== t);
+    if (changed) reorderTickers(newTickerOrder);
   }
-
-  /** Add a custom ticker. Returns error if validation fails. */
-  function addTicker(raw: string): { ok: boolean; error?: string } {
-    const normalized = raw.trim().toUpperCase();
-    if (!normalized) return { ok: false, error: 'Enter a ticker' };
-    if (order.includes(normalized)) return { ok: false, error: 'Already added' };
-    const tickerCount = order.filter((id) => !isDefaultId(id)).length;
-    if (tickerCount >= MAX_CUSTOM_TICKERS)
-      return { ok: false, error: `Maximum ${MAX_CUSTOM_TICKERS} tickers` };
-    save([...order, normalized]);
-    return { ok: true };
-  }
-
-  /** Remove a custom ticker. Default cards cannot be removed. */
-  function removeTicker(ticker: string) {
-    if (isDefaultId(ticker)) return;
-    save(order.filter((t) => t !== ticker));
-  }
-
-  /** Custom tickers (non-default IDs) in their current order. */
-  const tickers = order.filter((id) => !isDefaultId(id));
 
   return { order, reorder, addTicker, removeTicker, tickers };
 }
