@@ -21,6 +21,7 @@ build/
 out/
 .next/
 main.jsbundle
+*.tsbuildinfo
 
 # Environment variables
 .env
