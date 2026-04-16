@@ -8,6 +8,7 @@ import { useSpx } from './hooks/useSpx';
 import { useTheme } from './hooks/useTheme';
 import { useUnifiedOrder } from './hooks/useUnifiedOrder';
 import { useTickerSync } from './hooks/useTickerSync';
+import { usePreferencesSync } from './hooks/usePreferencesSync';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { CardGrid } from './components/CardGrid';
@@ -66,6 +67,7 @@ function MarketIndicators() {
 
   const { theme, setTheme, isDark } = useTheme();
   useTickerSync();
+  usePreferencesSync();
   const { order, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
   const [alertsOpen, setAlertsOpen] = useState(false);
 
