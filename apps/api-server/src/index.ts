@@ -10,6 +10,7 @@ import spxRouter from "./routes/spx.routes.js";
 import tickerRouter from "./routes/ticker.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
 import alertsRouter from "./routes/alerts.routes.js";
+import tickerListRouter from "./routes/ticker-list.routes.js";
 import { startFearGreedScheduler } from "./schedulers/fear-greed.scheduler.js";
 import { startVixScheduler } from "./schedulers/vix.scheduler.js";
 import { startBtcScheduler } from "./schedulers/btc.scheduler.js";
@@ -43,6 +44,7 @@ app.use("/api/spx", spxRouter);
 app.use("/api/quote", tickerRouter);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/alerts", alertsRouter);
+app.use("/api/user/tickers", tickerListRouter);
 
 // Health check
 app.get("/api/health", getHealth);
