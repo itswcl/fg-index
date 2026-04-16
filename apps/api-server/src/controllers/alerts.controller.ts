@@ -65,7 +65,7 @@ export async function createAlert(req: Request, res: Response): Promise<void> {
         name,
         logic,
         enabled: enabled ?? true,
-        cooldownMinutes: cooldownMinutes ?? 60,
+        cooldownMinutes: cooldownMinutes ?? 5,
         conditions: { create: conditions },
       },
       include: { conditions: true },
@@ -160,7 +160,7 @@ export async function bulkReplaceAlerts(
             name: a.name,
             logic: a.logic,
             enabled: a.enabled ?? true,
-            cooldownMinutes: a.cooldownMinutes ?? 60,
+            cooldownMinutes: a.cooldownMinutes ?? 5,
             conditions: { create: a.conditions },
           },
         });
