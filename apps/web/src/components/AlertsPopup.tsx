@@ -61,7 +61,6 @@ export function AlertsPopup({
     <div
       ref={ref}
       className={`alerts-popup ${isDark ? 'alerts-popup-dark' : 'alerts-popup-light'}`}
-      style={{ position: 'relative' }}
     >
       <AlertsPanel
         alerts={alerts}
