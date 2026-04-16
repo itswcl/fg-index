@@ -126,6 +126,7 @@ export function useMarketIndicators(
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(3000);
   // Keep latest callback/alerts/webhook in refs so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
@@ -168,6 +169,10 @@ export function useMarketIndicators(
     ws.onopen = () => {
       setWsStatus('connected');
       reconnectDelayRef.current = 3000; // Reset on success
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current);
+        disconnectTimerRef.current = null;
+      }
       // Sync webhook config to backend on connect
       if (webhookRef.current) {
         ws.send(JSON.stringify({ type: 'set_webhook', webhook: webhookRef.current }));
@@ -253,12 +258,24 @@ export function useMarketIndicators(
       }
     };
 
+    // Show "connecting" (yellow) during transient drops. Only flip to
+    // "disconnected" (red) if we fail to reconnect within SUSTAINED_MS —
+    // avoids flashing red every time Render briefly drops the socket.
+    const SUSTAINED_MS = 15_000;
+    const markReconnecting = () => {
+      setWsStatus('connecting');
+      if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
+      disconnectTimerRef.current = setTimeout(() => {
+        setWsStatus('disconnected');
+      }, SUSTAINED_MS);
+    };
+
     ws.onerror = () => {
-      setWsStatus('disconnected');
+      markReconnecting();
     };
 
     ws.onclose = () => {
-      setWsStatus('disconnected');
+      markReconnecting();
       // Exponential backoff, capped at 60s (covers Render's ~30-50s cold start)
       const delay = Math.min(reconnectDelayRef.current, 60000);
       reconnectDelayRef.current = Math.min(delay * 1.5, 60000);
@@ -270,6 +287,7 @@ export function useMarketIndicators(
     connect();
     return () => {
       reconnectTimerRef.current && clearTimeout(reconnectTimerRef.current);
+      disconnectTimerRef.current && clearTimeout(disconnectTimerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);
