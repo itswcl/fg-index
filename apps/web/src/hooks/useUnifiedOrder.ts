@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { API_BASE_URL } from '../constants';
+import { authFetch } from '../lib/authFetch';
+import { useAuth } from './useAuth';
 import { useTickerList } from './useTickerList';
 
 const STORAGE_KEY = 'fg-unified-order';
 const OLD_CARD_KEY = 'fg-card-order';
 const OLD_TICKER_KEY = 'fg-index-tickers';
+const PUT_DEBOUNCE_MS = 500;
 
 export const DEFAULT_CARD_IDS = ['feargreed', 'vix', 'btc', 'spx'] as const;
 type DefaultId = (typeof DEFAULT_CARD_IDS)[number];
@@ -13,11 +18,11 @@ function isDefaultId(id: string): id is DefaultId {
 }
 
 /**
- * Load the persisted card-order (defaults + ticker positions) from
- * localStorage, migrating from older split keys if present. Card order
- * itself stays local for now — PR 4 will server-persist it.
+ * Load the locally-persisted card order, migrating from older split keys if
+ * present. Used as the anonymous fallback and as the migration source for
+ * the first server sync.
  */
-function loadOrder(): string[] {
+function loadLocalOrder(): string[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -50,7 +55,7 @@ function loadOrder(): string[] {
   }
 }
 
-function saveOrder(order: string[]) {
+function saveLocalOrder(order: string[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
     localStorage.setItem(
@@ -66,14 +71,69 @@ function saveOrder(order: string[]) {
   }
 }
 
-export function useUnifiedOrder() {
-  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
-  const [baseOrder, setBaseOrder] = useState<string[]>(loadOrder);
+export function clearLocalOrder(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(OLD_CARD_KEY);
+  } catch {
+    // ignore
+  }
+}
 
-  // Reconcile the locally-remembered order with the authoritative ticker list
-  // returned by useTickerList (server-backed for signed-in users, localStorage
-  // for anonymous). Unknown tickers get dropped, new ones append at the end,
-  // and the existing positions for known ids are preserved.
+export function useUnifiedOrder() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
+
+  const userId = user?.id ?? null;
+  const prefsKey = useMemo(() => ['preferences', userId] as const, [userId]);
+
+  // ── Server preferences (cardOrder) ───────────────────────────────
+  const prefsQuery = useQuery<string[]>({
+    queryKey: prefsKey,
+    enabled: !!userId,
+    queryFn: async () => {
+      const res = await authFetch(`${API_BASE_URL}/api/user/preferences`);
+      if (!res.ok) throw new Error(`Failed to load preferences (${res.status})`);
+      const data = (await res.json()) as { cardOrder: string[] };
+      return data.cardOrder ?? [];
+    },
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+
+  // Local state for the raw order (pre-reconciliation). Signed-in users
+  // hydrate from the server once the query lands; signed-out users stick
+  // with localStorage.
+  const [baseOrder, setBaseOrder] = useState<string[]>(() =>
+    user ? [...DEFAULT_CARD_IDS] : loadLocalOrder(),
+  );
+
+  // Hydrate from server on login / successful fetch.
+  useEffect(() => {
+    if (!user) return;
+    if (!prefsQuery.isSuccess) return;
+    const server = prefsQuery.data ?? [];
+    if (server.length > 0) {
+      setBaseOrder(server);
+    } else {
+      setBaseOrder([...DEFAULT_CARD_IDS]);
+    }
+  }, [user, prefsQuery.isSuccess, prefsQuery.data]);
+
+  // Reset to localStorage on sign-out.
+  const wasAuthedRef = useRef<boolean>(!!user);
+  useEffect(() => {
+    const isAuthed = !!user;
+    if (wasAuthedRef.current && !isAuthed) {
+      setBaseOrder(loadLocalOrder());
+    }
+    wasAuthedRef.current = isAuthed;
+  }, [user]);
+
+  // Reconcile against the authoritative ticker list. Drops unknown tickers,
+  // appends new ones, guarantees all defaults are present.
   const order = useMemo(() => {
     const tickerSet = new Set(tickers);
     const kept = baseOrder.filter((id) => isDefaultId(id) || tickerSet.has(id));
@@ -86,22 +146,63 @@ export function useUnifiedOrder() {
     return kept;
   }, [baseOrder, tickers]);
 
-  // Persist the reconciled order so a subsequent reload doesn't reintroduce
-  // removed tickers or lose the intended position of new ones.
+  // Persist reconciled order for anonymous users (mirrors pre-refactor behavior).
   useEffect(() => {
-    saveOrder(order);
-  }, [order]);
+    if (user) return;
+    saveLocalOrder(order);
+  }, [user, order]);
 
-  /** Replace the entire order (drag-and-drop). Also persists ticker order. */
-  function reorder(newOrder: string[]) {
-    setBaseOrder(newOrder);
-    const newTickerOrder = newOrder.filter((id) => !isDefaultId(id));
-    const prevTickerOrder = tickers;
-    const changed =
-      newTickerOrder.length !== prevTickerOrder.length ||
-      newTickerOrder.some((t, i) => prevTickerOrder[i] !== t);
-    if (changed) reorderTickers(newTickerOrder);
-  }
+  // ── Debounced PUT to /api/user/preferences ───────────────────────
+  const putMut = useMutation({
+    mutationFn: async (cardOrder: string[]) => {
+      const res = await authFetch(`${API_BASE_URL}/api/user/preferences`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cardOrder }),
+      });
+      if (!res.ok) throw new Error(`Failed to save preferences (${res.status})`);
+      const data = (await res.json()) as { cardOrder: string[] };
+      return data.cardOrder;
+    },
+    onSuccess: (serverOrder) => {
+      queryClient.setQueryData<string[]>(prefsKey, serverOrder);
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error('[preferences] save failed:', err);
+      void queryClient.invalidateQueries({ queryKey: prefsKey });
+    },
+  });
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleServerSave = useCallback(
+    (next: string[]) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        putMut.mutate(next);
+      }, PUT_DEBOUNCE_MS);
+    },
+    [putMut],
+  );
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  /** Replace the entire order (drag-and-drop). Persists ticker order too. */
+  const reorder = useCallback(
+    (newOrder: string[]) => {
+      setBaseOrder(newOrder);
+      if (user) scheduleServerSave(newOrder);
+
+      const newTickerOrder = newOrder.filter((id) => !isDefaultId(id));
+      const prevTickerOrder = tickers;
+      const changed =
+        newTickerOrder.length !== prevTickerOrder.length ||
+        newTickerOrder.some((t, i) => prevTickerOrder[i] !== t);
+      if (changed) reorderTickers(newTickerOrder);
+    },
+    [user, scheduleServerSave, tickers, reorderTickers],
+  );
 
   return { order, reorder, addTicker, removeTicker, tickers };
 }
