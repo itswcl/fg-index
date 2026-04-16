@@ -1,44 +1,133 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WebhookConfig } from '../types/alerts';
+import { useAuth } from './useAuth';
+import { authFetch } from '../lib/authFetch';
+import { API_BASE_URL } from '../constants';
 
 const STORAGE_KEY = 'fg-index-webhook';
 
-function loadFromStorage(): WebhookConfig | null {
+function loadLocalWebhook(): WebhookConfig | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as WebhookConfig;
+    const parsed = JSON.parse(raw) as WebhookConfig;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
   } catch {
     return null;
   }
 }
 
-interface UseWebhookReturn {
+function clearLocalWebhook(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export interface UseWebhookReturn {
   webhook: WebhookConfig | null;
+  isAnonymous: boolean;
+  isLoading: boolean;
   setWebhook: (config: WebhookConfig) => void;
   clearWebhook: () => void;
 }
 
 export function useWebhook(): UseWebhookReturn {
-  const [webhook, setWebhookState] = useState<WebhookConfig | null>(loadFromStorage);
+  const { user, loading: authLoading } = useAuth();
+  const queryClient = useQueryClient();
+  const userId = user?.id ?? null;
+  const isAnonymous = !authLoading && !user;
 
-  const setWebhook = useCallback((config: WebhookConfig) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch {
-      // localStorage might be unavailable (private browsing quota) — ignore
-    }
-    setWebhookState(config);
-  }, []);
+  const query = useQuery<WebhookConfig | null>({
+    queryKey: ['webhook', userId],
+    enabled: !!userId,
+    queryFn: async () => {
+      const res = await authFetch(`${API_BASE_URL}/api/webhooks/me`);
+      if (!res.ok) throw new Error(`Failed to load webhook (${res.status})`);
+      const data = (await res.json()) as { webhook: WebhookConfig | null };
+      return data.webhook;
+    },
+  });
+
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['webhook', userId] });
+  }, [queryClient, userId]);
+
+  const putMut = useMutation({
+    mutationFn: async (config: WebhookConfig) => {
+      const res = await authFetch(`${API_BASE_URL}/api/webhooks/me`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhook: config }),
+      });
+      if (!res.ok) throw new Error(`Failed to save webhook (${res.status})`);
+    },
+    onSuccess: invalidate,
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async () => {
+      const res = await authFetch(`${API_BASE_URL}/api/webhooks/me`, {
+        method: 'DELETE',
+      });
+      if (!res.ok && res.status !== 204) {
+        throw new Error(`Failed to delete webhook (${res.status})`);
+      }
+    },
+    onSuccess: invalidate,
+  });
+
+  const setWebhook = useCallback(
+    (config: WebhookConfig) => {
+      if (!user) return;
+      putMut.mutate(config);
+    },
+    [user, putMut],
+  );
 
   const clearWebhook = useCallback(() => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-    setWebhookState(null);
-  }, []);
+    if (!user) return;
+    deleteMut.mutate();
+  }, [user, deleteMut]);
 
-  return { webhook, setWebhook, clearWebhook };
+  // ── Auto-import from localStorage on first sign-in ─────────────
+  const migrationCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!user) {
+      migrationCheckedRef.current = false;
+      return;
+    }
+    if (migrationCheckedRef.current) return;
+    if (!query.isSuccess) return;
+    migrationCheckedRef.current = true;
+
+    if (query.data != null) {
+      // Server already has a webhook — legacy localStorage (if any) is stale.
+      clearLocalWebhook();
+      return;
+    }
+    const local = loadLocalWebhook();
+    if (!local) return;
+    // Auto-import silently: PUT then clear localStorage.
+    putMut.mutate(local, {
+      onSuccess: () => {
+        clearLocalWebhook();
+        invalidate();
+      },
+      onError: () => {
+        // Leave localStorage in place for a retry on next load.
+      },
+    });
+  }, [user, query.isSuccess, query.data, putMut, invalidate]);
+
+  return {
+    webhook: user ? (query.data ?? null) : null,
+    isAnonymous,
+    isLoading: !!user && query.isLoading,
+    setWebhook,
+    clearWebhook,
+  };
 }
