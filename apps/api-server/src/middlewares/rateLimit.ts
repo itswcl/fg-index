@@ -65,10 +65,15 @@ export const tickerRateLimiter = rateLimit({
   },
 });
 
-// General API limiter (health check etc)
+// General API limiter (health check etc).
+// Budget: ~40 req/min per IP. Signed-in sessions hit /api/alerts and
+// /api/webhooks/me on mount + every save/edit, so 100/15min was far too
+// tight and produced spurious 429s during normal use. Per-endpoint
+// limiters (ticker, webhook/test) still enforce stricter caps where the
+// abuse surface is real.
 export const globalRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
