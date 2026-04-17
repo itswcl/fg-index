@@ -583,3 +583,40 @@
   margin-left: 2px;
 }
 
+/* ── Mobile line-item layout ──────────────────────────────
+   The desktop container centers content vertically; on mobile we want
+   the list to scroll naturally from the top.
+──────────────────────────────────────────────────────────── */
+.app-container-mobile {
+  align-items: flex-start;
+  overflow-y: auto;
+  padding: 10px 10px 24px;
+}
+
+/* Mobile-only pencil / Done toggle. Uses existing .icon-btn tokens
+   for the idle pencil; "Done" overrides to a text button at 17px. */
+.edit-toggle {
+  flex-shrink: 0;
+}
+
+.edit-toggle-done {
+  min-width: 60px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: #007AFF;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.edit-toggle-done:active {
+  opacity: 0.6;
+  transform: scale(0.96);
+}
+

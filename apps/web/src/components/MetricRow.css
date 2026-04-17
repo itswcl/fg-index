@@ -1,0 +1,227 @@
+/* ── MetricRow: mobile line-item row ───────────────────────────────────
+   Used inside a single grouped <ul.metric-list> container. The container
+   owns the rounded shell + shadow; rows only own internal padding and an
+   optional hairline divider.
+────────────────────────────────────────────────────────────────────── */
+
+.metric-row {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 8px 16px;
+  box-sizing: border-box;
+  position: relative;
+  background: transparent;
+  transition: background-color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.metric-row:active {
+  /* Q3 — light tint on tap so it doesn't feel dead */
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.metric-row-light:active {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* When in edit mode, dnd-kit takes the gesture — disable tap feedback */
+.metric-row-edit:active {
+  background-color: transparent;
+}
+
+/* Hairline divider between rows (iOS Settings inset) */
+.metric-row-divider::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  bottom: 0;
+  height: 0.5px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.metric-row-light.metric-row-divider::after {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* ── Drag handle (edit mode) ────────────────────────── */
+.metric-row-handle {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -8px; /* extend the tap target into the row's left padding */
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.metric-row-handle:active {
+  cursor: grabbing;
+}
+
+.metric-row-handle-icon {
+  display: block;
+}
+
+/* ── Label zone (left) ──────────────────────────────── */
+.metric-row-label-zone {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.metric-row-label {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: #FFFFFF;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-row-light .metric-row-label {
+  color: #000000;
+}
+
+.metric-row-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #8E8E93;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Value zone (right) ─────────────────────────────── */
+.metric-row-value-zone {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  transition: opacity 150ms ease;
+  position: relative;
+}
+
+.metric-row-value-zone-dim {
+  opacity: 0.4;
+}
+
+.metric-row-value {
+  font-size: 17px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: -0.2px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-row-light .metric-row-value {
+  color: #000000;
+}
+
+.metric-row-value-na {
+  color: #8E8E93;
+  font-size: 15px;
+}
+
+.metric-row-change {
+  font-size: 13px;
+  font-weight: 500;
+  color: #8E8E93;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.metric-row-change-na {
+  font-weight: 400;
+  font-size: 11px;
+}
+
+/* ── Delete affordance (custom tickers only) ─────────── */
+.metric-row-delete {
+  position: absolute;
+  top: 50%;
+  right: -28px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.metric-row-edit.metric-row-edit {
+  /* Room on the right when edit mode is active so the delete button
+     doesn't visually overflow the container radius. */
+  padding-right: 44px;
+}
+
+.metric-row-delete:active {
+  opacity: 0.6;
+  transform: translateY(-50%) scale(0.92);
+}
+
+/* ── Inline delete confirm ──────────────────────────── */
+.metric-row-confirm {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metric-row-confirm-cancel,
+.metric-row-confirm-delete {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.metric-row-confirm-cancel.is-dark {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.metric-row-confirm-cancel.is-light {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #3C3C43;
+}
+
+.metric-row-confirm-delete {
+  background: #FF3B30;
+  color: #FFFFFF;
+}
+
+.metric-row-confirm-cancel:active,
+.metric-row-confirm-delete:active {
+  opacity: 0.8;
+  transform: scale(0.96);
+}
