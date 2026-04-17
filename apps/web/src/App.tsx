@@ -12,9 +12,11 @@ import { usePreferencesSync } from './hooks/usePreferencesSync';
 import { useAlerts } from './hooks/useAlerts';
 import { useWebhook } from './hooks/useWebhook';
 import { CardGrid } from './components/CardGrid';
+import { MobileMetricList } from './components/MobileMetricList';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
 import { AddTickerInput } from './components/AddTickerInput';
+import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
@@ -70,6 +72,14 @@ function MarketIndicators() {
   usePreferencesSync();
   const { order, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const isMobile = useIsMobile();
+  const isNarrow = useIsNarrow();
+  const [editMode, setEditMode] = useState(false);
+
+  // Exiting mobile viewport should always leave edit mode; desktop uses native drag.
+  useEffect(() => {
+    if (!isMobile && editMode) setEditMode(false);
+  }, [isMobile, editMode]);
 
   const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
   const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
@@ -108,13 +118,14 @@ function MarketIndicators() {
   const activeAlertCount = alerts.filter(a => a.enabled).length;
 
   return (
-    <div className={`app-container ${isDark ? 'app-dark' : 'app-light'}`}>
+    <div className={`app-container ${isMobile ? 'app-container-mobile' : ''} ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
         <div className="top-bar">
           <AddTickerInput
             tickerCount={tickers.length}
             isDark={isDark}
             onAdd={addTicker}
+            collapsible={isNarrow}
           />
           <IconBar
             isDark={isDark}
@@ -125,6 +136,34 @@ function MarketIndicators() {
             theme={theme}
             onThemeSelect={setTheme}
           />
+          {isMobile && (
+            editMode ? (
+              <button
+                type="button"
+                className="edit-toggle edit-toggle-done"
+                onClick={() => setEditMode(false)}
+                aria-label="Finish reordering"
+              >
+                Done
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={`icon-btn edit-toggle ${isDark ? 'icon-btn-dark' : 'icon-btn-light'}`}
+                onClick={() => setEditMode(true)}
+                aria-label="Edit order"
+                aria-pressed={editMode}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke={isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.55)'}
+                  strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
+                  aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                </svg>
+              </button>
+            )
+          )}
         </div>
         {alertsOpen && (
           <AlertsPopup
@@ -144,30 +183,54 @@ function MarketIndicators() {
             onDismissMigration={dismissAlertsMigration}
           />
         )}
-        <CardGrid
-          order={order}
-          onReorder={reorder}
-          onRemoveTicker={removeTicker}
-          isDark={isDark}
-          fearGreedData={fearGreedData}
-          fgLastUpdate={fgDisplayUpdate}
-          fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
-          fgIsRefreshing={fgFetching}
-          vixData={vixData}
-          vixAvailable={vixAvailable}
-          vixLastUpdate={vixDisplayUpdate}
-          vixIsLoading={vixLoading && !wsVix && !httpVix}
-          vixIsRefreshing={vixFetching}
-          btcData={btcData}
-          btcLastUpdate={btcDisplayUpdate}
-          btcIsLoading={btcLoading && !wsBtc && !httpBtc}
-          btcIsRefreshing={btcFetching}
-          spxData={spxData}
-          spxAvailable={spxAvailable}
-          spxLastUpdate={spxDisplayUpdate}
-          spxIsLoading={spxLoading && !wsSpx && !httpSpx}
-          spxIsRefreshing={spxFetching}
-        />
+        {isMobile ? (
+          <MobileMetricList
+            order={order}
+            onReorder={reorder}
+            onRemoveTicker={removeTicker}
+            isDark={isDark}
+            editMode={editMode}
+            fearGreedData={fearGreedData}
+            fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
+            fgIsRefreshing={fgFetching}
+            vixData={vixData}
+            vixAvailable={vixAvailable}
+            vixIsLoading={vixLoading && !wsVix && !httpVix}
+            vixIsRefreshing={vixFetching}
+            btcData={btcData}
+            btcIsLoading={btcLoading && !wsBtc && !httpBtc}
+            btcIsRefreshing={btcFetching}
+            spxData={spxData}
+            spxAvailable={spxAvailable}
+            spxIsLoading={spxLoading && !wsSpx && !httpSpx}
+            spxIsRefreshing={spxFetching}
+          />
+        ) : (
+          <CardGrid
+            order={order}
+            onReorder={reorder}
+            onRemoveTicker={removeTicker}
+            isDark={isDark}
+            fearGreedData={fearGreedData}
+            fgLastUpdate={fgDisplayUpdate}
+            fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
+            fgIsRefreshing={fgFetching}
+            vixData={vixData}
+            vixAvailable={vixAvailable}
+            vixLastUpdate={vixDisplayUpdate}
+            vixIsLoading={vixLoading && !wsVix && !httpVix}
+            vixIsRefreshing={vixFetching}
+            btcData={btcData}
+            btcLastUpdate={btcDisplayUpdate}
+            btcIsLoading={btcLoading && !wsBtc && !httpBtc}
+            btcIsRefreshing={btcFetching}
+            spxData={spxData}
+            spxAvailable={spxAvailable}
+            spxLastUpdate={spxDisplayUpdate}
+            spxIsLoading={spxLoading && !wsSpx && !httpSpx}
+            spxIsRefreshing={spxFetching}
+          />
+        )}
       </div>
     </div>
   );

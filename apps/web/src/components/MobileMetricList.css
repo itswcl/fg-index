@@ -1,0 +1,30 @@
+/* ── Mobile metric list container ──────────────────────────────────────
+   Single rounded card (Q1 decision). Rows live inside as <li>; dividers
+   are painted by each row's ::after pseudo, so this element only owns the
+   outer shell, shadow, and border.
+────────────────────────────────────────────────────────────────────── */
+
+.metric-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-radius: 20px;
+  border-width: 1.5px;
+  border-style: solid;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.metric-list-dark {
+  background: rgba(28, 28, 30, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.metric-list-light {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
