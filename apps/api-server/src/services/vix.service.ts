@@ -27,6 +27,7 @@ async function scrapeGoogleFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUp
       change,
       changePercent,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.GOOGLE_FINANCE_VIX_URL,
     };
   } catch (error) {
     return null;
@@ -51,10 +52,11 @@ async function scrapeYahooFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpd
         const price = parseFloat(spanMatch[1]);
         return {
             price,
-            previousClose: price, 
+            previousClose: price,
             change: 0,
             changePercent: 0,
             fetchedAt: new Date().toISOString(),
+            sourceUrl: env.YAHOO_FINANCE_VIX_URL,
         }
     }
 
@@ -65,6 +67,7 @@ async function scrapeYahooFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpd
       change: 0,
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.YAHOO_FINANCE_VIX_URL,
     };
   } catch (error) {
     return null;

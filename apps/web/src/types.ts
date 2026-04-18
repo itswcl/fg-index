@@ -8,6 +8,8 @@ export interface FearGreed {
   oneMonthAgo: number;
   oneYearAgo: number;
   updatedAt: string;
+  /** Public URL of the source page (CNN Fear & Greed). */
+  sourceUrl?: string;
 }
 
 export interface Vix {
@@ -16,6 +18,8 @@ export interface Vix {
   change: number;
   changePercent: number;
   fetchedAt: string;
+  /** Public URL of the source page the price was scraped from. */
+  sourceUrl?: string;
 }
 
 export interface Btc {
@@ -23,6 +27,8 @@ export interface Btc {
   change: number;
   changePercent: number;
   fetchedAt: string;
+  /** Public URL of the source page the price was scraped from. */
+  sourceUrl?: string;
 }
 
 export interface Spx {
@@ -31,6 +37,8 @@ export interface Spx {
   change: number;
   changePercent: number;
   fetchedAt: string;
+  /** Public URL of the source page the price was scraped from. */
+  sourceUrl?: string;
 }
 
 export interface TickerQuote {
