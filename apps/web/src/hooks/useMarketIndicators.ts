@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FearGreed, Vix, Btc, Spx } from '../types';
-import type { Alert, AlertTriggeredMessage, WebhookConfig } from '../types/alerts';
+import type { Alert, AlertTriggeredMessage } from '../types/alerts';
 import { WS_URL } from '../constants';
 import { buildWsUrl } from '../lib/authFetch';
 
@@ -28,7 +28,6 @@ interface UseMarketIndicatorsReturn {
 interface UseMarketIndicatorsOptions {
   alerts?: Alert[];
   onAlertTriggered?: (msg: AlertTriggeredMessage) => void;
-  webhook?: WebhookConfig | null;
 }
 
 interface MarketPrices {
@@ -110,7 +109,7 @@ function evaluateAlertsLocally(
 export function useMarketIndicators(
   options: UseMarketIndicatorsOptions = {},
 ): UseMarketIndicatorsReturn {
-  const { alerts, onAlertTriggered, webhook } = options;
+  const { alerts, onAlertTriggered } = options;
 
   const [fearGreed, setFearGreed] = useState<FearGreed | null>(null);
   const [vix, setVix] = useState<Vix | null>(null);
@@ -131,10 +130,9 @@ export function useMarketIndicators(
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(3000);
-  // Keep latest callback/alerts/webhook in refs so the stable `connect` closure can access them
+  // Keep latest callback/alerts in refs so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
   const alertsRef = useRef(alerts);
-  const webhookRef = useRef(webhook);
   const latestFearGreedScoreRef = useRef<number | null>(null);
   const latestVixPriceRef = useRef<number | null>(null);
   const latestBtcPriceRef = useRef<number | null>(null);
@@ -150,14 +148,6 @@ export function useMarketIndicators(
       wsRef.current.send(JSON.stringify({ type: 'set_alerts', alerts: alerts ?? [] }));
     }
   }, [alerts]);
-
-  useEffect(() => {
-    webhookRef.current = webhook;
-    // Send updated config immediately if WS is already open
-    if (wsRef.current?.readyState === WebSocket.OPEN && webhook) {
-      wsRef.current.send(JSON.stringify({ type: 'set_webhook', webhook }));
-    }
-  }, [webhook]);
 
   const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -175,11 +165,9 @@ export function useMarketIndicators(
         clearTimeout(disconnectTimerRef.current);
         disconnectTimerRef.current = null;
       }
-      // Sync webhook config to backend on connect
-      if (webhookRef.current) {
-        ws.send(JSON.stringify({ type: 'set_webhook', webhook: webhookRef.current }));
-      }
-      // Sync alerts so server can fire webhooks server-side
+      // Sync alerts so the server can fire webhooks against the user's
+      // server-side webhook list (BE now reads from its own DB — FE no
+      // longer pushes webhook config over the socket).
       if (alertsRef.current?.length) {
         ws.send(JSON.stringify({ type: 'set_alerts', alerts: alertsRef.current }));
       }

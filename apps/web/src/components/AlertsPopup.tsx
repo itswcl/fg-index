@@ -10,9 +10,6 @@ interface AlertsPopupProps {
   onUpdate: Parameters<typeof AlertsPanel>[0]['onUpdate'];
   onDelete: Parameters<typeof AlertsPanel>[0]['onDelete'];
   onToggle: Parameters<typeof AlertsPanel>[0]['onToggle'];
-  webhook: Parameters<typeof AlertsPanel>[0]['webhook'];
-  onSaveWebhook: Parameters<typeof AlertsPanel>[0]['onSaveWebhook'];
-  onRemoveWebhook: Parameters<typeof AlertsPanel>[0]['onRemoveWebhook'];
   onClose: () => void;
   isAnonymous: boolean;
   migrationCandidate: Alert[] | null;
@@ -27,9 +24,6 @@ export function AlertsPopup({
   onUpdate,
   onDelete,
   onToggle,
-  webhook,
-  onSaveWebhook,
-  onRemoveWebhook,
   onClose,
   isAnonymous,
   migrationCandidate,
@@ -80,7 +74,7 @@ export function AlertsPopup({
             Sign in to use alerts
           </div>
           <div style={{ fontSize: 11, color: '#8E8E93', lineHeight: 1.5, maxWidth: 260 }}>
-            Your alerts and webhook sync across devices once you sign in.
+            Your alerts and webhooks sync across devices once you sign in.
           </div>
           <button
             type="button"
@@ -116,9 +110,6 @@ export function AlertsPopup({
         onUpdate={onUpdate}
         onDelete={onDelete}
         onToggle={onToggle}
-        webhook={webhook}
-        onSaveWebhook={onSaveWebhook}
-        onRemoveWebhook={onRemoveWebhook}
         isDark={isDark}
         inPopup
         onClose={onClose}
