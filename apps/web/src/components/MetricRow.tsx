@@ -31,6 +31,8 @@ export interface MetricRowData {
   isLoading?: boolean;
   /** Show "N/A — Market Closed" style state (VIX / SPX outside hours). */
   isNa?: boolean;
+  /** When set (and not in edit mode), row becomes a link that opens this URL in a new tab. */
+  sourceUrl?: string;
 }
 
 interface MetricRowProps extends MetricRowData {
@@ -77,12 +79,21 @@ export function MetricRow(props: MetricRowProps) {
     changeMode = 'standard',
     isLoading,
     isNa,
+    sourceUrl,
     isDark,
     editMode,
     isCustom,
     onRemove,
     showDivider,
   } = props;
+
+  // Row is clickable only when we have a URL, we're not in edit mode, and the
+  // ticker actually resolved (skip N/A / loading so a stray tap doesn't open
+  // an empty tab).
+  const isLinkable = !editMode && !isLoading && !isNa && !!sourceUrl;
+  const handleActivate = () => {
+    if (sourceUrl) window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+  };
 
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -121,12 +132,28 @@ export function MetricRow(props: MetricRowProps) {
     isDark ? 'metric-row-dark' : 'metric-row-light',
     editMode ? 'metric-row-edit' : '',
     showDivider ? 'metric-row-divider' : '',
+    isLinkable ? 'metric-row-linkable' : '',
   ]
     .filter(Boolean)
     .join(' ');
 
+  const linkProps = isLinkable
+    ? {
+        role: 'link' as const,
+        tabIndex: 0,
+        onClick: handleActivate,
+        onKeyDown: (e: React.KeyboardEvent<HTMLLIElement>) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleActivate();
+          }
+        },
+        'aria-label': `${label}${subLabel ? ` (${subLabel})` : ''} — open source`,
+      }
+    : undefined;
+
   return (
-    <li ref={setNodeRef} style={style} className={rowClasses}>
+    <li ref={setNodeRef} style={style} className={rowClasses} {...linkProps}>
       {editMode && (
         <button
           type="button"
