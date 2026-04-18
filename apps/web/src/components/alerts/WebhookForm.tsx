@@ -1,49 +1,91 @@
 import { useState } from 'react';
-import type { WebhookConfig, WebhookType } from '../../types/alerts';
 import { FORM_TOKENS } from './formTokens';
-import { API_BASE_URL } from '../../constants';
-import { authFetch } from '../../lib/authFetch';
+import type {
+  CreateWebhookInput,
+  Webhook,
+  WebhookType,
+} from '../../types/webhooks';
 
 interface WebhookFormProps {
-  webhook: WebhookConfig | null;
-  onSave: (cfg: WebhookConfig) => void;
-  onRemove: () => void;
+  /** When provided, the form operates in edit mode with these fields prefilled. */
+  initial?: Webhook;
+  onSubmit: (input: CreateWebhookInput) => void | Promise<void>;
+  onCancel: () => void;
   isDark: boolean;
+  /** Disable the submit button while the parent's mutation is running. */
+  isSubmitting?: boolean;
+  /** If set, renders a top-level error banner (e.g. from a server 400/409). */
+  serverError?: string | null;
 }
 
 const PLATFORMS: { type: WebhookType; label: string }[] = [
   { type: 'discord', label: 'Discord' },
   { type: 'slack', label: 'Slack' },
   { type: 'telegram', label: 'Telegram' },
+  { type: 'generic', label: 'Generic' },
 ];
 
-function validateConfig(cfg: Partial<WebhookConfig> & { type: WebhookType }): string | null {
-  if (cfg.type === 'discord' || cfg.type === 'slack') {
-    if (!cfg.url?.startsWith('https://')) {
-      return 'Webhook URL must start with https://';
+function validate(input: CreateWebhookInput): string | null {
+  if (!input.name.trim()) return 'Name is required';
+  if (input.type === 'telegram') {
+    if (!input.botToken?.trim()) return 'Bot Token is required';
+    if (!input.chatId?.trim()) return 'Chat ID is required';
+  } else {
+    if (!input.url?.trim()) return 'Webhook URL is required';
+    if (!/^https?:\/\//i.test(input.url)) {
+      return 'Webhook URL must start with http(s)://';
     }
-  } else if (cfg.type === 'telegram') {
-    if (!cfg.botToken?.trim()) return 'Bot Token is required';
-    if (!cfg.chatId?.trim()) return 'Chat ID is required';
   }
   return null;
 }
 
-export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormProps) {
-  const [selectedType, setSelectedType] = useState<WebhookType>(webhook?.type ?? 'discord');
-  const [url, setUrl] = useState(webhook?.type !== 'telegram' ? (webhook?.url ?? '') : '');
-  const [botToken, setBotToken] = useState(webhook?.botToken ?? '');
-  const [chatId, setChatId] = useState(webhook?.chatId ?? '');
-  const [error, setError] = useState<string | null>(null);
+function placeholderFor(type: WebhookType): string {
+  switch (type) {
+    case 'discord':
+      return 'https://discord.com/api/webhooks/…';
+    case 'slack':
+      return 'https://hooks.slack.com/services/…';
+    case 'generic':
+      return 'https://example.com/hooks/fg-index';
+    default:
+      return '';
+  }
+}
 
-  type TestState = 'idle' | 'loading' | 'success' | 'error';
-  const [testState, setTestState] = useState<TestState>('idle');
-  const [testError, setTestError] = useState('');
+function hintFor(type: WebhookType): string {
+  switch (type) {
+    case 'discord':
+      return 'ℹ  Server Settings → Integrations → Webhooks';
+    case 'slack':
+      return 'ℹ  api.slack.com → Your App → Incoming Webhooks';
+    case 'telegram':
+      return 'ℹ  Get token from @BotFather, Chat ID from @userinfobot. Group chat IDs start with -100.';
+    case 'generic':
+      return 'ℹ  Any HTTPS endpoint that accepts JSON `{ alertName, message }`.';
+  }
+}
+
+export function WebhookForm({
+  initial,
+  onSubmit,
+  onCancel,
+  isDark,
+  isSubmitting = false,
+  serverError = null,
+}: WebhookFormProps) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [type, setType] = useState<WebhookType>(initial?.type ?? 'discord');
+  const [url, setUrl] = useState(initial?.url ?? '');
+  const [botToken, setBotToken] = useState(initial?.botToken ?? '');
+  const [chatId, setChatId] = useState(initial?.chatId ?? '');
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
   const textColor = isDark ? '#FFFFFF' : '#000000';
   const subTextColor = '#8E8E93';
   const accentColor = '#007AFF';
+  const dangerColor = '#FF3B30';
   const inputBg = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.04)';
   const labelStyle = {
     fontSize: FORM_TOKENS.labelFontSize,
@@ -73,108 +115,83 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
     marginTop: 5,
   };
 
-  const buildCurrentConfig = (): WebhookConfig | null => {
-    if (selectedType === 'discord' || selectedType === 'slack') {
-      if (!url.trim()) return null;
-      return { type: selectedType, url: url.trim() };
-    }
-    if (selectedType === 'telegram') {
-      if (!botToken.trim() || !chatId.trim()) return null;
-      return { type: 'telegram', botToken: botToken.trim(), chatId: chatId.trim() };
-    }
-    return null;
-  };
-
-  const handleTest = async () => {
-    const config = buildCurrentConfig();
-    if (!config) return;
-
-    setTestState('loading');
-    setTestError('');
-    try {
-      const res = await authFetch(`${API_BASE_URL}/api/webhooks/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhook: config }),
-      });
-      const data = await res.json() as { ok: boolean; error?: string };
-      if (data.ok) {
-        setTestState('success');
-        setTimeout(() => setTestState('idle'), 3000);
-      } else {
-        setTestState('error');
-        setTestError(data.error ?? 'Unknown error');
-        setTimeout(() => { setTestState('idle'); setTestError(''); }, 5000);
-      }
-    } catch {
-      setTestState('error');
-      setTestError('Could not reach server');
-      setTimeout(() => { setTestState('idle'); setTestError(''); }, 5000);
+  const handleTypeChange = (next: WebhookType) => {
+    setType(next);
+    setLocalError(null);
+    // Reset the type-specific fields to avoid submitting leftover values.
+    if (next === 'telegram') {
+      setUrl('');
+    } else {
+      setBotToken('');
+      setChatId('');
     }
   };
 
-  const handlePlatformChange = (type: WebhookType) => {
-    setSelectedType(type);
-    setError(null);
-    // Reset fields when switching platform
-    setUrl('');
-    setBotToken('');
-    setChatId('');
+  const buildInput = (): CreateWebhookInput => {
+    if (type === 'telegram') {
+      return {
+        name: name.trim(),
+        type,
+        botToken: botToken.trim(),
+        chatId: chatId.trim(),
+        enabled,
+      };
+    }
+    return {
+      name: name.trim(),
+      type,
+      url: url.trim(),
+      enabled,
+    };
   };
 
-  const handleSave = () => {
-    const cfg: WebhookConfig =
-      selectedType === 'telegram'
-        ? { type: selectedType, botToken: botToken.trim(), chatId: chatId.trim() }
-        : { type: selectedType, url: url.trim() };
-
-    const validationError = validateConfig(cfg);
-    if (validationError) {
-      setError(validationError);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const input = buildInput();
+    const err = validate(input);
+    if (err) {
+      setLocalError(err);
       return;
     }
-
-    setError(null);
-    onSave(cfg);
+    setLocalError(null);
+    await onSubmit(input);
   };
 
-  const isConfigured = webhook !== null;
+  const isEdit = !!initial;
+  const combinedError = localError ?? serverError;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {/* Configured badge */}
-      {isConfigured && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#34C759',
-              background: isDark ? 'rgba(52,199,89,0.12)' : 'rgba(52,199,89,0.1)',
-              border: '1px solid rgba(52,199,89,0.3)',
-              borderRadius: 6,
-              padding: '3px 8px',
-            }}
-          >
-            <span>✓</span> Configured ({webhook.type})
-          </span>
-        </div>
-      )}
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* Name */}
+      <div>
+        <label style={labelStyle} htmlFor="webhook-name">
+          Name
+        </label>
+        <input
+          id="webhook-name"
+          type="text"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            if (localError) setLocalError(null);
+          }}
+          placeholder="e.g. My Discord server"
+          style={inputStyle}
+          maxLength={60}
+        />
+      </div>
 
       {/* Platform selector */}
       <div>
         <span style={labelStyle}>Platform</span>
-        <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-          {PLATFORMS.map(({ type, label }) => {
-            const active = selectedType === type;
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {PLATFORMS.map(({ type: t, label }) => {
+            const active = type === t;
             return (
               <button
-                key={type}
+                key={t}
                 type="button"
-                onClick={() => handlePlatformChange(type)}
+                onClick={() => handleTypeChange(t)}
                 style={{
                   fontSize: 10,
                   fontWeight: 700,
@@ -195,68 +212,126 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
         </div>
       </div>
 
-      {/* Discord / Slack: URL only */}
-      {(selectedType === 'discord' || selectedType === 'slack') && (
+      {/* URL for discord/slack/generic */}
+      {type !== 'telegram' && (
         <div>
-          <label style={labelStyle}>Webhook URL</label>
+          <label style={labelStyle} htmlFor="webhook-url">
+            Webhook URL
+          </label>
           <input
+            id="webhook-url"
             type="url"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={
-              selectedType === 'discord'
-                ? 'https://discord.com/api/webhooks/…'
-                : 'https://hooks.slack.com/services/…'
-            }
+            onChange={(e) => {
+              setUrl(e.target.value);
+              if (localError) setLocalError(null);
+            }}
+            placeholder={placeholderFor(type)}
             style={inputStyle}
           />
-          <p style={helpStyle}>
-            {selectedType === 'discord'
-              ? 'ℹ  Server Settings → Integrations → Webhooks'
-              : 'ℹ  api.slack.com → Your App → Incoming Webhooks'}
-          </p>
+          <p style={helpStyle}>{hintFor(type)}</p>
         </div>
       )}
 
-      {/* Telegram: bot token + chat ID */}
-      {selectedType === 'telegram' && (
+      {/* Telegram fields */}
+      {type === 'telegram' && (
         <>
           <div>
-            <label style={labelStyle}>Bot Token</label>
+            <label style={labelStyle} htmlFor="webhook-bot-token">
+              Bot Token
+            </label>
             <input
+              id="webhook-bot-token"
               type="text"
               value={botToken}
-              onChange={(e) => setBotToken(e.target.value)}
+              onChange={(e) => {
+                setBotToken(e.target.value);
+                if (localError) setLocalError(null);
+              }}
               placeholder="123456789:ABC-DEF…"
               style={inputStyle}
+              autoComplete="off"
+              spellCheck={false}
             />
           </div>
           <div>
-            <label style={labelStyle}>Chat ID</label>
+            <label style={labelStyle} htmlFor="webhook-chat-id">
+              Chat ID
+            </label>
             <input
+              id="webhook-chat-id"
               type="text"
               value={chatId}
-              onChange={(e) => setChatId(e.target.value)}
+              onChange={(e) => {
+                setChatId(e.target.value);
+                if (localError) setLocalError(null);
+              }}
               placeholder="-1001234567890"
               style={inputStyle}
+              autoComplete="off"
+              spellCheck={false}
             />
           </div>
-          <p style={helpStyle}>
-            ℹ  Get token from @BotFather, Chat ID from @userinfobot
-          </p>
+          <p style={helpStyle}>{hintFor('telegram')}</p>
         </>
       )}
 
-      {/* Validation error */}
-      {error && (
-        <p style={{ fontSize: 10, color: '#FF3B30', margin: 0 }}>{error}</p>
+      {/* Enabled checkbox */}
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+          color: textColor,
+          cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          style={{ accentColor, width: 14, height: 14 }}
+        />
+        Enabled — send alerts to this webhook
+      </label>
+
+      {/* Error banner */}
+      {combinedError && (
+        <p style={{ fontSize: 11, color: dangerColor, margin: 0 }}>{combinedError}</p>
       )}
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+        }}
+      >
         <button
           type="button"
-          onClick={handleSave}
+          onClick={onCancel}
+          disabled={isSubmitting}
+          style={{
+            fontSize: FORM_TOKENS.actionBtnFontSize,
+            fontWeight: 600,
+            color: subTextColor,
+            background: 'transparent',
+            border: `1px solid ${borderColor}`,
+            borderRadius: FORM_TOKENS.actionBtnBorderRadius,
+            padding: FORM_TOKENS.actionBtnPaddingSecondary,
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
+            fontFamily: 'inherit',
+            opacity: isSubmitting ? 0.5 : 1,
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={isSubmitting}
           style={{
             fontSize: FORM_TOKENS.actionBtnFontSize,
             fontWeight: 700,
@@ -265,66 +340,15 @@ export function WebhookForm({ webhook, onSave, onRemove, isDark }: WebhookFormPr
             border: 'none',
             borderRadius: FORM_TOKENS.actionBtnBorderRadius,
             padding: FORM_TOKENS.actionBtnPaddingPrimary,
-            cursor: 'pointer',
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
             fontFamily: 'inherit',
+            opacity: isSubmitting ? 0.5 : 1,
+            transition: 'opacity 0.15s',
           }}
         >
-          Save
+          {isSubmitting ? 'Saving…' : isEdit ? 'Save' : 'Add webhook'}
         </button>
-        {buildCurrentConfig() && (
-          <button
-            type="button"
-            onClick={handleTest}
-            disabled={testState === 'loading'}
-            style={{
-              fontSize: FORM_TOKENS.actionBtnFontSize,
-              fontWeight: 600,
-              color: accentColor,
-              background: 'transparent',
-              border: `1px solid ${accentColor}`,
-              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
-              padding: FORM_TOKENS.actionBtnPaddingSecondary,
-              cursor: testState === 'loading' ? 'default' : 'pointer',
-              fontFamily: 'inherit',
-              opacity: testState === 'loading' ? 0.6 : 1,
-              transition: 'opacity 0.15s',
-            }}
-          >
-            {testState === 'loading' ? 'Sending…' : 'Test'}
-          </button>
-        )}
-        {isConfigured && (
-          <button
-            type="button"
-            onClick={onRemove}
-            style={{
-              fontSize: FORM_TOKENS.actionBtnFontSize,
-              fontWeight: 600,
-              color: '#FF3B30',
-              background: 'transparent',
-              border: '1px solid rgba(255,59,48,0.4)',
-              borderRadius: FORM_TOKENS.actionBtnBorderRadius,
-              padding: FORM_TOKENS.actionBtnPaddingSecondary,
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
-          >
-            Remove
-          </button>
-        )}
       </div>
-
-      {/* Test feedback */}
-      {testState === 'success' && (
-        <p style={{ fontSize: 11, color: '#34C759', margin: '6px 0 0' }}>
-          ✅ Test message sent!
-        </p>
-      )}
-      {testState === 'error' && (
-        <p style={{ fontSize: 11, color: '#FF3B30', margin: '6px 0 0' }}>
-          ❌ {testError}
-        </p>
-      )}
-    </div>
+    </form>
   );
 }

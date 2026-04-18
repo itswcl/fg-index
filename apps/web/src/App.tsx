@@ -10,7 +10,6 @@ import { useUnifiedOrder } from './hooks/useUnifiedOrder';
 import { useTickerSync } from './hooks/useTickerSync';
 import { usePreferencesSync } from './hooks/usePreferencesSync';
 import { useAlerts } from './hooks/useAlerts';
-import { useWebhook } from './hooks/useWebhook';
 import { CardGrid } from './components/CardGrid';
 import { MobileMetricList } from './components/MobileMetricList';
 import { IconBar } from './components/IconBar';
@@ -34,7 +33,6 @@ function MarketIndicators() {
     acceptMigration: acceptAlertsMigration,
     dismissMigration: dismissAlertsMigration,
   } = useAlerts();
-  const { webhook, setWebhook, clearWebhook } = useWebhook();
 
   const handleAlertTriggered = useCallback(
     (msg: AlertTriggeredMessage) => {
@@ -55,7 +53,7 @@ function MarketIndicators() {
     lastVixUpdate,
     lastBtcUpdate,
     lastSpxUpdate,
-  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered, webhook });
+  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered });
 
   const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
   const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
@@ -173,9 +171,6 @@ function MarketIndicators() {
             onUpdate={updateAlert}
             onDelete={deleteAlert}
             onToggle={toggleAlert}
-            webhook={webhook}
-            onSaveWebhook={setWebhook}
-            onRemoveWebhook={clearWebhook}
             onClose={() => setAlertsOpen(false)}
             isAnonymous={alertsAnonymous}
             migrationCandidate={alertsMigrationCandidate}

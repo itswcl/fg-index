@@ -1,12 +1,3 @@
-export type WebhookType = 'discord' | 'slack' | 'telegram';
-
-export interface WebhookConfig {
-  type: WebhookType;
-  url?: string;        // discord, slack: the webhook URL
-  botToken?: string;   // telegram: bot token from @BotFather
-  chatId?: string;     // telegram: chat/channel ID
-}
-
 export interface Condition {
   metric: 'fearGreed' | 'vix' | 'btc' | 'spx';
   operator: '<' | '>' | '<=' | '>=' | '==';

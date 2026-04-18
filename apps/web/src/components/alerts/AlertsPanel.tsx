@@ -1,7 +1,8 @@
-import type { Alert, WebhookConfig } from '../../types/alerts';
+import type { Alert } from '../../types/alerts';
 import { AlertForm } from './AlertForm';
 import { AlertItem } from './AlertItem';
-import { WebhookForm } from './WebhookForm';
+import { WebhookList } from './WebhookList';
+import { useWebhooks } from '../../hooks/useWebhooks';
 import { useState } from 'react';
 
 interface AlertsPanelProps {
@@ -10,9 +11,6 @@ interface AlertsPanelProps {
   onUpdate: (id: string, updates: Partial<Alert>) => void;
   onDelete: (id: string) => void;
   onToggle: (id: string) => void;
-  webhook: WebhookConfig | null;
-  onSaveWebhook: (cfg: WebhookConfig) => void;
-  onRemoveWebhook: () => void;
   isDark: boolean;
   /** When true, strips the outer card border/background — the popup provides its own container */
   inPopup?: boolean;
@@ -24,7 +22,7 @@ type ViewState =
   | { view: 'list' }
   | { view: 'create' }
   | { view: 'edit'; alert: Alert }
-  | { view: 'webhook' };
+  | { view: 'webhooks' };
 
 export function AlertsPanel({
   alerts,
@@ -32,14 +30,14 @@ export function AlertsPanel({
   onUpdate,
   onDelete,
   onToggle,
-  webhook,
-  onSaveWebhook,
-  onRemoveWebhook,
   isDark,
   inPopup = false,
   onClose,
 }: AlertsPanelProps) {
   const [viewState, setViewState] = useState<ViewState>({ view: 'list' });
+  // Header indicator — React Query dedupes with the list view's own call.
+  const { webhooks } = useWebhooks();
+  const activeWebhookCount = webhooks.filter((w) => w.enabled).length;
 
   const borderColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)';
   const panelBg = isDark ? 'rgba(18,18,20,0.6)' : 'rgba(242,242,247,0.8)';
@@ -92,24 +90,28 @@ export function AlertsPanel({
           Alerts
         </span>
 
-        {/* Webhook button — acts as view switcher */}
+        {/* Webhooks button — acts as view switcher. Green dot ⇒ ≥1 enabled. */}
         <button
           type="button"
           onClick={() =>
-            setViewState((v) => (v.view === 'webhook' ? { view: 'list' } : { view: 'webhook' }))
+            setViewState((v) => (v.view === 'webhooks' ? { view: 'list' } : { view: 'webhooks' }))
           }
-          title={webhook ? 'Webhook configured' : 'Configure webhook notifications'}
+          title={
+            activeWebhookCount > 0
+              ? `${activeWebhookCount} webhook${activeWebhookCount === 1 ? '' : 's'} enabled`
+              : 'Configure webhook notifications'
+          }
           style={{
             fontSize: 10,
             fontWeight: 700,
-            color: viewState.view === 'webhook' ? '#FFFFFF' : subTextColor,
+            color: viewState.view === 'webhooks' ? '#FFFFFF' : subTextColor,
             background:
-              viewState.view === 'webhook'
+              viewState.view === 'webhooks'
                 ? accentColor
                 : isDark
                   ? 'rgba(255,255,255,0.07)'
                   : 'rgba(0,0,0,0.05)',
-            border: `1px solid ${viewState.view === 'webhook' ? accentColor : borderColor}`,
+            border: `1px solid ${viewState.view === 'webhooks' ? accentColor : borderColor}`,
             borderRadius: 8,
             padding: '4px 10px',
             cursor: 'pointer',
@@ -120,7 +122,7 @@ export function AlertsPanel({
             gap: 4,
           }}
         >
-          {webhook && (
+          {activeWebhookCount > 0 && (
             <span
               style={{
                 width: 6,
@@ -132,28 +134,30 @@ export function AlertsPanel({
               }}
             />
           )}
-          ⚡ Webhook
+          ⚡ Webhooks
         </button>
 
-        {/* + New button — switches to create view */}
-        <button
-          type="button"
-          onClick={() => setViewState({ view: 'create' })}
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            color: '#FFFFFF',
-            background: accentColor,
-            border: 'none',
-            borderRadius: 8,
-            padding: '4px 10px',
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            transition: 'opacity 0.15s',
-          }}
-        >
-          + New
-        </button>
+        {/* + New button — only meaningful in list view */}
+        {viewState.view === 'list' && (
+          <button
+            type="button"
+            onClick={() => setViewState({ view: 'create' })}
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#FFFFFF',
+              background: accentColor,
+              border: 'none',
+              borderRadius: 8,
+              padding: '4px 10px',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              transition: 'opacity 0.15s',
+            }}
+          >
+            + New
+          </button>
+        )}
 
         {/* × close button — only in popup */}
         {onClose && (
@@ -203,8 +207,8 @@ export function AlertsPanel({
 
       {/* ── Body — one view at a time ───────────────────────────── */}
 
-      {/* Webhook view */}
-      {viewState.view === 'webhook' && (
+      {/* Webhooks view */}
+      {viewState.view === 'webhooks' && (
         <div style={{ overflowY: 'auto', minHeight: 0 }}>
           <div
             style={{
@@ -227,18 +231,7 @@ export function AlertsPanel({
             >
               Webhook Notifications
             </span>
-            <WebhookForm
-              webhook={webhook}
-              onSave={(cfg) => {
-                onSaveWebhook(cfg);
-                setViewState({ view: 'list' });
-              }}
-              onRemove={() => {
-                onRemoveWebhook();
-                setViewState({ view: 'list' });
-              }}
-              isDark={isDark}
-            />
+            <WebhookList isDark={isDark} />
           </div>
         </div>
       )}
