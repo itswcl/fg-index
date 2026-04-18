@@ -31,6 +31,14 @@ export async function deliverWebhook(
         body: JSON.stringify({ chat_id: config.chatId, text }),
       }
     );
+  } else if (config.type === "generic") {
+    // Generic JSON POST — structured payload so downstream consumers can
+    // key off fields rather than parse the human-readable text.
+    response = await fetch(config.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alertName, message, text }),
+    });
   } else {
     throw new Error("Unsupported webhook type");
   }

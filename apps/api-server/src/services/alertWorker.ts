@@ -27,15 +27,17 @@ interface ConditionRow {
 }
 
 interface WebhookRow {
+  id: string;
   type: string;
   url: string | null;
   botToken: string | null;
   chatId: string | null;
+  enabled: boolean;
 }
 
 interface UserRow {
   id: string;
-  webhook: WebhookRow | null;
+  webhooks: WebhookRow[];
 }
 
 interface AlertRow {
@@ -66,10 +68,10 @@ function rowToSharedAlert(row: AlertRow): SharedAlert {
   };
 }
 
-function rowToWebhookConfig(row: WebhookRow | null): WebhookConfig | null {
-  if (!row) return null;
+function rowToWebhookConfig(row: WebhookRow): WebhookConfig | null {
   if (row.type === "discord" && row.url) return { type: "discord", url: row.url };
   if (row.type === "slack" && row.url) return { type: "slack", url: row.url };
+  if (row.type === "generic" && row.url) return { type: "generic", url: row.url };
   if (row.type === "telegram" && row.botToken && row.chatId) {
     return { type: "telegram", botToken: row.botToken, chatId: row.chatId };
   }
@@ -101,7 +103,11 @@ async function fetchCandidateAlerts(metric: MetricKey): Promise<AlertRow[]> {
     },
     include: {
       conditions: true,
-      user: { include: { webhook: true } },
+      user: {
+        include: {
+          webhooks: { where: { enabled: true } },
+        },
+      },
     },
   });
   return rows as unknown as AlertRow[];
@@ -187,21 +193,43 @@ export async function evaluateForMetric(
         );
       }
 
-      // 2) Deliver webhook if the owner has one configured.
-      const webhook = rowToWebhookConfig(row.user.webhook);
-      if (webhook) {
-        void deliverWebhook(webhook, msg.alertName, msg.message).catch(
-          (err: unknown) => {
-            process.stderr.write(
-              JSON.stringify({
-                event: "alert_worker_webhook_error",
-                alertId: row.id,
-                error: err instanceof Error ? err.message : String(err),
-              }) + "\n"
-            );
-          }
+      // 2) Fan-out delivery: fire every enabled webhook the user owns.
+      // Use Promise.allSettled so one bad endpoint doesn't suppress the
+      // others. Per-webhook success/failure is logged individually so an
+      // operator can tell *which* destination dropped a notification.
+      const webhooks = row.user.webhooks ?? [];
+      const deliveries = webhooks
+        .map((w) => ({ webhookId: w.id, cfg: rowToWebhookConfig(w) }))
+        .filter(
+          (
+            d
+          ): d is { webhookId: string; cfg: NonNullable<typeof d.cfg> } =>
+            d.cfg !== null
         );
-      }
+      void Promise.allSettled(
+        deliveries.map(({ webhookId, cfg }) =>
+          deliverWebhook(cfg, msg.alertName, msg.message)
+            .then(() => {
+              process.stdout.write(
+                JSON.stringify({
+                  event: "alert_worker_webhook_delivered",
+                  alertId: row.id,
+                  webhookId,
+                }) + "\n"
+              );
+            })
+            .catch((err: unknown) => {
+              process.stderr.write(
+                JSON.stringify({
+                  event: "alert_worker_webhook_error",
+                  alertId: row.id,
+                  webhookId,
+                  error: err instanceof Error ? err.message : String(err),
+                }) + "\n"
+              );
+            })
+        )
+      );
 
       // 3) Push to any live WS connections for this user.
       const sockets = getSocketsForUser(row.userId);

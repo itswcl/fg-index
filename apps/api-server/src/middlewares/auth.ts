@@ -57,7 +57,7 @@ export async function verifySupabaseJwt(token: string): Promise<JWTPayload> {
 
 // ─── User upsert ──────────────────────────────────────────────────
 // On first authenticated request, create the User row so FKs in Alert /
-// WebhookConfig are satisfied. Keyed by Supabase `sub` (UUID).
+// Webhook are satisfied. Keyed by Supabase `sub` (UUID).
 async function upsertUser(userId: string, email: string): Promise<void> {
   await prisma.user.upsert({
     where: { id: userId },

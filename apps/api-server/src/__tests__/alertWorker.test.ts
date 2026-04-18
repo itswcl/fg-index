@@ -18,6 +18,15 @@ const pushSpy = vi.fn();
 
 const USER = "u-1";
 
+interface WebhookStub {
+  id: string;
+  type: string;
+  url: string | null;
+  botToken: string | null;
+  chatId: string | null;
+  enabled: boolean;
+}
+
 // Build an AlertRow stub matching the worker's include-shape.
 function alertRow(overrides: Partial<{
   id: string;
@@ -27,7 +36,7 @@ function alertRow(overrides: Partial<{
   cooldownMinutes: number;
   lastTriggeredAt: Date | null;
   conditions: { metric: string; operator: string; value: number }[];
-  webhook: { type: string; url: string | null; botToken: string | null; chatId: string | null } | null;
+  webhooks: WebhookStub[];
 }> = {}) {
   return {
     id: overrides.id ?? "a1",
@@ -42,7 +51,7 @@ function alertRow(overrides: Partial<{
     ],
     user: {
       id: overrides.userId ?? USER,
-      webhook: overrides.webhook ?? null,
+      webhooks: overrides.webhooks ?? [],
     },
   };
 }
@@ -179,27 +188,107 @@ describe("alertWorker.evaluateForMetric", () => {
     });
   });
 
-  it("delivers to the user's webhook when configured", async () => {
+  it("delivers to the user's webhook when one is configured", async () => {
     __setFetchOverrideForTests(async () => [
       alertRow({
-        webhook: {
-          type: "discord",
-          url: "https://discord.com/api/webhooks/x/y",
-          botToken: null,
-          chatId: null,
-        },
+        webhooks: [
+          {
+            id: "wh-1",
+            type: "discord",
+            url: "https://discord.com/api/webhooks/x/y",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+        ],
       }),
     ]);
     await evaluateForMetric("vix", {
       fearGreedScore: null, vixPrice: 35, btcPrice: null, spxPrice: null,
     });
-    // deliverWebhook is fire-and-forget — await a microtask.
-    await Promise.resolve();
+    // deliverWebhook is fire-and-forget — await microtasks for the
+    // Promise.allSettled chain to settle.
+    await new Promise((r) => setImmediate(r));
     expect(deliverSpy).toHaveBeenCalledWith(
       { type: "discord", url: "https://discord.com/api/webhooks/x/y" },
       "My Alert",
       expect.any(String)
     );
+  });
+
+  it("fans out to every enabled webhook (3 destinations → 3 deliveries)", async () => {
+    __setFetchOverrideForTests(async () => [
+      alertRow({
+        webhooks: [
+          {
+            id: "wh-d",
+            type: "discord",
+            url: "https://discord.com/api/webhooks/x/y",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+          {
+            id: "wh-s",
+            type: "slack",
+            url: "https://hooks.slack.com/abc",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+          {
+            id: "wh-t",
+            type: "telegram",
+            url: null,
+            botToken: "tok",
+            chatId: "chat",
+            enabled: true,
+          },
+        ],
+      }),
+    ]);
+    await evaluateForMetric("vix", {
+      fearGreedScore: null, vixPrice: 35, btcPrice: null, spxPrice: null,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(deliverSpy).toHaveBeenCalledTimes(3);
+    const targets = deliverSpy.mock.calls.map((c) => c[0]?.type);
+    expect(targets).toEqual(
+      expect.arrayContaining(["discord", "slack", "telegram"])
+    );
+  });
+
+  it("one failing destination doesn't suppress the others (Promise.allSettled)", async () => {
+    __setFetchOverrideForTests(async () => [
+      alertRow({
+        webhooks: [
+          {
+            id: "wh-bad",
+            type: "discord",
+            url: "https://discord.com/api/webhooks/bad",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+          {
+            id: "wh-good",
+            type: "slack",
+            url: "https://hooks.slack.com/good",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+        ],
+      }),
+    ]);
+    deliverSpy.mockImplementation(async (cfg) => {
+      if (cfg.type === "discord") throw new Error("discord 500");
+    });
+    await evaluateForMetric("vix", {
+      fearGreedScore: null, vixPrice: 35, btcPrice: null, spxPrice: null,
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(deliverSpy).toHaveBeenCalledTimes(2);
   });
 
   it("pushes to live WS sockets for the alert owner", async () => {

@@ -17,7 +17,7 @@ model User {
   createdAt DateTime @default(now())
   cardOrder String[] @default([])
   alerts    Alert[]
-  webhook   WebhookConfig?
+  webhooks  Webhook[]
   tickers   UserTicker[]
 }
 
@@ -57,12 +57,18 @@ model Condition {
   value    Float
 }
 
-model WebhookConfig {
-  userId    String   @id
+model Webhook {
+  id        String   @id @default(uuid())
+  userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      String   // "discord" | "slack" | "telegram"
+  name      String   // user label, e.g. "My Discord"
+  type      String   // "discord" | "slack" | "telegram" | "generic"
   url       String?
   botToken  String?
   chatId    String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId, enabled])
 }

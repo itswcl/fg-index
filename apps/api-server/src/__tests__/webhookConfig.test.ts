@@ -9,12 +9,17 @@ import {
 import { prisma } from "../services/db.js";
 import * as delivery from "../services/webhookDelivery.js";
 
+// The legacy `/me*` controller now operates on the user's *first* (oldest)
+// row in the new N-per-user `Webhook` table. Tests stub `prisma.webhook.*`
+// directly so we exercise the alias mapping without touching the DB.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const findUniqueSpy = vi.spyOn(prisma.webhookConfig, "findUnique") as unknown as any;
+const findFirstSpy = vi.spyOn(prisma.webhook, "findFirst") as unknown as any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const upsertSpy = vi.spyOn(prisma.webhookConfig, "upsert") as unknown as any;
+const createSpy = vi.spyOn(prisma.webhook, "create") as unknown as any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const deleteManySpy = vi.spyOn(prisma.webhookConfig, "deleteMany") as unknown as any;
+const updateSpy = vi.spyOn(prisma.webhook, "update") as unknown as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const deleteManySpy = vi.spyOn(prisma.webhook, "deleteMany") as unknown as any;
 const deliverSpy = vi.spyOn(delivery, "deliverWebhook");
 
 interface MockedRes {
@@ -47,14 +52,31 @@ function mockReq(opts: { userId?: string; body?: unknown }): Request {
 
 const USER = "00000000-0000-0000-0000-000000000042";
 
+function row(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: "wh-1",
+    userId: USER,
+    name: "Default",
+    type: "discord",
+    url: null,
+    botToken: null,
+    chatId: null,
+    enabled: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
-  findUniqueSpy.mockReset();
-  upsertSpy.mockReset();
+  findFirstSpy.mockReset();
+  createSpy.mockReset();
+  updateSpy.mockReset();
   deleteManySpy.mockReset();
   deliverSpy.mockReset();
 });
 
-describe("webhookConfig — auth gate", () => {
+describe("webhookConfig (legacy alias) — auth gate", () => {
   it("getMyWebhook without userId returns 401", async () => {
     const res = mockRes();
     await getMyWebhook(mockReq({}), res);
@@ -63,22 +85,17 @@ describe("webhookConfig — auth gate", () => {
 });
 
 describe("getMyWebhook", () => {
-  it("returns null when no row exists", async () => {
-    findUniqueSpy.mockResolvedValue(null);
+  it("returns null when the user has no webhook rows", async () => {
+    findFirstSpy.mockResolvedValue(null);
     const res = mockRes();
     await getMyWebhook(mockReq({ userId: USER }), res);
     expect(res._body).toEqual({ webhook: null });
   });
 
-  it("maps a discord row into discriminated union shape", async () => {
-    findUniqueSpy.mockResolvedValue({
-      userId: USER,
-      type: "discord",
-      url: "https://discord.com/api/webhooks/x/y",
-      botToken: null,
-      chatId: null,
-      updatedAt: new Date(),
-    });
+  it("maps the first discord row into discriminated union shape", async () => {
+    findFirstSpy.mockResolvedValue(
+      row({ type: "discord", url: "https://discord.com/api/webhooks/x/y" })
+    );
     const res = mockRes();
     await getMyWebhook(mockReq({ userId: USER }), res);
     expect(res._body).toEqual({
@@ -87,18 +104,23 @@ describe("getMyWebhook", () => {
   });
 
   it("maps a telegram row correctly", async () => {
-    findUniqueSpy.mockResolvedValue({
-      userId: USER,
-      type: "telegram",
-      url: null,
-      botToken: "bot:tok",
-      chatId: "123",
-      updatedAt: new Date(),
-    });
+    findFirstSpy.mockResolvedValue(
+      row({ type: "telegram", url: null, botToken: "bot:tok", chatId: "123" })
+    );
     const res = mockRes();
     await getMyWebhook(mockReq({ userId: USER }), res);
     expect(res._body).toEqual({
       webhook: { type: "telegram", botToken: "bot:tok", chatId: "123" },
+    });
+  });
+
+  it("orders by createdAt ascending so 'first' is the oldest row", async () => {
+    findFirstSpy.mockResolvedValue(null);
+    const res = mockRes();
+    await getMyWebhook(mockReq({ userId: USER }), res);
+    expect(findFirstSpy).toHaveBeenCalledWith({
+      where: { userId: USER },
+      orderBy: { createdAt: "asc" },
     });
   });
 });
@@ -111,18 +133,15 @@ describe("upsertMyWebhook", () => {
       res
     );
     expect(res._status).toBe(400);
-    expect(upsertSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 
-  it("upserts a slack webhook with url", async () => {
-    upsertSpy.mockResolvedValue({
-      userId: USER,
-      type: "slack",
-      url: "https://hooks.slack.com/x",
-      botToken: null,
-      chatId: null,
-      updatedAt: new Date(),
-    });
+  it("creates a new row named 'Default' when none exists", async () => {
+    findFirstSpy.mockResolvedValue(null);
+    createSpy.mockResolvedValue(
+      row({ type: "slack", url: "https://hooks.slack.com/x" })
+    );
     const res = mockRes();
     await upsertMyWebhook(
       mockReq({
@@ -131,30 +150,31 @@ describe("upsertMyWebhook", () => {
       }),
       res
     );
-    expect(upsertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { userId: USER },
-        create: expect.objectContaining({
-          userId: USER,
-          type: "slack",
-          url: "https://hooks.slack.com/x",
-          botToken: null,
-          chatId: null,
-        }),
-      })
-    );
+    expect(createSpy).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: USER,
+        name: "Default",
+        enabled: true,
+        type: "slack",
+        url: "https://hooks.slack.com/x",
+        botToken: null,
+        chatId: null,
+      }),
+    });
     expect(res._body).toMatchObject({ webhook: { type: "slack" } });
   });
 
-  it("stores telegram token/chatId in the correct fields", async () => {
-    upsertSpy.mockResolvedValue({
-      userId: USER,
-      type: "telegram",
-      url: null,
-      botToken: "t",
-      chatId: "c",
-      updatedAt: new Date(),
-    });
+  it("updates the existing first row in place rather than creating a second", async () => {
+    findFirstSpy.mockResolvedValue(row({ id: "wh-existing", type: "discord" }));
+    updateSpy.mockResolvedValue(
+      row({
+        id: "wh-existing",
+        type: "telegram",
+        url: null,
+        botToken: "t",
+        chatId: "c",
+      })
+    );
     const res = mockRes();
     await upsertMyWebhook(
       mockReq({
@@ -163,22 +183,22 @@ describe("upsertMyWebhook", () => {
       }),
       res
     );
-    expect(upsertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        create: expect.objectContaining({
-          type: "telegram",
-          url: null,
-          botToken: "t",
-          chatId: "c",
-        }),
-      })
-    );
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(updateSpy).toHaveBeenCalledWith({
+      where: { id: "wh-existing" },
+      data: expect.objectContaining({
+        type: "telegram",
+        url: null,
+        botToken: "t",
+        chatId: "c",
+      }),
+    });
   });
 });
 
 describe("deleteMyWebhook", () => {
-  it("deletes the caller's row and returns 204", async () => {
-    deleteManySpy.mockResolvedValue({ count: 1 });
+  it("deletes ALL rows for the caller (legacy 'off' semantics) and returns 204", async () => {
+    deleteManySpy.mockResolvedValue({ count: 3 });
     const res = mockRes();
     await deleteMyWebhook(mockReq({ userId: USER }), res);
     expect(deleteManySpy).toHaveBeenCalledWith({ where: { userId: USER } });
@@ -189,22 +209,17 @@ describe("deleteMyWebhook", () => {
 
 describe("testMyWebhook", () => {
   it("returns 404 when no webhook is saved", async () => {
-    findUniqueSpy.mockResolvedValue(null);
+    findFirstSpy.mockResolvedValue(null);
     const res = mockRes();
     await testMyWebhook(mockReq({ userId: USER }), res);
     expect(res._status).toBe(404);
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("delivers against the saved webhook and returns ok", async () => {
-    findUniqueSpy.mockResolvedValue({
-      userId: USER,
-      type: "discord",
-      url: "https://discord.com/api/webhooks/x/y",
-      botToken: null,
-      chatId: null,
-      updatedAt: new Date(),
-    });
+  it("delivers against the first saved webhook and returns ok", async () => {
+    findFirstSpy.mockResolvedValue(
+      row({ type: "discord", url: "https://discord.com/api/webhooks/x/y" })
+    );
     deliverSpy.mockResolvedValue(undefined);
     const res = mockRes();
     await testMyWebhook(mockReq({ userId: USER }), res);
@@ -217,14 +232,9 @@ describe("testMyWebhook", () => {
   });
 
   it("returns 502 when delivery fails", async () => {
-    findUniqueSpy.mockResolvedValue({
-      userId: USER,
-      type: "slack",
-      url: "https://hooks.slack.com/x",
-      botToken: null,
-      chatId: null,
-      updatedAt: new Date(),
-    });
+    findFirstSpy.mockResolvedValue(
+      row({ type: "slack", url: "https://hooks.slack.com/x" })
+    );
     deliverSpy.mockRejectedValue(new Error("boom"));
     const res = mockRes();
     await testMyWebhook(mockReq({ userId: USER }), res);
