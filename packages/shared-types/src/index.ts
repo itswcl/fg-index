@@ -72,6 +72,11 @@ export const TickerQuoteSchema = z.object({
   change: z.number(),
   changePercent: z.number(),
   fetchedAt: z.string().datetime({ offset: true }),
+  // Public URL of the source page the price was scraped from
+  // (Google Finance or Yahoo Finance). Lets the UI link through so
+  // users can verify the quote. Optional — older cache entries or
+  // future data sources may not populate it.
+  sourceUrl: z.string().url().optional(),
 });
 
 export type TickerQuote = z.infer<typeof TickerQuoteSchema>;

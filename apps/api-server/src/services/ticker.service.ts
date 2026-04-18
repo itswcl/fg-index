@@ -73,6 +73,7 @@ async function scrapeGoogleFinance(
       change,
       changePercent,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: url,
     };
   } catch {
     return null;
@@ -107,6 +108,7 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
       change: 0,
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: url,
     };
   } catch {
     return null;

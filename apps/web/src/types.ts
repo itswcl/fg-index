@@ -41,4 +41,6 @@ export interface TickerQuote {
   change: number;
   changePercent: number;
   fetchedAt: string;
+  /** Public URL of the source page the price was scraped from. */
+  sourceUrl?: string;
 }
