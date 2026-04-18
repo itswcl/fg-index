@@ -85,6 +85,7 @@ function TickerMetricRow({
     changeMode: 'standard',
     isLoading: showLoading,
     isNa: notFound,
+    sourceUrl: data?.sourceUrl,
   };
 
   return (

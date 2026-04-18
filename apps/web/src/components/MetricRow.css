@@ -33,6 +33,17 @@
   background-color: transparent;
 }
 
+/* Linkable rows (ticker rows with sourceUrl) — hint it's tappable. */
+.metric-row-linkable {
+  cursor: pointer;
+}
+
+.metric-row-linkable:focus-visible {
+  outline: 2px solid rgba(95, 127, 255, 0.55);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
 /* Hairline divider between rows (iOS Settings inset) */
 .metric-row-divider::after {
   content: '';

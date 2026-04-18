@@ -23,12 +23,43 @@ export function TickerCard({
   onRemove,
 }: TickerCardProps) {
   const showLoading = isLoading || (isRefreshing && data === undefined);
+  const sourceUrl = data?.sourceUrl;
+
+  // Open the source page in a new tab. Guard against the click that dnd-kit
+  // fires at the end of a drag by only reacting to plain left-button clicks
+  // where no modifier is held (ctrl/meta already open in a new tab natively).
+  const openSource = sourceUrl
+    ? () => {
+        window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+      }
+    : undefined;
+
+  const linkProps = openSource
+    ? {
+        role: 'link' as const,
+        tabIndex: 0,
+        onClick: openSource,
+        onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openSource();
+          }
+        },
+        style: { cursor: 'pointer' as const },
+        'aria-label': `${ticker}${data?.name ? ` (${data.name})` : ''} — open source`,
+      }
+    : undefined;
 
   // data === null means loaded but ticker not found
   if (!isLoading && data === null) {
     return (
       <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
-        <button className="card-remove-btn" onClick={onRemove} onPointerDown={(e) => e.stopPropagation()} aria-label={`Remove ${ticker}`}>
+        <button
+          className="card-remove-btn"
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={`Remove ${ticker}`}
+        >
           <svg width="8" height="8" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -55,8 +86,13 @@ export function TickerCard({
   const fmtPrice = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
-    <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
-      <button className="card-remove-btn" onClick={onRemove} aria-label={`Remove ${ticker}`}>
+    <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
+      <button
+        className="card-remove-btn"
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        onPointerDown={(e) => e.stopPropagation()}
+        aria-label={`Remove ${ticker}`}
+      >
         <svg width="8" height="8" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
           <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
