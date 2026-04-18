@@ -29,6 +29,7 @@ async function scrapeGoogleFinance(): Promise<Btc | null> {
       change,
       changePercent,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.GOOGLE_FINANCE_BTC_URL,
     };
   } catch {
     return null;
@@ -54,6 +55,7 @@ async function scrapeYahooFinance(): Promise<Btc | null> {
       change: 0,
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.YAHOO_FINANCE_BTC_URL,
     };
   } catch {
     return null;

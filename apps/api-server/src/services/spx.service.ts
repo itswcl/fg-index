@@ -30,6 +30,7 @@ async function scrapeGoogleFinance(): Promise<Spx | null> {
       change,
       changePercent,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.GOOGLE_FINANCE_SPX_URL,
     };
   } catch {
     return null;
@@ -56,6 +57,7 @@ async function scrapeYahooFinance(): Promise<Spx | null> {
       change: 0,
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
+      sourceUrl: env.YAHOO_FINANCE_SPX_URL,
     };
   } catch {
     return null;

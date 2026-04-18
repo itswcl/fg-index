@@ -17,6 +17,9 @@ export const FearGreedSchema = z.object({
   oneMonthAgo: z.number().min(0).max(100),
   oneYearAgo: z.number().min(0).max(100),
   updatedAt: z.string().datetime({ offset: true }), // ISO 8601 from CNN
+  // Public user-facing page for the Fear & Greed index (not the
+  // internal JSON endpoint we scrape from). Lets the UI link through.
+  sourceUrl: z.string().url().optional(),
 });
 
 // ─── VIX ──────────────────────────────────────────────────────────
@@ -26,6 +29,9 @@ export const VixSchema = z.object({
   change: z.number(),
   changePercent: z.number(),
   fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
+  // Public URL of the source page the price was scraped from
+  // (Google Finance VIX:INDEXCBOE primary, Yahoo ^VIX fallback).
+  sourceUrl: z.string().url().optional(),
 });
 
 // ─── Combined response ─────────────────────────────────────────────
@@ -48,6 +54,9 @@ export const BtcSchema = z.object({
   change: z.number(),
   changePercent: z.number(),
   fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
+  // Public URL of the source page the price was scraped from
+  // (Google Finance BTC-USD primary, Yahoo BTC-USD fallback).
+  sourceUrl: z.string().url().optional(),
 });
 
 export type Btc = z.infer<typeof BtcSchema>;
@@ -59,6 +68,9 @@ export const SpxSchema = z.object({
   change: z.number(),
   changePercent: z.number(),
   fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
+  // Public URL of the source page the price was scraped from
+  // (Google Finance .INX:INDEXSP primary, Yahoo ^GSPC fallback).
+  sourceUrl: z.string().url().optional(),
 });
 
 export type Spx = z.infer<typeof SpxSchema>;

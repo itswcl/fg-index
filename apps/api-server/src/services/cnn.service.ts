@@ -53,5 +53,9 @@ export async function fetchCnnData(): Promise<Omit<FearGreed, 'isMarketOpen' | '
     oneMonthAgo: Math.round(data.previous_1_month),
     oneYearAgo: Math.round(data.previous_1_year),
     updatedAt: data.timestamp,
+    // CNN's public user-facing page. We scrape from an internal JSON
+    // endpoint (`production.dataviz.cnn.io/...`) but surface the human-
+    // readable URL so the UI can link through for verification.
+    sourceUrl: "https://www.cnn.com/markets/fear-and-greed",
   };
 }
