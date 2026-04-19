@@ -145,7 +145,7 @@ describe("addTicker", () => {
   });
 
   it("rejects when user already has the max", async () => {
-    countSpy.mockResolvedValue(8);
+    countSpy.mockResolvedValue(32);
     const res = mockRes();
     await addTicker(mockReq({ userId: USER, body: { symbol: "AAPL" } }), res);
     expect(res._status).toBe(400);
@@ -217,7 +217,7 @@ describe("bulkReplaceTickers", () => {
   });
 
   it("rejects payload exceeding the cap", async () => {
-    const symbols = Array.from({ length: 9 }, (_, i) => `T${i}`);
+    const symbols = Array.from({ length: 33 }, (_, i) => `T${i}`);
     const res = mockRes();
     await bulkReplaceTickers(mockReq({ userId: USER, body: { symbols } }), res);
     expect(res._status).toBe(400);

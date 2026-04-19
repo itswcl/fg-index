@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
 
-const MAX_TICKERS_PER_USER = 8;
+const MAX_TICKERS_PER_USER = 32;
 
 // Symbol format: 1–10 chars, A–Z/0–9/.-_, normalized to upper-case.
 const SymbolSchema = z
