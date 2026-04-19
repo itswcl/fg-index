@@ -42,25 +42,6 @@ export const TickerQuoteSchema = z.object({
 
 export type TickerQuote = z.infer<typeof TickerQuoteSchema>;
 
-// ─── Deprecated per-metric aliases ────────────────────────────────
-// VIX / BTC / SPX used to have distinct schemas; they are now just
-// `TickerQuote` with identifying `ticker` + `name` fields baked in.
-// These aliases keep the web + macos-app compiling through the FE
-// migration PR — remove them once those apps switch to `TickerQuote`.
-
-/** @deprecated Use TickerQuote. */
-export type Vix = TickerQuote;
-/** @deprecated Use TickerQuote. */
-export type Btc = TickerQuote;
-/** @deprecated Use TickerQuote. */
-export type Spx = TickerQuote;
-/** @deprecated Use TickerQuoteSchema. */
-export const VixSchema = TickerQuoteSchema;
-/** @deprecated Use TickerQuoteSchema. */
-export const BtcSchema = TickerQuoteSchema;
-/** @deprecated Use TickerQuoteSchema. */
-export const SpxSchema = TickerQuoteSchema;
-
 // ─── Combined response ─────────────────────────────────────────────
 export const MarketIndicatorsSchema = z.object({
   fearGreed: FearGreedSchema,

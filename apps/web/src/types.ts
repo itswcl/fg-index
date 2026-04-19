@@ -12,35 +12,6 @@ export interface FearGreed {
   sourceUrl?: string;
 }
 
-export interface Vix {
-  price: number;
-  previousClose: number;
-  change: number;
-  changePercent: number;
-  fetchedAt: string;
-  /** Public URL of the source page the price was scraped from. */
-  sourceUrl?: string;
-}
-
-export interface Btc {
-  price: number;
-  change: number;
-  changePercent: number;
-  fetchedAt: string;
-  /** Public URL of the source page the price was scraped from. */
-  sourceUrl?: string;
-}
-
-export interface Spx {
-  price: number;
-  previousClose: number;
-  change: number;
-  changePercent: number;
-  fetchedAt: string;
-  /** Public URL of the source page the price was scraped from. */
-  sourceUrl?: string;
-}
-
 export interface TickerQuote {
   ticker: string;
   name?: string;

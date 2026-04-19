@@ -1,9 +1,9 @@
 import React from 'react';
 import { render } from '@testing-library/react-native';
 import { VixCard } from '../components/VixCard';
-import { Vix } from '@shared/types';
+import { TickerQuote } from '@shared/types';
 
-const mockVix: Vix = {
+const mockVix: TickerQuote = {
   ticker: 'VIX',
   name: 'CBOE Volatility Index',
   price: 19.5,

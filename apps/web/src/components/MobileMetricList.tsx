@@ -11,7 +11,7 @@ import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-ki
 import { useTicker } from '../hooks/useTicker';
 import { DEFAULT_CARD_IDS } from '../hooks/useUnifiedOrder';
 import { FEAR_GREED_COLORS } from '../constants';
-import type { FearGreed, FearGreedClassification, Vix, Btc, Spx } from '../types';
+import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
 import { MetricRow, type MetricRowData } from './MetricRow';
 import './MobileMetricList.css';
 
@@ -25,14 +25,14 @@ interface MobileMetricListProps {
   fearGreedData: FearGreed | null;
   fgIsLoading: boolean;
   fgIsRefreshing: boolean;
-  vixData: Vix | null;
+  vixData: TickerQuote | null;
   vixAvailable: boolean;
   vixIsLoading: boolean;
   vixIsRefreshing: boolean;
-  btcData: Btc | null;
+  btcData: TickerQuote | null;
   btcIsLoading: boolean;
   btcIsRefreshing: boolean;
-  spxData: Spx | null;
+  spxData: TickerQuote | null;
   spxAvailable: boolean;
   spxIsLoading: boolean;
   spxIsRefreshing: boolean;

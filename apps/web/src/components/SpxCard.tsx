@@ -1,10 +1,10 @@
-import type { Spx } from '../types';
+import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
 interface SpxCardProps {
-  data: Spx | null;
+  data: TickerQuote | null;
   spxAvailable: boolean;
   lastUpdate: Date | null;
   isLoading?: boolean;

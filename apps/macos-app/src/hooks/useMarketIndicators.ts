@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { FearGreed, Vix } from '@shared/types';
+import { FearGreed, TickerQuote } from '@shared/types';
 import { WS_URL } from '../constants';
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
 interface WsMessage {
   type: 'FEAR_GREED_UPDATE' | 'VIX_UPDATE';
-  payload: FearGreed | Vix | null;
+  payload: FearGreed | TickerQuote | null;
 }
 
 interface UseMarketIndicatorsReturn {
   fearGreed: FearGreed | null;
-  vix: Vix | null;
+  vix: TickerQuote | null;
   vixAvailable: boolean;
   wsStatus: WsStatus;
   lastFearGreedUpdate: Date | null;
@@ -24,7 +24,7 @@ interface UseMarketIndicatorsReturn {
  */
 export function useMarketIndicators(): UseMarketIndicatorsReturn {
   const [fearGreed, setFearGreed] = useState<FearGreed | null>(null);
-  const [vix, setVix] = useState<Vix | null>(null);
+  const [vix, setVix] = useState<TickerQuote | null>(null);
   const [vixAvailable, setVixAvailable] = useState(true);
   const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
   const [lastFearGreedUpdate, setLastFearGreedUpdate] = useState<Date | null>(null);
@@ -55,7 +55,7 @@ export function useMarketIndicators(): UseMarketIndicatorsReturn {
         }
 
         if (message.type === 'VIX_UPDATE') {
-          const payload = message.payload as Vix | null;
+          const payload = message.payload as TickerQuote | null;
           setVix(payload);
           setVixAvailable(payload !== null);
           setLastVixUpdate(new Date());
