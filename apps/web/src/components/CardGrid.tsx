@@ -228,21 +228,11 @@ function LiftedCard({
 // ── CardGrid (unified — default + custom in one context) ──
 export function CardGrid(props: CardGridProps) {
   const { order, onReorder, isDark, isInitialLoading } = props;
+  // NOTE: all hooks must run on every render — an early-return branch for
+  // `isInitialLoading` can't appear before them, or React bails with
+  // "rendered more hooks than during the previous render" the moment the
+  // flag flips. Keep useState + useSensors at the top.
   const [activeId, setActiveId] = useState<string | null>(null);
-
-  // Loading phase: render a plain grid (no DndContext). We already show
-  // max-capacity slots via useUnifiedOrder's padding, so the layout stays
-  // stable until hydration finishes.
-  if (isInitialLoading) {
-    return (
-      <div className="cards-grid">
-        {order.map((id) => (
-          <div key={id}>{renderCardContent(id, isDark, props)}</div>
-        ))}
-      </div>
-    );
-  }
-
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 5 } }),
@@ -260,6 +250,19 @@ export function CardGrid(props: CardGridProps) {
       onReorder(arrayMove(order, oldIndex, newIndex));
     }
     setActiveId(null);
+  }
+
+  // Loading phase: render a plain grid (no DndContext). We already show
+  // max-capacity slots via useUnifiedOrder's padding, so the layout stays
+  // stable until hydration finishes.
+  if (isInitialLoading) {
+    return (
+      <div className="cards-grid">
+        {order.map((id) => (
+          <div key={id}>{renderCardContent(id, isDark, props)}</div>
+        ))}
+      </div>
+    );
   }
 
   return (
