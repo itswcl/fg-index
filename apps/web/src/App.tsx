@@ -68,7 +68,7 @@ function MarketIndicators() {
   const { theme, setTheme, isDark } = useTheme();
   useTickerSync();
   usePreferencesSync();
-  const { order, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
+  const { order, isInitialLoading, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
   const [alertsOpen, setAlertsOpen] = useState(false);
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrow();
@@ -134,7 +134,7 @@ function MarketIndicators() {
             theme={theme}
             onThemeSelect={setTheme}
           />
-          {isMobile && (
+          {isMobile && !isInitialLoading && (
             editMode ? (
               <button
                 type="button"
@@ -185,6 +185,7 @@ function MarketIndicators() {
             onRemoveTicker={removeTicker}
             isDark={isDark}
             editMode={editMode}
+            isInitialLoading={isInitialLoading}
             fearGreedData={fearGreedData}
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
             fgIsRefreshing={fgFetching}
@@ -206,6 +207,7 @@ function MarketIndicators() {
             onReorder={reorder}
             onRemoveTicker={removeTicker}
             isDark={isDark}
+            isInitialLoading={isInitialLoading}
             fearGreedData={fearGreedData}
             fgLastUpdate={fgDisplayUpdate}
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}

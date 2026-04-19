@@ -23,7 +23,9 @@ import { BtcCard } from './BtcCard';
 import { SpxCard } from './SpxCard';
 import { TickerCard } from './TickerCard';
 import { TickerCardWrapper } from './TickerCardWrapper';
-import { DEFAULT_CARD_IDS } from '../hooks/useUnifiedOrder';
+import { CardShimmer } from './CardShimmer';
+import { Shimmer } from './Shimmer';
+import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import type { FearGreed, TickerQuote } from '../types';
 // Note: 'CardId' type no longer needed — order is string[] now
 
@@ -34,6 +36,13 @@ interface CardGridProps {
   onReorder: (newOrder: string[]) => void;
   isDark: boolean;
   onRemoveTicker: (ticker: string) => void;
+  /**
+   * When true, the grid is in its first-paint placeholder phase: dnd is
+   * disabled and `__loading-*` ids render shimmer slots. Flips to false
+   * once useUnifiedOrder has hydrated, at which point the grid collapses
+   * to the user's actual card count.
+   */
+  isInitialLoading?: boolean;
   // Default card data
   fearGreedData: FearGreed | null;
   fgLastUpdate: Date | null;
@@ -53,6 +62,21 @@ interface CardGridProps {
   spxLastUpdate: Date | null;
   spxIsLoading: boolean;
   spxIsRefreshing: boolean;
+}
+
+// ── Placeholder card for the first-paint loading phase ────
+// Matches TickerCard's outer shell so the grid layout is stable
+// before real data hydrates. No label, no remove button, no drag —
+// purely decorative shimmer.
+function PlaceholderCard({ isDark }: { isDark: boolean }) {
+  return (
+    <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
+      <div className="card-inner">
+        <Shimmer width={44} height={10} borderRadius={3} />
+        <CardShimmer />
+      </div>
+    </div>
+  );
 }
 
 // ── Per-card sortable slot ─────────────────────────────────
@@ -100,6 +124,9 @@ function SortableCardSlot({
 
 // ── Renders content for a given card id ───────────────────
 function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
+  if (isPlaceholderId(id)) {
+    return <PlaceholderCard isDark={isDark} />;
+  }
   switch (id) {
     case 'feargreed':
       return (
@@ -200,8 +227,21 @@ function LiftedCard({
 
 // ── CardGrid (unified — default + custom in one context) ──
 export function CardGrid(props: CardGridProps) {
-  const { order, onReorder, isDark } = props;
+  const { order, onReorder, isDark, isInitialLoading } = props;
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Loading phase: render a plain grid (no DndContext). We already show
+  // max-capacity slots via useUnifiedOrder's padding, so the layout stays
+  // stable until hydration finishes.
+  if (isInitialLoading) {
+    return (
+      <div className="cards-grid">
+        {order.map((id) => (
+          <div key={id}>{renderCardContent(id, isDark, props)}</div>
+        ))}
+      </div>
+    );
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),

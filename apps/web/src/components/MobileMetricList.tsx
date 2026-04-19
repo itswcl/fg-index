@@ -9,7 +9,7 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useTicker } from '../hooks/useTicker';
-import { DEFAULT_CARD_IDS } from '../hooks/useUnifiedOrder';
+import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import { FEAR_GREED_COLORS } from '../constants';
 import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
 import { MetricRow, type MetricRowData } from './MetricRow';
@@ -21,6 +21,11 @@ interface MobileMetricListProps {
   isDark: boolean;
   editMode: boolean;
   onRemoveTicker: (ticker: string) => void;
+  /**
+   * First-paint loading phase — dnd disabled, `__loading-*` ids render
+   * shimmer rows, edit mode is forced off. Mirrors CardGrid's behavior.
+   */
+  isInitialLoading?: boolean;
 
   fearGreedData: FearGreed | null;
   fgIsLoading: boolean;
@@ -171,7 +176,9 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
 }
 
 export function MobileMetricList(props: MobileMetricListProps) {
-  const { order, onReorder, isDark, editMode, onRemoveTicker } = props;
+  const { order, onReorder, isDark, editMode, onRemoveTicker, isInitialLoading } = props;
+  // Edit mode is meaningless during the placeholder phase.
+  const effectiveEditMode = isInitialLoading ? false : editMode;
 
   // Sensors only matter when edit mode is on; creating them always keeps hook
   // order stable. TouchSensor has no activation delay here because the user
@@ -196,13 +203,31 @@ export function MobileMetricList(props: MobileMetricListProps) {
     const isDefault = (DEFAULT_CARD_IDS as readonly string[]).includes(id);
     const showDivider = idx < order.length - 1;
 
+    if (isPlaceholderId(id)) {
+      // Shimmer row during first-paint padding. No ticker identity, not
+      // draggable (we won't enter a DndContext when isInitialLoading).
+      return (
+        <MetricRow
+          key={id}
+          id={id}
+          label=""
+          value={null}
+          isLoading={true}
+          isDark={isDark}
+          editMode={false}
+          isCustom={false}
+          showDivider={showDivider}
+        />
+      );
+    }
+
     if (!isDefault) {
       return (
         <TickerMetricRow
           key={id}
           id={id}
           isDark={isDark}
-          editMode={editMode}
+          editMode={effectiveEditMode}
           showDivider={showDivider}
           onRemoveTicker={onRemoveTicker}
         />
@@ -215,15 +240,16 @@ export function MobileMetricList(props: MobileMetricListProps) {
         key={id}
         {...data}
         isDark={isDark}
-        editMode={editMode}
+        editMode={effectiveEditMode}
         isCustom={false}
         showDivider={showDivider}
       />
     );
   });
 
-  // Read-only mode: plain <ul>, no DndContext, native scroll unimpeded.
-  if (!editMode) {
+  // Read-only mode (and the first-paint loading phase): plain <ul>, no
+  // DndContext, native scroll unimpeded.
+  if (!effectiveEditMode) {
     return <ul className={listClasses}>{rows}</ul>;
   }
 
