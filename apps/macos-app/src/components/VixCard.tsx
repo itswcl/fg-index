@@ -6,13 +6,13 @@ import {
   StyleSheet,
   Animated,
 } from 'react-native';
-import { Vix } from '@shared/types';
+import { TickerQuote } from '@shared/types';
 import { formatAbsoluteTime, isStale } from '../services/time.utils';
 import { useAppColorScheme } from '../hooks/useAppColorScheme';
 import { Shimmer } from './Shimmer';
 
 interface VixCardProps {
-  data: Vix | null;
+  data: TickerQuote | null;
   vixAvailable: boolean;
   lastUpdate: Date | null;
   isLoading?: boolean;

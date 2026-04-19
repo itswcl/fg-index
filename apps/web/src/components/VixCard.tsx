@@ -1,11 +1,11 @@
 
-import type { Vix } from '../types';
+import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
 interface VixCardProps {
-  data: Vix | null;
+  data: TickerQuote | null;
   vixAvailable: boolean;
   lastUpdate: Date | null;
   isLoading?: boolean;

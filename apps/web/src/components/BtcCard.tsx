@@ -1,10 +1,10 @@
-import type { Btc } from '../types';
+import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
 interface BtcCardProps {
-  data: Btc | null;
+  data: TickerQuote | null;
   lastUpdate: Date | null;
   isLoading?: boolean;
   isRefreshing?: boolean;

@@ -24,7 +24,7 @@ import { SpxCard } from './SpxCard';
 import { TickerCard } from './TickerCard';
 import { TickerCardWrapper } from './TickerCardWrapper';
 import { DEFAULT_CARD_IDS } from '../hooks/useUnifiedOrder';
-import type { FearGreed, Vix, Btc, Spx } from '../types';
+import type { FearGreed, TickerQuote } from '../types';
 // Note: 'CardId' type no longer needed — order is string[] now
 
 interface CardGridProps {
@@ -39,16 +39,16 @@ interface CardGridProps {
   fgLastUpdate: Date | null;
   fgIsLoading: boolean;
   fgIsRefreshing: boolean;
-  vixData: Vix | null;
+  vixData: TickerQuote | null;
   vixAvailable: boolean;
   vixLastUpdate: Date | null;
   vixIsLoading: boolean;
   vixIsRefreshing: boolean;
-  btcData: Btc | null;
+  btcData: TickerQuote | null;
   btcLastUpdate: Date | null;
   btcIsLoading: boolean;
   btcIsRefreshing: boolean;
-  spxData: Spx | null;
+  spxData: TickerQuote | null;
   spxAvailable: boolean;
   spxLastUpdate: Date | null;
   spxIsLoading: boolean;

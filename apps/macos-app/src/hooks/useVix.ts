@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Vix } from '@shared/types';
+import { TickerQuote } from '@shared/types';
 import { API_BASE_URL, VIX_REFETCH_INTERVAL_MS } from '../constants';
 
-async function fetchVix(): Promise<Vix | null> {
+async function fetchVix(): Promise<TickerQuote | null> {
   const res = await fetch(`${API_BASE_URL}/api/vix`);
   if (!res.ok) throw new Error('Failed to fetch VIX');
   return res.json();
@@ -13,7 +13,7 @@ async function fetchVix(): Promise<Vix | null> {
  * Only used when WS is disconnected.
  */
 export function useVix() {
-  return useQuery<Vix | null, Error>({
+  return useQuery<TickerQuote | null, Error>({
     queryKey: ['vix'],
     queryFn: fetchVix,
     refetchInterval: VIX_REFETCH_INTERVAL_MS,

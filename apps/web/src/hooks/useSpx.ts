@@ -1,16 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import type { Spx } from '../types';
+import type { TickerQuote } from '../types';
 import { API_BASE_URL, SPX_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
 
-async function fetchSpx(): Promise<Spx | null> {
+async function fetchSpx(): Promise<TickerQuote | null> {
   const res = await authFetch(`${API_BASE_URL}/api/spx`);
   if (!res.ok) throw new Error('Failed to fetch SPX');
-  return res.json() as Promise<Spx | null>;
+  return res.json() as Promise<TickerQuote | null>;
 }
 
 export function useSpx() {
-  return useQuery<Spx | null, Error>({
+  return useQuery<TickerQuote | null, Error>({
     queryKey: ['spx'],
     queryFn: fetchSpx,
     refetchInterval: SPX_REFETCH_INTERVAL_MS,
