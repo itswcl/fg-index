@@ -22,60 +22,9 @@ export const FearGreedSchema = z.object({
   sourceUrl: z.string().url().optional(),
 });
 
-// ─── VIX ──────────────────────────────────────────────────────────
-export const VixSchema = z.object({
-  price: z.number().positive(),
-  previousClose: z.number().positive(),
-  change: z.number(),
-  changePercent: z.number(),
-  fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
-  // Public URL of the source page the price was scraped from
-  // (Google Finance VIX:INDEXCBOE primary, Yahoo ^VIX fallback).
-  sourceUrl: z.string().url().optional(),
-});
-
-// ─── Combined response ─────────────────────────────────────────────
-export const MarketIndicatorsSchema = z.object({
-  fearGreed: FearGreedSchema,
-  vix: VixSchema.nullable(),
-});
-
-// ─── Inferred TypeScript types ─────────────────────────────────────
-export type FearGreedClassification = z.infer<
-  typeof FearGreedClassificationSchema
->;
-export type FearGreed = z.infer<typeof FearGreedSchema>;
-export type Vix = z.infer<typeof VixSchema>;
-export type MarketIndicators = z.infer<typeof MarketIndicatorsSchema>;
-
-// ─── BTC ──────────────────────────────────────────────────────────
-export const BtcSchema = z.object({
-  price: z.number().positive(),
-  change: z.number(),
-  changePercent: z.number(),
-  fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
-  // Public URL of the source page the price was scraped from
-  // (Google Finance BTC-USD primary, Yahoo BTC-USD fallback).
-  sourceUrl: z.string().url().optional(),
-});
-
-export type Btc = z.infer<typeof BtcSchema>;
-
-// ─── SPX ──────────────────────────────────────────────────────────
-export const SpxSchema = z.object({
-  price: z.number().positive(),
-  previousClose: z.number().positive(),
-  change: z.number(),
-  changePercent: z.number(),
-  fetchedAt: z.string().datetime({ offset: true }), // ISO 8601, set by our server
-  // Public URL of the source page the price was scraped from
-  // (Google Finance .INX:INDEXSP primary, Yahoo ^GSPC fallback).
-  sourceUrl: z.string().url().optional(),
-});
-
-export type Spx = z.infer<typeof SpxSchema>;
-
 // ─── Ticker Quote ─────────────────────────────────────────────────
+// Unified shape for any scraped price series — user-added tickers
+// plus the built-in VIX / SPX / BTC cards. See aliases below.
 export const TickerQuoteSchema = z.object({
   ticker: z.string(),
   name: z.string().optional(),
@@ -92,6 +41,38 @@ export const TickerQuoteSchema = z.object({
 });
 
 export type TickerQuote = z.infer<typeof TickerQuoteSchema>;
+
+// ─── Deprecated per-metric aliases ────────────────────────────────
+// VIX / BTC / SPX used to have distinct schemas; they are now just
+// `TickerQuote` with identifying `ticker` + `name` fields baked in.
+// These aliases keep the web + macos-app compiling through the FE
+// migration PR — remove them once those apps switch to `TickerQuote`.
+
+/** @deprecated Use TickerQuote. */
+export type Vix = TickerQuote;
+/** @deprecated Use TickerQuote. */
+export type Btc = TickerQuote;
+/** @deprecated Use TickerQuote. */
+export type Spx = TickerQuote;
+/** @deprecated Use TickerQuoteSchema. */
+export const VixSchema = TickerQuoteSchema;
+/** @deprecated Use TickerQuoteSchema. */
+export const BtcSchema = TickerQuoteSchema;
+/** @deprecated Use TickerQuoteSchema. */
+export const SpxSchema = TickerQuoteSchema;
+
+// ─── Combined response ─────────────────────────────────────────────
+export const MarketIndicatorsSchema = z.object({
+  fearGreed: FearGreedSchema,
+  vix: TickerQuoteSchema.nullable(),
+});
+
+// ─── Inferred TypeScript types ─────────────────────────────────────
+export type FearGreedClassification = z.infer<
+  typeof FearGreedClassificationSchema
+>;
+export type FearGreed = z.infer<typeof FearGreedSchema>;
+export type MarketIndicators = z.infer<typeof MarketIndicatorsSchema>;
 
 // ─── Alerts ────────────────────────────────────────────────────────
 export const ConditionSchema = z.object({

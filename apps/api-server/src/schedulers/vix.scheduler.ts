@@ -1,5 +1,8 @@
 import { fetchVixData } from "../services/vix.service.js";
-import { Vix } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
+
+// Aliased so the scheduler's public API reads naturally.
+type Vix = TickerQuote;
 import { env } from "../config/env.js";
 import { recordVixFetch } from "../controllers/health.controller.js";
 

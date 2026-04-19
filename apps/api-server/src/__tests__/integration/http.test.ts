@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { FearGreedSchema, VixSchema } from "@shared/types";
+import { FearGreedSchema, TickerQuoteSchema } from "@shared/types";
 
 const BASE_URL = "http://localhost:8080";
 
@@ -73,7 +73,7 @@ describe("Integration: GET /api/vix", () => {
       // Both scrapers failed — this is an accepted PRD state
       expect(json).toBeNull();
     } else {
-      const result = VixSchema.safeParse(json);
+      const result = TickerQuoteSchema.safeParse(json);
       if (!result.success) {
         console.error("Zod validation errors:", result.error.format());
       }

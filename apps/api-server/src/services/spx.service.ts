@@ -1,7 +1,10 @@
 import { env } from "../config/env.js";
-import { Spx } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
 
-async function scrapeGoogleFinance(): Promise<Spx | null> {
+const SPX_TICKER = "SPX";
+const SPX_NAME = "S&P 500";
+
+async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.GOOGLE_FINANCE_SPX_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -25,6 +28,8 @@ async function scrapeGoogleFinance(): Promise<Spx | null> {
       previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
 
     return {
+      ticker: SPX_TICKER,
+      name: SPX_NAME,
       price,
       previousClose,
       change,
@@ -37,7 +42,7 @@ async function scrapeGoogleFinance(): Promise<Spx | null> {
   }
 }
 
-async function scrapeYahooFinance(): Promise<Spx | null> {
+async function scrapeYahooFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.YAHOO_FINANCE_SPX_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -52,6 +57,8 @@ async function scrapeYahooFinance(): Promise<Spx | null> {
 
     const price = parseFloat(priceMatch[1].replace(/,/g, ""));
     return {
+      ticker: SPX_TICKER,
+      name: SPX_NAME,
       price,
       previousClose: price,
       change: 0,
@@ -64,7 +71,7 @@ async function scrapeYahooFinance(): Promise<Spx | null> {
   }
 }
 
-export async function fetchSpxData(): Promise<Spx | null> {
+export async function fetchSpxData(): Promise<TickerQuote | null> {
   const googleData = await scrapeGoogleFinance();
   if (googleData) return googleData;
 

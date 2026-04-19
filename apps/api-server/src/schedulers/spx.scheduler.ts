@@ -1,5 +1,8 @@
 import { fetchSpxData } from "../services/spx.service.js";
-import { Spx } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
+
+// Aliased so the scheduler's public API reads naturally.
+type Spx = TickerQuote;
 import { env } from "../config/env.js";
 import { recordSpxFetch } from "../controllers/health.controller.js";
 
