@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { API_BASE_URL } from '../constants';
+import { API_BASE_URL, MAX_CUSTOM_TICKERS } from '../constants';
 import { authFetch } from '../lib/authFetch';
 import { useAuth } from './useAuth';
 import { useTickerList } from './useTickerList';
@@ -12,6 +12,20 @@ const PUT_DEBOUNCE_MS = 500;
 
 export const DEFAULT_CARD_IDS = ['feargreed', 'vix', 'btc', 'spx'] as const;
 type DefaultId = (typeof DEFAULT_CARD_IDS)[number];
+
+/**
+ * Prefix for synthetic placeholder ids inserted while authenticated queries
+ * are still in-flight. See `isPlaceholderId`. Keeps the grid rendered at its
+ * max capacity (defaults + MAX_CUSTOM_TICKERS) so cards don't pop in one
+ * at a time as each query resolves.
+ */
+export const PLACEHOLDER_ID_PREFIX = '__loading-';
+/** Max total cards rendered during the loading placeholder phase. */
+export const MAX_TOTAL_CARDS = DEFAULT_CARD_IDS.length + MAX_CUSTOM_TICKERS;
+
+export function isPlaceholderId(id: string): boolean {
+  return id.startsWith(PLACEHOLDER_ID_PREFIX);
+}
 
 function isDefaultId(id: string): id is DefaultId {
   return (DEFAULT_CARD_IDS as readonly string[]).includes(id);
@@ -81,9 +95,15 @@ export function clearLocalOrder(): void {
 }
 
 export function useUnifiedOrder() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const queryClient = useQueryClient();
-  const { tickers, addTicker, removeTicker, reorderTickers } = useTickerList();
+  const {
+    tickers,
+    isLoading: tickersLoading,
+    addTicker,
+    removeTicker,
+    reorderTickers,
+  } = useTickerList();
 
   const userId = user?.id ?? null;
   const prefsKey = useMemo(() => ['preferences', userId] as const, [userId]);
@@ -152,6 +172,28 @@ export function useUnifiedOrder() {
     saveLocalOrder(order);
   }, [user, order]);
 
+  // ── First-paint placeholder padding ──────────────────────────────
+  // While auth is still resolving or an authed user's prefs/tickers
+  // queries are still in flight, pad the visible grid with synthetic
+  // "__loading-*" ids so we render at max capacity from the first
+  // frame. Keeps cards from popping in one-by-one as each query
+  // resolves. Anonymous users load synchronously from localStorage
+  // and skip this entirely.
+  const isInitialLoading =
+    authLoading ||
+    (!!user && (prefsQuery.isLoading || tickersLoading));
+
+  const displayOrder = useMemo(() => {
+    if (!isInitialLoading) return order;
+    const needed = Math.max(0, MAX_TOTAL_CARDS - order.length);
+    if (needed === 0) return order;
+    const placeholders = Array.from(
+      { length: needed },
+      (_, i) => `${PLACEHOLDER_ID_PREFIX}${i}`,
+    );
+    return [...order, ...placeholders];
+  }, [order, isInitialLoading]);
+
   // ── Debounced PUT to /api/user/preferences ───────────────────────
   const putMut = useMutation({
     mutationFn: async (cardOrder: string[]) => {
@@ -204,5 +246,12 @@ export function useUnifiedOrder() {
     [user, scheduleServerSave, tickers, reorderTickers],
   );
 
-  return { order, reorder, addTicker, removeTicker, tickers };
+  return {
+    order: displayOrder,
+    isInitialLoading,
+    reorder,
+    addTicker,
+    removeTicker,
+    tickers,
+  };
 }
