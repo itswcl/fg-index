@@ -5,11 +5,11 @@ import { HttpError, handleError } from "../errors/httpError.js";
 
 // Card IDs are short slugs ("fearGreed", "vix", "ticker:AAPL", etc.)
 // Bound the array so a malicious client can't blow up the row.
-const MAX_CARDS = 32;
+const MAX_CARDS = 36;
 
 const PreferencesSchema = z.object({
   cardOrder: z
-    .array(z.string().min(1).max(64))
+    .array(z.string().min(1).max(16))
     .max(MAX_CARDS),
 });
 

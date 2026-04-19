@@ -98,7 +98,7 @@ describe("updatePreferences", () => {
   });
 
   it("rejects payload exceeding the cap", async () => {
-    const cardOrder = Array.from({ length: 33 }, (_, i) => `c${i}`);
+    const cardOrder = Array.from({ length: 37 }, (_, i) => `c${i}`);
     const res = mockRes();
     await updatePreferences(
       mockReq({ userId: USER, body: { cardOrder } }),
