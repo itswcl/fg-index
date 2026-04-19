@@ -1,7 +1,12 @@
 import { env } from "../config/env.js";
-import { Vix } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
 
-async function scrapeGoogleFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpdated'> | null> {
+// Identity fields applied to every VIX response regardless of which
+// scraper produced the price.
+const VIX_TICKER = "VIX";
+const VIX_NAME = "CBOE Volatility Index";
+
+async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.GOOGLE_FINANCE_VIX_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -22,6 +27,8 @@ async function scrapeGoogleFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUp
     const changePercent = previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
 
     return {
+      ticker: VIX_TICKER,
+      name: VIX_NAME,
       price,
       previousClose,
       change,
@@ -29,12 +36,12 @@ async function scrapeGoogleFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUp
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.GOOGLE_FINANCE_VIX_URL,
     };
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
-async function scrapeYahooFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpdated'> | null> {
+async function scrapeYahooFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.YAHOO_FINANCE_VIX_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -47,21 +54,25 @@ async function scrapeYahooFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpd
     // Today's snapshot only
     const priceMatch = html.match(/data-value="([^"]+)"/);
     if (!priceMatch) {
-        const spanMatch = html.match(/<span[^>]*class="[^"]*Fz\(36px\)[^"]*"[^>]*>([0-9.]+)</);
-        if (!spanMatch) return null;
-        const price = parseFloat(spanMatch[1]);
-        return {
-            price,
-            previousClose: price,
-            change: 0,
-            changePercent: 0,
-            fetchedAt: new Date().toISOString(),
-            sourceUrl: env.YAHOO_FINANCE_VIX_URL,
-        }
+      const spanMatch = html.match(/<span[^>]*class="[^"]*Fz\(36px\)[^"]*"[^>]*>([0-9.]+)</);
+      if (!spanMatch) return null;
+      const price = parseFloat(spanMatch[1]);
+      return {
+        ticker: VIX_TICKER,
+        name: VIX_NAME,
+        price,
+        previousClose: price,
+        change: 0,
+        changePercent: 0,
+        fetchedAt: new Date().toISOString(),
+        sourceUrl: env.YAHOO_FINANCE_VIX_URL,
+      };
     }
 
     const price = parseFloat(priceMatch[1]);
     return {
+      ticker: VIX_TICKER,
+      name: VIX_NAME,
       price,
       previousClose: price,
       change: 0,
@@ -69,12 +80,12 @@ async function scrapeYahooFinance(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpd
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.YAHOO_FINANCE_VIX_URL,
     };
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
-export async function fetchVixData(): Promise<Omit<Vix, 'isMarketOpen' | 'lastUpdated'> | null> {
+export async function fetchVixData(): Promise<TickerQuote | null> {
   const googleData = await scrapeGoogleFinance();
   if (googleData) return googleData;
 

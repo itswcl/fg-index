@@ -1,7 +1,10 @@
 import { env } from "../config/env.js";
-import { Btc } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
 
-async function scrapeGoogleFinance(): Promise<Btc | null> {
+const BTC_TICKER = "BTC-USD";
+const BTC_NAME = "Bitcoin USD";
+
+async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.GOOGLE_FINANCE_BTC_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -25,7 +28,10 @@ async function scrapeGoogleFinance(): Promise<Btc | null> {
       previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
 
     return {
+      ticker: BTC_TICKER,
+      name: BTC_NAME,
       price,
+      previousClose,
       change,
       changePercent,
       fetchedAt: new Date().toISOString(),
@@ -36,7 +42,7 @@ async function scrapeGoogleFinance(): Promise<Btc | null> {
   }
 }
 
-async function scrapeYahooFinance(): Promise<Btc | null> {
+async function scrapeYahooFinance(): Promise<TickerQuote | null> {
   try {
     const response = await fetch(env.YAHOO_FINANCE_BTC_URL, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -51,7 +57,12 @@ async function scrapeYahooFinance(): Promise<Btc | null> {
 
     const price = parseFloat(priceMatch[1].replace(/,/g, ""));
     return {
+      ticker: BTC_TICKER,
+      name: BTC_NAME,
       price,
+      // Yahoo's snapshot endpoint doesn't expose prev close; fall back to
+      // current price so change/changePercent stay at 0 rather than NaN.
+      previousClose: price,
       change: 0,
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
@@ -62,7 +73,7 @@ async function scrapeYahooFinance(): Promise<Btc | null> {
   }
 }
 
-export async function fetchBtcData(): Promise<Btc | null> {
+export async function fetchBtcData(): Promise<TickerQuote | null> {
   const googleData = await scrapeGoogleFinance();
   if (googleData) return googleData;
 

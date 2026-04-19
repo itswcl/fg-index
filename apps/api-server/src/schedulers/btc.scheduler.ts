@@ -1,5 +1,8 @@
 import { fetchBtcData } from "../services/btc.service.js";
-import { Btc } from "@shared/types";
+import type { TickerQuote } from "@shared/types";
+
+// Aliased so the scheduler's public API reads naturally.
+type Btc = TickerQuote;
 import { env } from "../config/env.js";
 import { recordBtcFetch } from "../controllers/health.controller.js";
 

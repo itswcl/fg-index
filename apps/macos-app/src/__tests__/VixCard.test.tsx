@@ -4,6 +4,8 @@ import { VixCard } from '../components/VixCard';
 import { Vix } from '@shared/types';
 
 const mockVix: Vix = {
+  ticker: 'VIX',
+  name: 'CBOE Volatility Index',
   price: 19.5,
   previousClose: 21.01,
   change: -1.51,
