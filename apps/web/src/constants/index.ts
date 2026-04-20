@@ -37,8 +37,8 @@ export const STALENESS_THRESHOLD_MS = 10 * 60 * 1000;
 /** Custom ticker poll every 30s */
 export const TICKER_REFETCH_INTERVAL_MS = 30 * 1000;
 
-/** Max number of custom ticker cards */
-export const MAX_CUSTOM_TICKERS = 8;
+/** Max number of custom ticker cards (matches BE MAX_TICKERS_PER_USER = 32). */
+export const MAX_CUSTOM_TICKERS = 32;
 
 /** localStorage key for custom ticker list */
 export const TICKER_STORAGE_KEY = 'fg-index-tickers';
