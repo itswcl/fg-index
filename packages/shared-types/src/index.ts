@@ -42,6 +42,16 @@ export const TickerQuoteSchema = z.object({
 
 export type TickerQuote = z.infer<typeof TickerQuoteSchema>;
 
+// ─── Batch quote response ──────────────────────────────────────────
+// Shape of GET /api/quote/batch?symbols=A,B,C. Keys are the
+// upper-cased symbols the client asked for; a null value means the
+// scrape failed / symbol was not found — the overall request still
+// succeeds so one bad symbol doesn't poison the rest.
+export const TickerQuoteBatchSchema = z.object({
+  quotes: z.record(z.string(), TickerQuoteSchema.nullable()),
+});
+export type TickerQuoteBatch = z.infer<typeof TickerQuoteBatchSchema>;
+
 // ─── Combined response ─────────────────────────────────────────────
 export const MarketIndicatorsSchema = z.object({
   fearGreed: FearGreedSchema,
