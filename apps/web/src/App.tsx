@@ -189,6 +189,10 @@ function MarketIndicators() {
           <MobileMetricList
             order={order}
             onReorder={reorder}
+            page={page}
+            perPage={CARDS_PER_PAGE}
+            onPageChange={setPage}
+            pageCount={pageCount}
             onRemoveTicker={removeTicker}
             isDark={isDark}
             editMode={editMode}
@@ -237,12 +241,14 @@ function MarketIndicators() {
             spxIsRefreshing={spxFetching}
           />
         )}
-        {!isMobile && !isInitialLoading && pageCount > 1 && (
+        {!isInitialLoading && pageCount > 1 && (
           <PageIndicator
             page={page}
             pageCount={pageCount}
             onPageChange={setPage}
             isDark={isDark}
+            // Mobile relies on swipe for navigation; show dots only.
+            showChevrons={!isMobile}
           />
         )}
       </div>
