@@ -40,5 +40,11 @@ export const TICKER_REFETCH_INTERVAL_MS = 30 * 1000;
 /** Max number of custom ticker cards (matches BE MAX_TICKERS_PER_USER = 32). */
 export const MAX_CUSTOM_TICKERS = 32;
 
+/** Cards shown per page in the paginated grid (3 pages × 12 = 36 max). */
+export const CARDS_PER_PAGE = 12;
+
+/** Hard cap on pagination. 36 total cards / 12 per page → 3 pages. */
+export const MAX_PAGES = 3;
+
 /** localStorage key for custom ticker list */
 export const TICKER_STORAGE_KEY = 'fg-index-tickers';

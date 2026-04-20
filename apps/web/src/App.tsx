@@ -15,6 +15,9 @@ import { MobileMetricList } from './components/MobileMetricList';
 import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
 import { AddTickerInput } from './components/AddTickerInput';
+import { PageIndicator } from './components/PageIndicator';
+import { usePagination } from './hooks/usePagination';
+import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
@@ -69,6 +72,10 @@ function MarketIndicators() {
   useTickerSync();
   usePreferencesSync();
   const { order, isInitialLoading, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
+  // URL-bound pagination. `order` during loading is padded to 36 slots so
+  // pageCount can briefly read 3; we gate the <PageIndicator/> render on
+  // !isInitialLoading so the dots don't pre-flash during hydration.
+  const { page, setPage, pageCount } = usePagination(order.length, { perPage: CARDS_PER_PAGE });
   const [alertsOpen, setAlertsOpen] = useState(false);
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrow();
@@ -205,6 +212,8 @@ function MarketIndicators() {
           <CardGrid
             order={order}
             onReorder={reorder}
+            page={page}
+            perPage={CARDS_PER_PAGE}
             onRemoveTicker={removeTicker}
             isDark={isDark}
             isInitialLoading={isInitialLoading}
@@ -226,6 +235,14 @@ function MarketIndicators() {
             spxLastUpdate={spxDisplayUpdate}
             spxIsLoading={spxLoading && !wsSpx && !httpSpx}
             spxIsRefreshing={spxFetching}
+          />
+        )}
+        {!isMobile && !isInitialLoading && pageCount > 1 && (
+          <PageIndicator
+            page={page}
+            pageCount={pageCount}
+            onPageChange={setPage}
+            isDark={isDark}
           />
         )}
       </div>
