@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -18,6 +19,13 @@ import './MobileMetricList.css';
 interface MobileMetricListProps {
   order: string[];
   onReorder: (newOrder: string[]) => void;
+  /** 1-indexed current page — drives slice + swipe target. */
+  page: number;
+  /** Cards per page (typically CARDS_PER_PAGE=12). */
+  perPage: number;
+  /** Called when a horizontal swipe crosses the threshold. No-op in edit mode. */
+  onPageChange: (page: number) => void;
+  pageCount: number;
   isDark: boolean;
   editMode: boolean;
   onRemoveTicker: (ticker: string) => void;
@@ -175,8 +183,29 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
   }
 }
 
+/**
+ * Threshold params for horizontal swipe paging. `COMMIT_PX` must be
+ * crossed before we change page. `LIVE_MAX_PX` caps the live-translate
+ * preview so an aggressive fling doesn't fly off-screen during the
+ * drag — release still navigates regardless of how far past the cap.
+ */
+const SWIPE_COMMIT_PX = 50;
+const SWIPE_LIVE_MAX_PX = 120;
+const SWIPE_AXIS_RATIO = 1.5;
+
 export function MobileMetricList(props: MobileMetricListProps) {
-  const { order, onReorder, isDark, editMode, onRemoveTicker, isInitialLoading } = props;
+  const {
+    order,
+    onReorder,
+    page,
+    perPage,
+    onPageChange,
+    pageCount,
+    isDark,
+    editMode,
+    onRemoveTicker,
+    isInitialLoading,
+  } = props;
   // Edit mode is meaningless during the placeholder phase.
   const effectiveEditMode = isInitialLoading ? false : editMode;
 
@@ -188,20 +217,101 @@ export function MobileMetricList(props: MobileMetricListProps) {
     useSensor(TouchSensor, { activationConstraint: { distance: 8 } }),
   );
 
+  // ── Page-slice: dnd-kit and render only see the current page ──
+  const pageStart = (page - 1) * perPage;
+  const pageEnd = pageStart + perPage;
+  const pageItems = order.slice(pageStart, pageEnd);
+
+  // ── Horizontal swipe to page ──
+  // Gated off during edit mode (rows own the gesture). We track a start point
+  // on pointerdown, mirror delta-x into a CSS var for live preview up to
+  // SWIPE_LIVE_MAX_PX, and on release commit to onPageChange if the commit
+  // threshold was crossed. If the pan is mostly vertical (> ratio) we bail —
+  // users scrolling the list must not accidentally page-turn.
+  const swipeStartRef = useRef<{ x: number; y: number; axis: 'unknown' | 'h' | 'v' } | null>(null);
+  const [swipeX, setSwipeX] = useState<number>(0);
+
+  const canNext = page < pageCount;
+  const canPrev = page > 1;
+
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (effectiveEditMode) return;
+    if (pageCount <= 1) return;
+    // Ignore non-primary buttons / non-touch multi-pointer — PointerDown with
+    // button=0 covers touch + mouse-left.
+    if (e.button !== 0) return;
+    swipeStartRef.current = { x: e.clientX, y: e.clientY, axis: 'unknown' };
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const start = swipeStartRef.current;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+
+    // Lock the axis on first significant movement so the list doesn't
+    // translate during a purely vertical scroll.
+    if (start.axis === 'unknown') {
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      if (absX < 6 && absY < 6) return;
+      start.axis = absX > absY * SWIPE_AXIS_RATIO ? 'h' : 'v';
+      if (start.axis === 'v') {
+        // Vertical scroll — drop the gesture, let the browser handle scroll.
+        swipeStartRef.current = null;
+        setSwipeX(0);
+        return;
+      }
+    }
+
+    if (start.axis !== 'h') return;
+    // Clamp preview; also zero it out if swiping toward a non-existent page
+    // so users can't drag a phantom "there's no next page" slide.
+    let clamped = Math.max(-SWIPE_LIVE_MAX_PX, Math.min(SWIPE_LIVE_MAX_PX, dx));
+    if ((clamped < 0 && !canNext) || (clamped > 0 && !canPrev)) clamped = 0;
+    setSwipeX(clamped);
+  }
+
+  function resetSwipe() {
+    swipeStartRef.current = null;
+    setSwipeX(0);
+  }
+
+  function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const start = swipeStartRef.current;
+    if (!start) {
+      resetSwipe();
+      return;
+    }
+    const dx = e.clientX - start.x;
+
+    if (start.axis === 'h' && Math.abs(dx) >= SWIPE_COMMIT_PX) {
+      if (dx < 0 && canNext) onPageChange(page + 1);
+      else if (dx > 0 && canPrev) onPageChange(page - 1);
+    }
+    resetSwipe();
+  }
+
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = order.indexOf(active.id as string);
-    const newIndex = order.indexOf(over.id as string);
-    if (oldIndex < 0 || newIndex < 0) return;
-    onReorder(arrayMove(order, oldIndex, newIndex));
+    const oldIndexPage = pageItems.indexOf(active.id as string);
+    const newIndexPage = pageItems.indexOf(over.id as string);
+    if (oldIndexPage < 0 || newIndexPage < 0) return;
+    const reorderedPage = arrayMove(pageItems, oldIndexPage, newIndexPage);
+    const newFullOrder = [
+      ...order.slice(0, pageStart),
+      ...reorderedPage,
+      ...order.slice(pageEnd),
+    ];
+    onReorder(newFullOrder);
   }
 
   const listClasses = `metric-list ${isDark ? 'metric-list-dark' : 'metric-list-light'}`;
 
-  const rows = order.map((id, idx) => {
+  const rows = pageItems.map((id, idx) => {
     const isDefault = (DEFAULT_CARD_IDS as readonly string[]).includes(id);
-    const showDivider = idx < order.length - 1;
+    const showDivider = idx < pageItems.length - 1;
 
     if (isPlaceholderId(id)) {
       // Shimmer row during first-paint padding. No ticker identity, not
@@ -247,16 +357,43 @@ export function MobileMetricList(props: MobileMetricListProps) {
     );
   });
 
+  // Live-preview style: translate the whole list by the current swipe delta.
+  // When the user releases, React re-renders with page ± 1, pageItems changes,
+  // and swipeX resets to 0 — the list snaps back to resting position. No
+  // animation on the outbound direction since the content literally changes.
+  const swipeStyle: React.CSSProperties | undefined =
+    swipeX !== 0
+      ? { transform: `translateX(${swipeX}px)`, transition: 'none' }
+      : { transform: 'translateX(0)', transition: 'transform 220ms ease' };
+
+  const swipeHandlers = pageCount > 1 && !effectiveEditMode
+    ? {
+        onPointerDown: handlePointerDown,
+        onPointerMove: handlePointerMove,
+        onPointerUp: handlePointerUp,
+        onPointerCancel: resetSwipe,
+      }
+    : undefined;
+
   // Read-only mode (and the first-paint loading phase): plain <ul>, no
-  // DndContext, native scroll unimpeded.
+  // DndContext, native scroll unimpeded. Swipe-to-page gesture attached to
+  // an outer wrapper so we don't interfere with per-row link taps.
   if (!effectiveEditMode) {
-    return <ul className={listClasses}>{rows}</ul>;
+    return (
+      <div
+        className="metric-list-swipe-wrap"
+        style={swipeStyle}
+        {...swipeHandlers}
+      >
+        <ul className={listClasses}>{rows}</ul>
+      </div>
+    );
   }
 
-  // Edit mode: DndContext + vertical sortable strategy.
+  // Edit mode: DndContext + vertical sortable strategy, no swipe.
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={order} strategy={verticalListSortingStrategy}>
+      <SortableContext items={pageItems} strategy={verticalListSortingStrategy}>
         <ul className={listClasses}>{rows}</ul>
       </SortableContext>
     </DndContext>

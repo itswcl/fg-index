@@ -28,3 +28,11 @@
   border-color: rgba(0, 0, 0, 0.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
+
+/* Swipe wrapper — captures horizontal pan for page changes. `touch-action:
+   pan-y` lets the browser keep handling vertical scroll while we claim the
+   horizontal axis (pointermove fires freely on a cross-axis swipe). */
+.metric-list-swipe-wrap {
+  touch-action: pan-y;
+  will-change: transform;
+}
