@@ -117,10 +117,12 @@ export function useMarketIndicators(
   const [btc, setBtc] = useState<TickerQuote | null>(null);
   const [spx, setSpx] = useState<TickerQuote | null>(null);
   const [spxAvailable, setSpxAvailable] = useState(true);
-  // Start optimistic — HTTP fetches deliver data immediately, so showing
-  // yellow before the WS handshake completes misrepresents the real state.
-  // Only flip to 'connecting'/'disconnected' once the socket actually drops.
-  const [wsStatus, setWsStatus] = useState<WsStatus>('connected');
+  // Initial mount shows the yellow pulse ("loading") until the first
+  // successful WS handshake. After that, we never go back to yellow —
+  // transient reconnects stay green (silent) until the 15s disconnect
+  // timer promotes us to red. Prevents the yellow↔green flashing users
+  // saw on every brief Render socket drop.
+  const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
   const [lastFearGreedUpdate, setLastFearGreedUpdate] = useState<Date | null>(null);
   const [lastVixUpdate, setLastVixUpdate] = useState<Date | null>(null);
   const [lastBtcUpdate, setLastBtcUpdate] = useState<Date | null>(null);
@@ -130,6 +132,10 @@ export function useMarketIndicators(
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(3000);
+  // Flips true on the first successful WS handshake. Once true, the
+  // status dot never reverts to 'connecting' — only green or red —
+  // so brief reconnect cycles don't cause a visible flash.
+  const hasConnectedOnceRef = useRef(false);
   // Keep latest callback/alerts in refs so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
   const alertsRef = useRef(alerts);
@@ -160,6 +166,7 @@ export function useMarketIndicators(
 
     ws.onopen = () => {
       setWsStatus('connected');
+      hasConnectedOnceRef.current = true;
       reconnectDelayRef.current = 3000; // Reset on success
       if (disconnectTimerRef.current) {
         clearTimeout(disconnectTimerRef.current);
@@ -248,12 +255,16 @@ export function useMarketIndicators(
       }
     };
 
-    // Show "connecting" (yellow) during transient drops. Only flip to
-    // "disconnected" (red) if we fail to reconnect within SUSTAINED_MS —
-    // avoids flashing red every time Render briefly drops the socket.
+    // Before the first successful handshake, show yellow ("connecting")
+    // so users see a real loading indicator. After we've connected at
+    // least once, stay silent (green) through transient drops — only
+    // promote to red if the outage lasts SUSTAINED_MS. This eliminates
+    // the yellow↔green flashing on every brief Render socket drop.
     const SUSTAINED_MS = 15_000;
     const markReconnecting = () => {
-      setWsStatus('connecting');
+      if (!hasConnectedOnceRef.current) {
+        setWsStatus('connecting');
+      }
       if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
       disconnectTimerRef.current = setTimeout(() => {
         setWsStatus('disconnected');
