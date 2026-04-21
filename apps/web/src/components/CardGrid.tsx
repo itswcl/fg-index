@@ -26,6 +26,7 @@ import { TickerCardWrapper } from './TickerCardWrapper';
 import { CardShimmer } from './CardShimmer';
 import { Shimmer } from './Shimmer';
 import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
+import { usePageTickers } from '../hooks/usePageTickers';
 import type { FearGreed, TickerQuote } from '../types';
 // Note: 'CardId' type no longer needed — order is string[] now
 
@@ -250,6 +251,20 @@ export function CardGrid(props: CardGridProps) {
   const pageStart = (page - 1) * perPage;
   const pageEnd = pageStart + perPage;
   const pageItems = order.slice(pageStart, pageEnd);
+
+  // ── Batch quote fetch for on-page custom tickers (FE-6) ──
+  // Defaults (feargreed/vix/btc/spx) have dedicated hooks. Placeholders
+  // are synthetic and not real symbols. Everything else is a user ticker
+  // whose quote comes from /api/quote/batch — one request per page.
+  const customSymbolsOnPage = pageItems.filter(
+    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
+  );
+  // Prefetch the next page's symbols so swipe/click-forward is instant.
+  const nextPageItems = order.slice(pageEnd, pageEnd + perPage);
+  const customSymbolsNextPage = nextPageItems.filter(
+    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
+  );
+  usePageTickers(customSymbolsOnPage, { prefetchNeighbor: customSymbolsNextPage });
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as string);

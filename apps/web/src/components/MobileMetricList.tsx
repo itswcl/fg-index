@@ -10,6 +10,7 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useTicker } from '../hooks/useTicker';
+import { usePageTickers } from '../hooks/usePageTickers';
 import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import { FEAR_GREED_COLORS } from '../constants';
 import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
@@ -221,6 +222,19 @@ export function MobileMetricList(props: MobileMetricListProps) {
   const pageStart = (page - 1) * perPage;
   const pageEnd = pageStart + perPage;
   const pageItems = order.slice(pageStart, pageEnd);
+
+  // ── Batch quote fetch for on-page custom tickers (FE-6) ──
+  // Same contract as CardGrid: defaults have their own hooks, placeholders
+  // are synthetic, user symbols batch through /api/quote/batch. One request
+  // per page + a silent prefetch of the next page for fast swipe-forward.
+  const customSymbolsOnPage = pageItems.filter(
+    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
+  );
+  const nextPageItems = order.slice(pageEnd, pageEnd + perPage);
+  const customSymbolsNextPage = nextPageItems.filter(
+    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
+  );
+  usePageTickers(customSymbolsOnPage, { prefetchNeighbor: customSymbolsNextPage });
 
   // ── Horizontal swipe to page ──
   // Gated off during edit mode (rows own the gesture). We track a start point
