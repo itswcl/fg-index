@@ -27,6 +27,22 @@
   gap: 12px;
 }
 
+/* Invisible spacer that holds a grid cell open so paginated pages
+   with fewer cards still occupy the same vertical space. Matches
+   the card-inner height so the row height is identical to a real
+   card row. */
+.card-filler {
+  min-height: 120px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (max-width: 480px) {
+  .card-filler {
+    min-height: 130px;
+  }
+}
+
 @media (max-width: 480px) {
   .app-container {
     padding: 10px;

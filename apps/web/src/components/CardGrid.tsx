@@ -291,6 +291,15 @@ export function CardGrid(props: CardGridProps) {
     setActiveId(null);
   }
 
+  // Pad each page out to `perPage` slots with invisible fillers so the
+  // grid's overall height stays constant across pages. Without this,
+  // page 2 (say, 3 cards) shrinks to one row and the PageIndicator
+  // jumps upward — jarring when you're paging through the dots.
+  const fillerCount = Math.max(0, perPage - pageItems.length);
+  const fillers = Array.from({ length: fillerCount }, (_, i) => (
+    <div key={`__filler-${i}`} className="card-filler" aria-hidden="true" />
+  ));
+
   // Loading phase: render a plain grid (no DndContext), sliced to the
   // current page so we never overflow the viewport with 36 placeholders.
   if (isInitialLoading) {
@@ -299,6 +308,7 @@ export function CardGrid(props: CardGridProps) {
         {pageItems.map((id) => (
           <div key={id}>{renderCardContent(id, isDark, props)}</div>
         ))}
+        {fillers}
       </div>
     );
   }
@@ -317,6 +327,7 @@ export function CardGrid(props: CardGridProps) {
               {renderCardContent(id, isDark, props)}
             </SortableCardSlot>
           ))}
+          {fillers}
         </div>
       </SortableContext>
 
