@@ -38,7 +38,10 @@ export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshin
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
   const isPositive = change >= 0;
-  const color = isPositive ? '#E74C3C' : '#27AE60';
+  // Match the direction-based ticker convention used by BtcCard/SpxCard:
+  // up = green, down = red. (Previously inverted because "VIX up = fear",
+  // but that fought with the adjacent ↑/↓ arrow and confused users.)
+  const color = isPositive ? '#27AE60' : '#E74C3C';
   const arrow = isPositive ? '↑' : '↓';
   const fmt2 = (n: number) => n.toFixed(2);
 
