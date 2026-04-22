@@ -2,11 +2,12 @@ import { useQuery } from '@tanstack/react-query';
 import type { TickerQuote } from '../types';
 import { API_BASE_URL, SPX_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
+import { sanitizeTickerQuote } from '../lib/marketData';
 
 async function fetchSpx(): Promise<TickerQuote | null> {
   const res = await authFetch(`${API_BASE_URL}/api/spx`);
   if (!res.ok) throw new Error('Failed to fetch SPX');
-  return res.json() as Promise<TickerQuote | null>;
+  return sanitizeTickerQuote(await res.json());
 }
 
 export function useSpx() {

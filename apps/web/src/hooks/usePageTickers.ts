@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TickerQuote } from '../types';
 import { API_BASE_URL, TICKER_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
+import { sanitizeTickerQuote } from '../lib/marketData';
 
 /**
  * Batch quote fetch. One `GET /api/quote/batch?symbols=A,B,C` per page
@@ -27,7 +28,11 @@ async function fetchBatch(symbols: string[]): Promise<BatchResponse> {
   const qs = encodeURIComponent(symbols.join(','));
   const res = await authFetch(`${API_BASE_URL}/api/quote/batch?symbols=${qs}`);
   if (!res.ok) throw new Error(`Batch quote fetch failed (${res.status})`);
-  return res.json() as Promise<BatchResponse>;
+  const data = (await res.json()) as { quotes?: Record<string, unknown> };
+  const quotes = Object.fromEntries(
+    Object.entries(data.quotes ?? {}).map(([symbol, quote]) => [symbol, sanitizeTickerQuote(quote)]),
+  );
+  return { quotes };
 }
 
 export interface UsePageTickersOptions {

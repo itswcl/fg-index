@@ -1,5 +1,6 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
+import { hasFiniteNumber } from '../lib/marketData';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -37,7 +38,11 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
           <>
             <div className="price-container">
               {data ? (
-                <AnimatedNumber value={data.price} formatter={formatBtcPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+                hasFiniteNumber(data.price) ? (
+                  <AnimatedNumber value={data.price} formatter={formatBtcPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+                ) : (
+                  <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
+                )
               ) : (
                 <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
               )}

@@ -12,10 +12,13 @@ interface AnimatedNumberProps {
  * Renders a number that smoothly animates when its value changes.
  */
 export function AnimatedNumber({ value, formatter, className, style }: AnimatedNumberProps) {
-  const display = useAnimatedNumber(value);
+  const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  const hasRenderableValue = typeof value === 'number' && Number.isFinite(value);
+  const display = useAnimatedNumber(safeValue);
+
   return (
     <span className={className} style={style}>
-      {formatter(display)}
+      {hasRenderableValue && Number.isFinite(display) ? formatter(display) : '–'}
     </span>
   );
 }
