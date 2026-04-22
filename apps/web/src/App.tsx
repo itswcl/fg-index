@@ -101,10 +101,12 @@ function MarketIndicators() {
   useTickerSync();
   usePreferencesSync();
   const { order, isInitialLoading, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
-  // URL-bound pagination. `order` during loading is padded to 36 slots so
-  // pageCount can briefly read 3; we gate the <PageIndicator/> render on
-  // !isInitialLoading so the dots don't pre-flash during hydration.
+  // URL-bound pagination. `order` during loading is padded to 36 slots, but
+  // the indicator stays mounted with a single placeholder dot so the page
+  // footer does not jump when hydration completes.
   const { page, setPage, pageCount } = usePagination(order.length, { perPage: CARDS_PER_PAGE });
+  const indicatorPage = isInitialLoading ? 1 : page;
+  const indicatorPageCount = isInitialLoading ? 1 : pageCount;
   const [alertsOpen, setAlertsOpen] = useState(false);
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrow();
@@ -270,10 +272,10 @@ function MarketIndicators() {
             spxIsRefreshing={spxFetching}
           />
         )}
-        {!isInitialLoading && pageCount > 1 && (
+        {indicatorPageCount >= 1 && (
           <PageIndicator
-            page={page}
-            pageCount={pageCount}
+            page={indicatorPage}
+            pageCount={indicatorPageCount}
             onPageChange={setPage}
             isDark={isDark}
             // Mobile relies on swipe for navigation; show dots only.

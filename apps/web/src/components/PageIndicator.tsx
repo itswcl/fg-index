@@ -17,20 +17,20 @@ export function PageIndicator({
   isDark,
   showChevrons = true,
 }: PageIndicatorProps) {
-  // Single-page grids render nothing — no affordance needed.
-  if (pageCount <= 1) return null;
+  const effectivePageCount = Math.max(pageCount, 1);
+  const effectivePage = Math.min(Math.max(page, 1), effectivePageCount);
 
-  const canPrev = page > 1;
-  const canNext = page < pageCount;
+  const canPrev = effectivePage > 1;
+  const canNext = effectivePage < effectivePageCount;
   const themeClass = isDark ? 'page-indicator-dark' : 'page-indicator-light';
 
   return (
     <div className={`page-indicator ${themeClass}`} role="tablist" aria-label="Page">
-      {showChevrons && (
+      {showChevrons && effectivePageCount > 1 && (
         <button
           type="button"
           className="page-chevron"
-          onClick={() => canPrev && onPageChange(page - 1)}
+          onClick={() => canPrev && onPageChange(effectivePage - 1)}
           disabled={!canPrev}
           aria-label="Previous page"
         >
@@ -42,27 +42,28 @@ export function PageIndicator({
         </button>
       )}
       <div className="page-dots">
-        {Array.from({ length: pageCount }, (_, i) => {
+        {Array.from({ length: effectivePageCount }, (_, i) => {
           const pageN = i + 1;
-          const active = pageN === page;
+          const active = pageN === effectivePage;
           return (
             <button
               key={pageN}
               type="button"
               role="tab"
               aria-selected={active}
-              aria-label={`Page ${pageN} of ${pageCount}`}
+              aria-label={`Page ${pageN} of ${effectivePageCount}`}
               className={`page-dot ${active ? 'page-dot-active' : ''}`}
               onClick={() => onPageChange(pageN)}
+              disabled={effectivePageCount === 1}
             />
           );
         })}
       </div>
-      {showChevrons && (
+      {showChevrons && effectivePageCount > 1 && (
         <button
           type="button"
           className="page-chevron"
-          onClick={() => canNext && onPageChange(page + 1)}
+          onClick={() => canNext && onPageChange(effectivePage + 1)}
           disabled={!canNext}
           aria-label="Next page"
         >
