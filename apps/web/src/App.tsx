@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMarketIndicators } from './hooks/useMarketIndicators';
 import { useFearGreed } from './hooks/useFearGreed';
@@ -20,6 +20,7 @@ import { usePagination } from './hooks/usePagination';
 import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
 import type { AlertTriggeredMessage } from './types/alerts';
+import type { FearGreed, TickerQuote } from './types';
 import './App.css';
 
 const queryClient = new QueryClient();
@@ -63,10 +64,38 @@ function MarketIndicators() {
   const { data: httpBtc, isLoading: btcLoading, isFetching: btcFetching } = useBtc();
   const { data: httpSpx, isLoading: spxLoading, isFetching: spxFetching } = useSpx();
 
-  const fearGreedData = wsFearGreed ?? httpFearGreed ?? null;
-  const vixData = wsVix ?? httpVix ?? null;
-  const btcData = wsBtc ?? httpBtc ?? null;
-  const spxData = wsSpx ?? httpSpx ?? null;
+  const lastGoodFearGreedRef = useRef<FearGreed | null>(null);
+  const lastGoodVixRef = useRef<TickerQuote | null>(null);
+  const lastGoodBtcRef = useRef<TickerQuote | null>(null);
+  const lastGoodSpxRef = useRef<TickerQuote | null>(null);
+
+  const currentFearGreedData = wsFearGreed ?? httpFearGreed ?? null;
+  const currentVixData = wsVix ?? httpVix ?? null;
+  const currentBtcData = wsBtc ?? httpBtc ?? null;
+  const currentSpxData = wsSpx ?? httpSpx ?? null;
+
+  useEffect(() => {
+    if (currentFearGreedData) lastGoodFearGreedRef.current = currentFearGreedData;
+  }, [currentFearGreedData]);
+
+  useEffect(() => {
+    if (currentVixData) lastGoodVixRef.current = currentVixData;
+  }, [currentVixData]);
+
+  useEffect(() => {
+    if (currentBtcData) lastGoodBtcRef.current = currentBtcData;
+  }, [currentBtcData]);
+
+  useEffect(() => {
+    if (currentSpxData) lastGoodSpxRef.current = currentSpxData;
+  }, [currentSpxData]);
+
+  const fearGreedData = currentFearGreedData ?? (fgFetching ? lastGoodFearGreedRef.current : null);
+  const vixData = currentVixData ?? (vixFetching ? lastGoodVixRef.current : null);
+  const btcData = currentBtcData ?? (btcFetching ? lastGoodBtcRef.current : null);
+  const spxData = currentSpxData ?? (spxFetching ? lastGoodSpxRef.current : null);
+  const effectiveVixAvailable = vixData !== null || vixAvailable;
+  const effectiveSpxAvailable = spxData !== null || spxAvailable;
 
   const { theme, setTheme, isDark } = useTheme();
   useTickerSync();
@@ -201,14 +230,14 @@ function MarketIndicators() {
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
             fgIsRefreshing={fgFetching}
             vixData={vixData}
-            vixAvailable={vixAvailable}
+            vixAvailable={effectiveVixAvailable}
             vixIsLoading={vixLoading && !wsVix && !httpVix}
             vixIsRefreshing={vixFetching}
             btcData={btcData}
             btcIsLoading={btcLoading && !wsBtc && !httpBtc}
             btcIsRefreshing={btcFetching}
             spxData={spxData}
-            spxAvailable={spxAvailable}
+            spxAvailable={effectiveSpxAvailable}
             spxIsLoading={spxLoading && !wsSpx && !httpSpx}
             spxIsRefreshing={spxFetching}
           />
@@ -226,7 +255,7 @@ function MarketIndicators() {
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
             fgIsRefreshing={fgFetching}
             vixData={vixData}
-            vixAvailable={vixAvailable}
+            vixAvailable={effectiveVixAvailable}
             vixLastUpdate={vixDisplayUpdate}
             vixIsLoading={vixLoading && !wsVix && !httpVix}
             vixIsRefreshing={vixFetching}
@@ -235,7 +264,7 @@ function MarketIndicators() {
             btcIsLoading={btcLoading && !wsBtc && !httpBtc}
             btcIsRefreshing={btcFetching}
             spxData={spxData}
-            spxAvailable={spxAvailable}
+            spxAvailable={effectiveSpxAvailable}
             spxLastUpdate={spxDisplayUpdate}
             spxIsLoading={spxLoading && !wsSpx && !httpSpx}
             spxIsRefreshing={spxFetching}
