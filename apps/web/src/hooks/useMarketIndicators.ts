@@ -3,6 +3,7 @@ import type { FearGreed, TickerQuote } from '../types';
 import type { Alert, AlertTriggeredMessage } from '../types/alerts';
 import { WS_URL } from '../constants';
 import { buildWsUrl } from '../lib/authFetch';
+import { sanitizeTickerQuote } from '../lib/marketData';
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -200,7 +201,7 @@ export function useMarketIndicators(
         }
 
         if (message.type === 'VIX_UPDATE' && 'payload' in message) {
-          const payload = (message as WsMarketMessage).payload as TickerQuote | null;
+          const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
           setVix(payload);
           setVixAvailable(payload !== null);
           setLastVixUpdate(new Date());
@@ -216,7 +217,7 @@ export function useMarketIndicators(
         }
 
         if (message.type === 'BTC_UPDATE' && 'payload' in message) {
-          const payload = (message as WsMarketMessage).payload as TickerQuote | null;
+          const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
           setBtc(payload);
           setLastBtcUpdate(new Date());
           latestBtcPriceRef.current = payload?.price ?? null;
@@ -231,7 +232,7 @@ export function useMarketIndicators(
         }
 
         if (message.type === 'SPX_UPDATE' && 'payload' in message) {
-          const payload = (message as WsMarketMessage).payload as TickerQuote | null;
+          const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
           setSpx(payload);
           setSpxAvailable(payload !== null);
           setLastSpxUpdate(new Date());
