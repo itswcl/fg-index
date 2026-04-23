@@ -13,8 +13,33 @@ const resolvedFormatCache = new Map<string, string>();
 // Maps resolved ticker → cached quote
 const quoteCache = new Map<string, CacheEntry>();
 
-const CACHE_TTL_MS = 15_000; // 15s
+const CACHE_TTL_MS = 15_000; // 15s for stocks/indices
+// Crypto gets a longer TTL because upstreams (Yahoo, CoinGecko) rate-limit
+// hard and the fear-and-greed UI doesn't need sub-minute crypto precision.
+const CRYPTO_CACHE_TTL_MS = 60_000; // 60s for BTC-USD / ETH-USD / …
 const CRYPTO_USD_TICKER_REGEX = /^[A-Z0-9]+-USD$/;
+
+// Yahoo's `query1.finance.yahoo.com` chart endpoint aggressively throttles
+// anonymous IPs (observed 429s at ~60–120 req/hr). When we see a 429 we pause
+// all Yahoo calls for this long before trying again, to avoid hammering the
+// endpoint deeper into a block while we fall through to CoinGecko.
+const YAHOO_COOLDOWN_MS = 5 * 60_000; // 5 min
+let yahooCooldownUntil = 0;
+
+function isYahooInCooldown(): boolean {
+  return Date.now() < yahooCooldownUntil;
+}
+
+function tripYahooCooldown(): void {
+  yahooCooldownUntil = Date.now() + YAHOO_COOLDOWN_MS;
+}
+
+// Exposed for tests so each `it` starts with a clean cooldown state.
+export function _resetTickerServiceState(): void {
+  resolvedFormatCache.clear();
+  quoteCache.clear();
+  yahooCooldownUntil = 0;
+}
 
 function getCached(ticker: string): TickerQuote | null {
   const entry = quoteCache.get(ticker);
@@ -26,8 +51,8 @@ function getCached(ticker: string): TickerQuote | null {
   return entry.data;
 }
 
-function setCache(ticker: string, data: TickerQuote): void {
-  quoteCache.set(ticker, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+function setCache(ticker: string, data: TickerQuote, ttlMs = CACHE_TTL_MS): void {
+  quoteCache.set(ticker, { data, expiresAt: Date.now() + ttlMs });
 }
 
 function isCryptoUsdTicker(ticker: string): boolean {
@@ -97,6 +122,12 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
       },
     });
 
+    // Rate-limited → trip cooldown so we stop hammering Yahoo and route crypto
+    // through CoinGecko for the next few minutes.
+    if (response.status === 429) {
+      tripYahooCooldown();
+      return null;
+    }
     if (!response.ok) return null;
 
     const json = await response.json() as {
@@ -146,6 +177,92 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
   }
 }
 
+// ─── CoinGecko fallback for crypto ─────────────────────────────────
+// When Yahoo is rate-limited we need a crypto-native source that won't serve
+// stale data the way Google Finance has been. CoinGecko's /simple/price is
+// free, keyless, returns fresh spot + 24h change, and tolerates ~30 req/min.
+const COINGECKO_SYMBOL_TO_ID: Record<string, { id: string; name: string }> = {
+  "BTC-USD": { id: "bitcoin", name: "Bitcoin USD" },
+  "ETH-USD": { id: "ethereum", name: "Ethereum USD" },
+  "SOL-USD": { id: "solana", name: "Solana USD" },
+  "BNB-USD": { id: "binancecoin", name: "BNB USD" },
+  "XRP-USD": { id: "ripple", name: "XRP USD" },
+  "ADA-USD": { id: "cardano", name: "Cardano USD" },
+  "DOGE-USD": { id: "dogecoin", name: "Dogecoin USD" },
+  "AVAX-USD": { id: "avalanche-2", name: "Avalanche USD" },
+  "MATIC-USD": { id: "matic-network", name: "Polygon USD" },
+  "DOT-USD": { id: "polkadot", name: "Polkadot USD" },
+  "LINK-USD": { id: "chainlink", name: "Chainlink USD" },
+  "LTC-USD": { id: "litecoin", name: "Litecoin USD" },
+  "BCH-USD": { id: "bitcoin-cash", name: "Bitcoin Cash USD" },
+  "TRX-USD": { id: "tron", name: "TRON USD" },
+  "ATOM-USD": { id: "cosmos", name: "Cosmos USD" },
+};
+
+async function fetchCoinGeckoQuote(ticker: string): Promise<TickerQuote | null> {
+  const mapped = COINGECKO_SYMBOL_TO_ID[ticker];
+  if (!mapped) return null;
+
+  try {
+    const url =
+      `https://api.coingecko.com/api/v3/simple/price` +
+      `?ids=${encodeURIComponent(mapped.id)}&vs_currencies=usd&include_24hr_change=true`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": env.SCRAPER_USER_AGENT,
+        Accept: "application/json",
+      },
+    });
+    if (!response.ok) return null;
+
+    const json = (await response.json()) as Record<
+      string,
+      { usd?: number; usd_24h_change?: number } | undefined
+    >;
+    const row = json[mapped.id];
+    const price = row?.usd;
+    if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+      return null;
+    }
+
+    // CoinGecko gives us a 24h % change, not a prev close. Derive prev close
+    // from (price / (1 + pct/100)) so change/changePercent stay consistent
+    // with the shape of other providers.
+    const changePercent =
+      typeof row?.usd_24h_change === "number" &&
+      Number.isFinite(row.usd_24h_change)
+        ? +row.usd_24h_change.toFixed(4)
+        : 0;
+    const previousClose =
+      changePercent !== 0 ? +(price / (1 + changePercent / 100)).toFixed(4) : price;
+    const change = +(price - previousClose).toFixed(4);
+
+    return {
+      ticker,
+      name: mapped.name,
+      price,
+      previousClose,
+      change,
+      changePercent,
+      fetchedAt: new Date().toISOString(),
+      sourceUrl: url,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Crypto-only fetch path: Yahoo first (unless cooling down), then CoinGecko.
+// Google is deliberately excluded — observed to serve stale crypto snapshots,
+// which is the bug this fallback chain exists to avoid.
+async function fetchCryptoQuote(ticker: string): Promise<TickerQuote | null> {
+  if (!isYahooInCooldown()) {
+    const yahoo = await fetchYahooChartQuote(ticker);
+    if (yahoo) return yahoo;
+  }
+  return fetchCoinGeckoQuote(ticker);
+}
+
 // ─── Yahoo Finance fallback ────────────────────────────────────────
 async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
   try {
@@ -185,18 +302,28 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
 const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME", "-USD"];
 
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
+  // ─── Crypto: Yahoo → CoinGecko. Never Google. ────────────────────
+  if (isCryptoUsdTicker(rawTicker)) {
+    const cached = getCached(rawTicker);
+    if (cached) return cached;
+
+    const crypto = await fetchCryptoQuote(rawTicker);
+    if (crypto) {
+      resolvedFormatCache.set(rawTicker, rawTicker);
+      setCache(rawTicker, crypto, CRYPTO_CACHE_TTL_MS);
+      return crypto;
+    }
+    // If both crypto sources fail, return null rather than serving stale
+    // Google data. The caller surfaces this as a missing/null quote.
+    return null;
+  }
+
+  // ─── Stocks / indices (existing flow) ────────────────────────────
   // 1. Check resolved format cache
   const knownFormat = resolvedFormatCache.get(rawTicker);
   if (knownFormat) {
     const cached = getCached(knownFormat);
     if (cached) return cached;
-    if (isCryptoUsdTicker(knownFormat)) {
-      const yahooChart = await fetchYahooChartQuote(knownFormat);
-      if (yahooChart) {
-        setCache(knownFormat, yahooChart);
-        return yahooChart;
-      }
-    }
     const result = await scrapeGoogleFinance(knownFormat);
     if (result) {
       setCache(knownFormat, result);
@@ -204,18 +331,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 2. Prefer Yahoo chart JSON for crypto pairs such as BTC-USD because
-  // Google Finance has recently served stale HTML snapshots for them.
-  if (isCryptoUsdTicker(rawTicker)) {
-    const yahooChart = await fetchYahooChartQuote(rawTicker);
-    if (yahooChart) {
-      resolvedFormatCache.set(rawTicker, rawTicker);
-      setCache(rawTicker, yahooChart);
-      return yahooChart;
-    }
-  }
-
-  // 3. Try raw ticker on Google Finance
+  // 2. Try raw ticker on Google Finance
   const direct = await scrapeGoogleFinance(rawTicker);
   if (direct) {
     resolvedFormatCache.set(rawTicker, rawTicker);
@@ -223,7 +339,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     return direct;
   }
 
-  // 4. Try common exchange suffixes
+  // 3. Try common exchange suffixes
   for (const suffix of EXCHANGE_SUFFIXES) {
     const fmt = `${rawTicker}${suffix}`;
     const result = await scrapeGoogleFinance(fmt);
@@ -234,13 +350,13 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 5. Yahoo Finance fallback — try as-is
+  // 4. Yahoo Finance fallback — try as-is
   const yahoo = await scrapeYahooFinance(rawTicker);
   if (yahoo) {
     return yahoo;
   }
 
-  // 6. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
+  // 5. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
   if (!rawTicker.includes("=") && !rawTicker.includes(":")) {
     const yahooFutures = await scrapeYahooFinance(`${rawTicker}=F`);
     if (yahooFutures) {
