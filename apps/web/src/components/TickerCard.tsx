@@ -1,5 +1,6 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
+import { hasFiniteNumber } from '../lib/marketData';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -77,8 +78,16 @@ export function TickerCard({
     );
   }
 
-  const change = data?.change ?? 0;
-  const changePct = data?.changePercent ?? 0;
+  // Defensive: previous "null quote crash" fix hardened BtcCard/SpxCard/VixCard
+  // with hasFiniteNumber but missed this component — and TickerCard renders for
+  // every custom ticker, so any non-finite field that slips past sanitizeTickerQuote
+  // (e.g. from a stale cache entry) would reach toLocaleString/toFixed below and
+  // blow up the whole page. Gate each numeric field so a partial quote still
+  // renders a safe em-dash instead of crashing.
+  const hasPrice = hasFiniteNumber(data?.price);
+  const hasChange = hasFiniteNumber(data?.change);
+  const hasChangePct = hasFiniteNumber(data?.changePercent);
+  const change = hasChange ? (data!.change as number) : 0;
   const isPositive = change >= 0;
   // Standard stock coloring: green = up, red = down (opposite of VIX)
   const color = isPositive ? '#27AE60' : '#E74C3C';
@@ -112,15 +121,17 @@ export function TickerCard({
                   {data.name}
                 </span>
               )}
-              {data?.price != null ? (
-                <AnimatedNumber value={data.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+              {hasPrice ? (
+                <AnimatedNumber value={data!.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
               ) : (
                 <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
               )}
-              <div className="change-box">
-                <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${fmtPrice(n)}`} className="change" style={{ color }} />
-                <AnimatedNumber value={Math.abs(changePct)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
-              </div>
+              {hasChange && hasChangePct && (
+                <div className="change-box">
+                  <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${fmtPrice(n)}`} className="change" style={{ color }} />
+                  <AnimatedNumber value={Math.abs(data!.changePercent as number)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
+                </div>
+              )}
             </div>
             <div className="footer-row">
               {lastUpdate && (
