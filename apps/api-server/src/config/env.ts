@@ -17,7 +17,7 @@ const envSchema = z.object({
   FEAR_GREED_INTERVAL_MS: z.string().transform(Number).default("1800000"),
   VIX_REALTIME_INTERVAL_MS: z.string().transform(Number).default("10000"),
   VIX_FALLBACK_INTERVAL_MS: z.string().transform(Number).default("300000"),
-  BTC_INTERVAL_MS: z.string().transform(Number).default("30000"),
+  BTC_INTERVAL_MS: z.string().transform(Number).default("60000"),
   SPX_INTERVAL_MS: z.string().transform(Number).default("10000"),
   CORS_ORIGIN: z.string().default("*"),
   INTERNAL_API_KEY: z.string().default("dev-key-123"),
