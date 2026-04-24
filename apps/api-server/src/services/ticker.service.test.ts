@@ -224,3 +224,121 @@ describe("ticker service — BTC-USD / crypto path", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
   });
 });
+
+describe("ticker service — stale-on-error fallback", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    vi.useRealTimers();
+    applyEnv();
+  });
+
+  it("serves the last-known quote when a later fetch returns null (TSLA-style flake)", async () => {
+    // Scenario: Google serves TSLA fine on call 1, then ~16 s later serves an
+    // HTML page without `data-last-price` (observed in the wild). Before
+    // this change the batch endpoint shipped { TSLA: null } and the card
+    // rendered "Not Found". After this change we serve the last validated
+    // quote so the user never sees that flash.
+    let call = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/TSLA")) {
+        call += 1;
+        if (call === 1) {
+          return new Response(
+            '<html><div class="zzDege">Tesla, Inc.</div>' +
+              '<div data-last-price="376.30"></div>' +
+              '<div class="P6K39c">$370.00</div></html>',
+            { status: 200, headers: { "Content-Type": "text/html" } }
+          );
+        }
+        // Second call: Google returned HTML but no price element.
+        return new Response(
+          '<html><div class="zzDege">Tesla, Inc.</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      // Block suffix retries and Yahoo fallbacks so the second fetch path
+      // really does resolve to null.
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    // Fake timers so we can age the 15 s short cache without flaking the
+    // 24 h last-known ceiling.
+    vi.useFakeTimers({ now: new Date("2026-04-24T12:00:00Z") });
+
+    // 1st call: Google serves the quote, seeds both caches.
+    const fresh = await mod.fetchTickerQuote("TSLA");
+    expect(fresh?.price).toBe(376.3);
+
+    // Age past short cache TTL (15 s) but nowhere near 24 h.
+    vi.setSystemTime(new Date("2026-04-24T12:00:20Z"));
+
+    // 2nd call: Google returns HTML without data-last-price → resolveAndFetch
+    // returns null → we fall back to last-known instead of null.
+    const stale = await mod.fetchTickerQuote("TSLA");
+    expect(stale).not.toBeNull();
+    expect(stale?.ticker).toBe("TSLA");
+    expect(stale?.price).toBe(376.3);
+    expect(stale?.fetchedAt).toBe(fresh?.fetchedAt); // same timestamp — it IS the prior quote
+
+    vi.useRealTimers();
+  });
+
+  it("returns null when we've never seen the symbol (ESW00-style bad input)", async () => {
+    // No cached fallback exists for a never-seen symbol. Every upstream
+    // returns nothing → null propagates, since fabricating data would be
+    // worse than admitting coverage loss.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 404 }))
+    );
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    const quote = await mod.fetchTickerQuote("ESW00");
+    expect(quote).toBeNull();
+  });
+
+  it("does not serve last-known that has aged past the 24h ceiling", async () => {
+    let call = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        call += 1;
+        if (call === 1) {
+          return new Response(
+            '<html><div class="zzDege">Apple Inc.</div>' +
+              '<div data-last-price="180.50"></div>' +
+              '<div class="P6K39c">$179.00</div></html>',
+            { status: 200, headers: { "Content-Type": "text/html" } }
+          );
+        }
+        return new Response("<html></html>", { status: 200 });
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    vi.useFakeTimers({ now: new Date("2026-04-24T12:00:00Z") });
+
+    const fresh = await mod.fetchTickerQuote("AAPL");
+    expect(fresh?.price).toBe(180.5);
+
+    // Jump 25 hours forward — past LAST_KNOWN_MAX_AGE_MS.
+    vi.setSystemTime(new Date("2026-04-25T13:00:00Z"));
+
+    const quote = await mod.fetchTickerQuote("AAPL");
+    expect(quote).toBeNull();
+
+    vi.useRealTimers();
+  });
+});

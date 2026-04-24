@@ -14,6 +14,16 @@ const resolvedFormatCache = new Map<string, string>();
 // Maps resolved ticker → cached quote
 const quoteCache = new Map<string, CacheEntry>();
 
+// Separate, much longer-lived cache of the last validated quote we ever saw
+// for a symbol. Consulted only when the fresh fetch path returns null (e.g.
+// Google served an HTML page with no data-last-price element — a transient
+// SSR variance we've observed for TSLA). Serving last-known beats serving
+// null, which the frontend renders as "Not Found". Keys are both raw tickers
+// and their resolved formats so either lookup path can hit.
+const lastKnownCache = new Map<string, TickerQuote>();
+const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h hard ceiling
+const lastKnownStoredAt = new Map<string, number>();
+
 const CACHE_TTL_MS = 15_000; // 15s for stocks/indices
 // Crypto gets a longer TTL because upstreams (Yahoo, CoinGecko) rate-limit
 // hard and the fear-and-greed UI doesn't need sub-minute crypto precision.
@@ -39,7 +49,31 @@ function tripYahooCooldown(): void {
 export function _resetTickerServiceState(): void {
   resolvedFormatCache.clear();
   quoteCache.clear();
+  lastKnownCache.clear();
+  lastKnownStoredAt.clear();
   yahooCooldownUntil = 0;
+}
+
+// Write-through: called alongside every `setCache` success so we always have
+// a fallback if the next fetch misses. Indexed by both the raw ticker and
+// its resolved format so a later call that only knows one key still hits.
+function rememberLastKnown(ticker: string, data: TickerQuote): void {
+  lastKnownCache.set(ticker, data);
+  lastKnownStoredAt.set(ticker, Date.now());
+}
+
+function getLastKnown(ticker: string): TickerQuote | null {
+  const entry = lastKnownCache.get(ticker);
+  if (!entry) return null;
+  const storedAt = lastKnownStoredAt.get(ticker) ?? 0;
+  if (Date.now() - storedAt > LAST_KNOWN_MAX_AGE_MS) {
+    // Don't serve day-old prices — let the null propagate so clients see
+    // that we've genuinely lost coverage rather than a stale number.
+    lastKnownCache.delete(ticker);
+    lastKnownStoredAt.delete(ticker);
+    return null;
+  }
+  return entry;
 }
 
 function getCached(ticker: string): TickerQuote | null {
@@ -54,6 +88,9 @@ function getCached(ticker: string): TickerQuote | null {
 
 function setCache(ticker: string, data: TickerQuote, ttlMs = CACHE_TTL_MS): void {
   quoteCache.set(ticker, { data, expiresAt: Date.now() + ttlMs });
+  // Shadow every validated success into last-known so a later null fetch
+  // can serve stale-but-complete instead of returning null.
+  rememberLastKnown(ticker, data);
 }
 
 function isCryptoUsdTicker(ticker: string): boolean {
@@ -395,5 +432,16 @@ export async function fetchTickerQuote(
   // Defense-in-depth: every exit through the public API runs through the
   // validator so any future scraper regression that lets a non-finite field
   // slip through gets coerced to null here instead of reaching the wire.
-  return validateTickerQuote(await resolveAndFetch(upperTicker));
+  const fresh = validateTickerQuote(await resolveAndFetch(upperTicker));
+  if (fresh) return fresh;
+
+  // Fresh fetch missed (transient scraper flake, upstream hiccup, etc.).
+  // Serve the last validated quote we ever saw for this symbol rather than
+  // null, so the frontend doesn't flash "Not Found" over a card that we
+  // know the real price for. Try both the raw ticker and any resolved
+  // format we've learned — either path may be the one that was written.
+  const lastKnown =
+    getLastKnown(upperTicker) ??
+    (knownFormat ? getLastKnown(knownFormat) : null);
+  return lastKnown; // null only when we've genuinely never seen this symbol
 }
