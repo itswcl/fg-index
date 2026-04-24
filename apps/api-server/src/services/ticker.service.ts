@@ -27,8 +27,14 @@ const lastKnownStoredAt = new Map<string, number>();
 const CACHE_TTL_MS = 15_000; // 15s for stocks/indices
 // Crypto gets a longer TTL because upstreams (Yahoo, CoinGecko) rate-limit
 // hard and the fear-and-greed UI doesn't need sub-minute crypto precision.
-const CRYPTO_CACHE_TTL_MS = 60_000; // 60s for BTC-USD / ETH-USD / …
-const CRYPTO_USD_TICKER_REGEX = /^[A-Z0-9]+-USD$/;
+const CRYPTO_CACHE_TTL_MS = 60_000; // 60s for BTC-USD
+// Product scope: the only supported crypto is Bitcoin. Every other input is a
+// stock or index. Keeping the set this narrow prevents a stock request from
+// ever being interpreted as crypto — e.g. before we locked this down, a
+// transient Google-Finance SSR miss on AMD:NASDAQ cascaded through the suffix
+// loop to AMD-USD, which Google resolves to a crypto token page, poisoning
+// the resolved-format cache with a crypto URL for a semiconductor stock.
+const CRYPTO_TICKERS = new Set(["BTC", "BTC-USD"]);
 
 // Yahoo's `query1.finance.yahoo.com` chart endpoint aggressively throttles
 // anonymous IPs (observed 429s at ~60–120 req/hr). When we see a 429 we pause
@@ -93,8 +99,15 @@ function setCache(ticker: string, data: TickerQuote, ttlMs = CACHE_TTL_MS): void
   rememberLastKnown(ticker, data);
 }
 
-function isCryptoUsdTicker(ticker: string): boolean {
-  return CRYPTO_USD_TICKER_REGEX.test(ticker);
+function isCryptoTicker(ticker: string): boolean {
+  return CRYPTO_TICKERS.has(ticker);
+}
+
+// Map any supported crypto input to its canonical `-USD` form so we hit the
+// same cache/CoinGecko key regardless of whether the caller sent "BTC" or
+// "BTC-USD".
+function canonicalCryptoTicker(ticker: string): string {
+  return ticker.endsWith("-USD") ? ticker : `${ticker}-USD`;
 }
 
 // ─── Google Finance scraper ────────────────────────────────────────
@@ -347,18 +360,23 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
 }
 
 // ─── Auto-resolution strategy ──────────────────────────────────────
-const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME", "-USD"];
+// Stock/index exchange suffixes ONLY. `-USD` is deliberately excluded: it's a
+// crypto format and Google Finance resolves stock-letter strings like "AMD" to
+// crypto token pages under `-USD`, which poisoned our resolved-format cache
+// (see the CRYPTO_TICKERS comment). Crypto routes through its own path above.
+const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME"];
 
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   // ─── Crypto: Yahoo → CoinGecko. Never Google. ────────────────────
-  if (isCryptoUsdTicker(rawTicker)) {
-    const cached = getCached(rawTicker);
+  if (isCryptoTicker(rawTicker)) {
+    const canonical = canonicalCryptoTicker(rawTicker);
+    const cached = getCached(canonical);
     if (cached) return cached;
 
-    const crypto = await fetchCryptoQuote(rawTicker);
+    const crypto = await fetchCryptoQuote(canonical);
     if (crypto) {
-      resolvedFormatCache.set(rawTicker, rawTicker);
-      setCache(rawTicker, crypto, CRYPTO_CACHE_TTL_MS);
+      resolvedFormatCache.set(rawTicker, canonical);
+      setCache(canonical, crypto, CRYPTO_CACHE_TTL_MS);
       return crypto;
     }
     // If both crypto sources fail, return null rather than serving stale

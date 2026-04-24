@@ -112,7 +112,9 @@ describe("ticker service — BTC-USD / crypto path", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
   });
 
-  it("trips a Yahoo cooldown on 429 and routes the next crypto request straight to CoinGecko", async () => {
+  it("trips a Yahoo cooldown on 429 and routes subsequent BTC requests straight to CoinGecko", async () => {
+    vi.useFakeTimers({ now: new Date("2026-04-24T12:00:00Z") });
+
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
 
@@ -121,15 +123,10 @@ describe("ticker service — BTC-USD / crypto path", () => {
       }
 
       if (url.includes("api.coingecko.com")) {
-        const id = url.includes("bitcoin") ? "bitcoin" : "ethereum";
-        const body =
-          id === "bitcoin"
-            ? { bitcoin: { usd: 77900, usd_24h_change: 1.2 } }
-            : { ethereum: { usd: 3450, usd_24h_change: 2.1 } };
-        return new Response(JSON.stringify(body), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ bitcoin: { usd: 77900, usd_24h_change: 1.2 } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       }
 
       throw new Error(`unexpected fetch: ${url}`);
@@ -141,15 +138,18 @@ describe("ticker service — BTC-USD / crypto path", () => {
     mod._resetTickerServiceState();
 
     // First crypto request: Yahoo 429s (trips cooldown), CoinGecko serves BTC.
-    const btc = await mod.fetchTickerQuote("BTC-USD");
-    expect(btc?.ticker).toBe("BTC-USD");
-    expect(btc?.price).toBe(77900);
+    const first = await mod.fetchTickerQuote("BTC-USD");
+    expect(first?.ticker).toBe("BTC-USD");
+    expect(first?.price).toBe(77900);
 
-    // Second crypto request (different symbol → no cache hit): should NOT
-    // call Yahoo again because cooldown is active. CoinGecko only.
-    const eth = await mod.fetchTickerQuote("ETH-USD");
-    expect(eth?.ticker).toBe("ETH-USD");
-    expect(eth?.price).toBe(3450);
+    // Advance past the 60s crypto cache so the second call re-fetches.
+    // With the cooldown active, it should go straight to CoinGecko — Yahoo
+    // is still within the 5-minute cooldown window and must be skipped.
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    const second = await mod.fetchTickerQuote("BTC-USD");
+    expect(second?.ticker).toBe("BTC-USD");
+    expect(second?.price).toBe(77900);
 
     const yahooCalls = fetchMock.mock.calls.filter(([u]) =>
       String(u).includes("query1.finance.yahoo.com")
@@ -158,10 +158,57 @@ describe("ticker service — BTC-USD / crypto path", () => {
       String(u).includes("api.coingecko.com")
     ).length;
 
-    expect(yahooCalls).toBe(1); // only BTC's first attempt — ETH skipped Yahoo
+    expect(yahooCalls).toBe(1); // only the first attempt — cooldown skipped the second
     expect(coinGeckoCalls).toBe(2);
     // Google must never be called in the crypto path.
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
+
+    vi.useRealTimers();
+  });
+
+  it("never resolves a stock like AMD to the -USD crypto URL, even if :NASDAQ flakes", async () => {
+    // Regression: before the fix, EXCHANGE_SUFFIXES included "-USD" as the
+    // last fallback. Google Finance happens to serve a crypto-token page at
+    // `/finance/quote/AMD-USD`, so a transient miss on AMD:NASDAQ would
+    // cascade down to AMD-USD, cache that as AMD's resolved format, and
+    // every future AMD lookup would hit the crypto URL for a stock.
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (!url.includes("google.com/finance/quote/")) {
+        throw new Error(`unexpected fetch: ${url}`);
+      }
+      if (url.includes("AMD%3ANASDAQ") || url.endsWith("/AMD")) {
+        // Simulate the transient SSR flake: page served without data-last-price.
+        return new Response("<html><body>offline</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      // If the code were to hit /AMD-USD (old bug), this branch would fire.
+      // We want this test to fail loudly if the regression is ever reintroduced.
+      if (url.includes("AMD-USD")) {
+        return new Response(
+          '<html><div data-last-price="0.0012"></div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("<html><body>miss</body></html>", {
+        status: 404,
+        headers: { "Content-Type": "text/html" },
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    const quote = await mod.fetchTickerQuote("AMD");
+    expect(quote).toBeNull();
+
+    // Hard assertion: the crypto URL must never have been requested.
+    const urls = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls.some((u) => u.includes("AMD-USD"))).toBe(false);
   });
 
   it("never returns a NaN `change` for a non-crypto Google-scraped ticker (garbage prev-close)", async () => {
