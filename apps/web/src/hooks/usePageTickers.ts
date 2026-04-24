@@ -4,6 +4,7 @@ import type { TickerQuote } from '../types';
 import { API_BASE_URL, TICKER_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
 import { sanitizeTickerQuote } from '../lib/marketData';
+import { loadQuote, saveQuote } from '../lib/quoteCache';
 
 /**
  * Batch quote fetch. One `GET /api/quote/batch?symbols=A,B,C` per page
@@ -65,6 +66,26 @@ export function usePageTickers(symbols: string[], opts: UsePageTickersOptions = 
     retry: 2,
   });
 
+  // Seed the query cache from localStorage for any on-page symbol whose
+  // entry hasn't been populated yet. This complements the app-bootstrap
+  // hydration in App.tsx — it also covers symbols added to a page after
+  // initial render (e.g. after navigating back from another page). Only
+  // writes `undefined` slots, so it never overwrites a live batch result
+  // with stale cached data.
+  useEffect(() => {
+    for (const sym of sortedSymbols) {
+      const existing = queryClient.getQueryData<TickerQuote | null | undefined>([
+        'ticker',
+        sym,
+      ]);
+      if (existing !== undefined) continue;
+      const cached = loadQuote(sym);
+      if (cached) {
+        queryClient.setQueryData<TickerQuote | null>(['ticker', sym], cached.quote);
+      }
+    }
+  }, [sortedSymbols, queryClient]);
+
   // Fan out into per-symbol cache so useTicker readers re-render. null is a
   // legitimate cached value ("batch returned no data for this symbol") —
   // distinct from undefined ("cache not seeded yet").
@@ -73,6 +94,10 @@ export function usePageTickers(symbols: string[], opts: UsePageTickersOptions = 
     if (!quotes) return;
     for (const [sym, quote] of Object.entries(quotes)) {
       queryClient.setQueryData<TickerQuote | null>(['ticker', sym], quote ?? null);
+      // Persist successful fetches so the next reload can paint them
+      // immediately. Null payloads are intentionally not persisted — see
+      // `saveQuote` docs in lib/quoteCache.ts.
+      saveQuote(sym, quote);
     }
   }, [query.data, queryClient]);
 

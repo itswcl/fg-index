@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { hydrateQuoteCacheIntoQueryClient } from './lib/quoteCache';
 import { useMarketIndicators } from './hooks/useMarketIndicators';
 import { useFearGreed } from './hooks/useFearGreed';
 import { useVix } from './hooks/useVix';
@@ -24,6 +25,11 @@ import type { FearGreed, TickerQuote } from './types';
 import './App.css';
 
 const queryClient = new QueryClient();
+// Seed every ['ticker', SYMBOL] cache entry from localStorage before the
+// tree first renders, so custom ticker cards paint last-known prices on
+// reload instead of flashing shimmer / "Not Found" while the batch
+// request is in flight. Live fetches overwrite as they arrive.
+hydrateQuoteCacheIntoQueryClient(queryClient);
 
 function MarketIndicators() {
   const {
