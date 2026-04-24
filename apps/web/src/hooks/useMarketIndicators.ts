@@ -21,10 +21,8 @@ interface WsMarketMessage {
 interface UseMarketIndicatorsReturn {
   fearGreed: FearGreed | null;
   vix: TickerQuote | null;
-  vixAvailable: boolean;
   btc: TickerQuote | null;
   spx: TickerQuote | null;
-  spxAvailable: boolean;
   wsStatus: WsStatus;
   lastFearGreedUpdate: Date | null;
   lastVixUpdate: Date | null;
@@ -120,9 +118,11 @@ export function useMarketIndicators(
 
   // Lazy initializers paint last-known values from localStorage on first
   // render so users don't see an N/A / "Market Closed" flash between
-  // reloads while the WS handshake is still in flight. `vixAvailable`
-  // and `spxAvailable` stay optimistically `true` until the server
-  // explicitly sends a null payload — hydrated cached data is real data.
+  // reloads while the WS handshake is still in flight. Once any value is
+  // in place (from cache or live), we never voluntarily return to null —
+  // a transient null payload (market closed / scraper miss) is treated
+  // as "no update" rather than "wipe the display", so users keep seeing
+  // the most recent real price with its `Updated HH:MM:SS` timestamp.
   const cachedFearGreed = loadFearGreed();
   const cachedVix = loadQuote('VIX');
   const cachedBtc = loadQuote('BTC');
@@ -132,10 +132,8 @@ export function useMarketIndicators(
     () => cachedFearGreed?.data ?? null,
   );
   const [vix, setVix] = useState<TickerQuote | null>(() => cachedVix?.quote ?? null);
-  const [vixAvailable, setVixAvailable] = useState(true);
   const [btc, setBtc] = useState<TickerQuote | null>(() => cachedBtc?.quote ?? null);
   const [spx, setSpx] = useState<TickerQuote | null>(() => cachedSpx?.quote ?? null);
-  const [spxAvailable, setSpxAvailable] = useState(true);
   // Initial mount shows the yellow pulse ("loading") until the first
   // successful WS handshake. After that, we never go back to yellow —
   // transient reconnects stay green (silent) until the 15s disconnect
@@ -230,56 +228,64 @@ export function useMarketIndicators(
           }
         }
 
+        // Null payloads (market closed / scraper miss) are treated as
+        // "no update" — we keep the last known state, timestamp, ref,
+        // and cached value intact. This means the UI never flips back
+        // to "Market Closed" once we have any real data.
         if (message.type === 'VIX_UPDATE' && 'payload' in message) {
           const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
-          const now = new Date();
-          setVix(payload);
-          setVixAvailable(payload !== null);
-          setLastVixUpdate(now);
-          latestVixPriceRef.current = payload?.price ?? null;
-          saveQuote('VIX', payload, now);
-          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
-            evaluateAlertsLocally(alertsRef.current, {
-              fearGreedScore: latestFearGreedScoreRef.current,
-              vixPrice: payload?.price ?? null,
-              btcPrice: latestBtcPriceRef.current,
-              spxPrice: latestSpxPriceRef.current,
-            }, onAlertTriggeredRef.current);
+          if (payload) {
+            const now = new Date();
+            setVix(payload);
+            setLastVixUpdate(now);
+            latestVixPriceRef.current = payload.price;
+            saveQuote('VIX', payload, now);
+            if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+              evaluateAlertsLocally(alertsRef.current, {
+                fearGreedScore: latestFearGreedScoreRef.current,
+                vixPrice: payload.price,
+                btcPrice: latestBtcPriceRef.current,
+                spxPrice: latestSpxPriceRef.current,
+              }, onAlertTriggeredRef.current);
+            }
           }
         }
 
         if (message.type === 'BTC_UPDATE' && 'payload' in message) {
           const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
-          const now = new Date();
-          setBtc(payload);
-          setLastBtcUpdate(now);
-          latestBtcPriceRef.current = payload?.price ?? null;
-          saveQuote('BTC', payload, now);
-          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
-            evaluateAlertsLocally(alertsRef.current, {
-              fearGreedScore: latestFearGreedScoreRef.current,
-              vixPrice: latestVixPriceRef.current,
-              btcPrice: payload?.price ?? null,
-              spxPrice: latestSpxPriceRef.current,
-            }, onAlertTriggeredRef.current);
+          if (payload) {
+            const now = new Date();
+            setBtc(payload);
+            setLastBtcUpdate(now);
+            latestBtcPriceRef.current = payload.price;
+            saveQuote('BTC', payload, now);
+            if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+              evaluateAlertsLocally(alertsRef.current, {
+                fearGreedScore: latestFearGreedScoreRef.current,
+                vixPrice: latestVixPriceRef.current,
+                btcPrice: payload.price,
+                spxPrice: latestSpxPriceRef.current,
+              }, onAlertTriggeredRef.current);
+            }
           }
         }
 
         if (message.type === 'SPX_UPDATE' && 'payload' in message) {
           const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
-          const now = new Date();
-          setSpx(payload);
-          setSpxAvailable(payload !== null);
-          setLastSpxUpdate(now);
-          latestSpxPriceRef.current = payload?.price ?? null;
-          saveQuote('SPX', payload, now);
-          if (onAlertTriggeredRef.current && alertsRef.current?.length) {
-            evaluateAlertsLocally(alertsRef.current, {
-              fearGreedScore: latestFearGreedScoreRef.current,
-              vixPrice: latestVixPriceRef.current,
-              btcPrice: latestBtcPriceRef.current,
-              spxPrice: payload?.price ?? null,
-            }, onAlertTriggeredRef.current);
+          if (payload) {
+            const now = new Date();
+            setSpx(payload);
+            setLastSpxUpdate(now);
+            latestSpxPriceRef.current = payload.price;
+            saveQuote('SPX', payload, now);
+            if (onAlertTriggeredRef.current && alertsRef.current?.length) {
+              evaluateAlertsLocally(alertsRef.current, {
+                fearGreedScore: latestFearGreedScoreRef.current,
+                vixPrice: latestVixPriceRef.current,
+                btcPrice: latestBtcPriceRef.current,
+                spxPrice: payload.price,
+              }, onAlertTriggeredRef.current);
+            }
           }
         }
 
@@ -330,5 +336,5 @@ export function useMarketIndicators(
     };
   }, [connect]);
 
-  return { fearGreed, vix, vixAvailable, btc, spx, spxAvailable, wsStatus, lastFearGreedUpdate, lastVixUpdate, lastBtcUpdate, lastSpxUpdate };
+  return { fearGreed, vix, btc, spx, wsStatus, lastFearGreedUpdate, lastVixUpdate, lastBtcUpdate, lastSpxUpdate };
 }

@@ -7,34 +7,20 @@ import { AnimatedNumber } from './AnimatedNumber';
 
 interface VixCardProps {
   data: TickerQuote | null;
-  vixAvailable: boolean;
   lastUpdate: Date | null;
   isLoading?: boolean;
   isRefreshing?: boolean;
   isDark: boolean;
 }
 
-export function VixCard({ data, vixAvailable, lastUpdate, isLoading, isRefreshing, isDark }: VixCardProps) {
+export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: VixCardProps) {
+  // No "Market Closed" branch by design. Once we have any value — from
+  // localStorage hydration or a live WS tick — a later null payload is
+  // ignored upstream in `useMarketIndicators`, so the card keeps showing
+  // the last known price with its `Updated HH:MM:SS` footer. The first-
+  // ever visit with zero cached data falls through to the loading
+  // shimmer below until the first WS message arrives.
   const showLoading = isLoading || (isRefreshing && !data);
-
-  if (!vixAvailable) {
-    return (
-      <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
-        <div className="card-inner">
-          <span className="card-label">VIX</span>
-          <div className="price-container">
-            <span className="na-text">N/A</span>
-            <span className="na-subtext">Market Closed</span>
-          </div>
-          <div className="footer-row">
-            {lastUpdate && (
-              <span className="updated-at">Last Close {lastUpdate.toLocaleTimeString()}</span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Same defensive guards as TickerCard — sanitizeTickerQuote should reject
   // quotes missing any numeric field, but a stale cache entry or race during

@@ -54,7 +54,6 @@ interface CardGridProps {
   fgIsLoading: boolean;
   fgIsRefreshing: boolean;
   vixData: TickerQuote | null;
-  vixAvailable: boolean;
   vixLastUpdate: Date | null;
   vixIsLoading: boolean;
   vixIsRefreshing: boolean;
@@ -63,7 +62,6 @@ interface CardGridProps {
   btcIsLoading: boolean;
   btcIsRefreshing: boolean;
   spxData: TickerQuote | null;
-  spxAvailable: boolean;
   spxLastUpdate: Date | null;
   spxIsLoading: boolean;
   spxIsRefreshing: boolean;
@@ -147,7 +145,6 @@ function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
       return (
         <VixCard
           data={p.vixData}
-          vixAvailable={p.vixAvailable}
           lastUpdate={p.vixLastUpdate}
           isLoading={p.vixIsLoading}
           isRefreshing={p.vixIsRefreshing}
@@ -168,7 +165,6 @@ function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
       return (
         <SpxCard
           data={p.spxData}
-          spxAvailable={p.spxAvailable}
           lastUpdate={p.spxLastUpdate}
           isLoading={p.spxIsLoading}
           isRefreshing={p.spxIsRefreshing}

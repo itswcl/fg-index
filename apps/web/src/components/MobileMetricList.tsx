@@ -40,14 +40,12 @@ interface MobileMetricListProps {
   fgIsLoading: boolean;
   fgIsRefreshing: boolean;
   vixData: TickerQuote | null;
-  vixAvailable: boolean;
   vixIsLoading: boolean;
   vixIsRefreshing: boolean;
   btcData: TickerQuote | null;
   btcIsLoading: boolean;
   btcIsRefreshing: boolean;
   spxData: TickerQuote | null;
-  spxAvailable: boolean;
   spxIsLoading: boolean;
   spxIsRefreshing: boolean;
 }
@@ -142,7 +140,6 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changePercent: v?.changePercent ?? null,
         changeMode: 'inverted',
         isLoading: showLoading,
-        isNa: !p.vixAvailable,
       };
     }
     case 'btc': {
@@ -171,7 +168,6 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changePercent: s?.changePercent ?? null,
         changeMode: 'standard',
         isLoading: showLoading,
-        isNa: !p.spxAvailable,
       };
     }
     default:
