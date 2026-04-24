@@ -2,6 +2,7 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
+import { buildSourceLinkProps } from '../lib/openSourceLink';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -38,8 +39,10 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
   const arrow = isPositive ? '↑' : '↓';
   const fmt2 = (n: number) => n.toFixed(2);
 
+  const linkProps = buildSourceLinkProps(data?.sourceUrl, 'VIX — open source');
+
   return (
-    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
+    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
       <div className="card-inner">
         <span className="card-label">VIX</span>
 

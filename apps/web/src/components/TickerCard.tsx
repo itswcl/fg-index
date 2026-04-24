@@ -1,6 +1,7 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
+import { buildSourceLinkProps } from '../lib/openSourceLink';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -24,32 +25,10 @@ export function TickerCard({
   onRemove,
 }: TickerCardProps) {
   const showLoading = isLoading || (isRefreshing && data === undefined);
-  const sourceUrl = data?.sourceUrl;
-
-  // Open the source page in a new tab. Guard against the click that dnd-kit
-  // fires at the end of a drag by only reacting to plain left-button clicks
-  // where no modifier is held (ctrl/meta already open in a new tab natively).
-  const openSource = sourceUrl
-    ? () => {
-        window.open(sourceUrl, '_blank', 'noopener,noreferrer');
-      }
-    : undefined;
-
-  const linkProps = openSource
-    ? {
-        role: 'link' as const,
-        tabIndex: 0,
-        onClick: openSource,
-        onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openSource();
-          }
-        },
-        style: { cursor: 'pointer' as const },
-        'aria-label': `${ticker}${data?.name ? ` (${data.name})` : ''} — open source`,
-      }
-    : undefined;
+  const linkProps = buildSourceLinkProps(
+    data?.sourceUrl,
+    `${ticker}${data?.name ? ` (${data.name})` : ''} — open source`,
+  );
 
   // data === null means loaded but ticker not found
   if (!isLoading && data === null) {

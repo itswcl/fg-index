@@ -2,6 +2,7 @@
 import type { FearGreed, FearGreedClassification } from '../types';
 import { FEAR_GREED_COLORS } from '../constants';
 import { formatAbsoluteTime } from '../services/time.utils';
+import { buildSourceLinkProps } from '../lib/openSourceLink';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -25,8 +26,10 @@ export function FearGreedCard({ data, lastUpdate, isLoading, isRefreshing, isDar
   const score = data?.score ?? '–';
   const color = getFearGreedColor(label);
 
+  const linkProps = buildSourceLinkProps(data?.sourceUrl, 'Fear & Greed — open source');
+
   return (
-    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
+    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
       <div className="card-inner">
         <span className="card-label">Fear & Greed</span>
 

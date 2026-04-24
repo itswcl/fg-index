@@ -126,6 +126,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         valueColor: fearGreedColor(fg?.classification),
         changeMode: 'none',
         isLoading: showLoading,
+        sourceUrl: fg?.sourceUrl,
       };
     }
     case 'vix': {
@@ -140,6 +141,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changePercent: v?.changePercent ?? null,
         changeMode: 'inverted',
         isLoading: showLoading,
+        sourceUrl: v?.sourceUrl,
       };
     }
     case 'btc': {
@@ -154,6 +156,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changePercent: b?.changePercent ?? null,
         changeMode: 'standard',
         isLoading: showLoading,
+        sourceUrl: b?.sourceUrl,
       };
     }
     case 'spx': {
@@ -168,6 +171,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changePercent: s?.changePercent ?? null,
         changeMode: 'standard',
         isLoading: showLoading,
+        sourceUrl: s?.sourceUrl,
       };
     }
     default:

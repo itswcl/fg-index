@@ -1,6 +1,7 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
+import { buildSourceLinkProps } from '../lib/openSourceLink';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -28,8 +29,10 @@ export function SpxCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: S
   const color = isPositive ? '#27AE60' : '#E74C3C';
   const arrow = isPositive ? '↑' : '↓';
 
+  const linkProps = buildSourceLinkProps(data?.sourceUrl, 'S&P 500 — open source');
+
   return (
-    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
+    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
       <div className="card-inner">
         <span className="card-label">S&P 500</span>
 

@@ -1,6 +1,7 @@
 import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
+import { buildSourceLinkProps } from '../lib/openSourceLink';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 
@@ -27,8 +28,10 @@ export function BtcCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: B
   const color = isPositive ? '#27AE60' : '#E74C3C';
   const arrow = isPositive ? '↑' : '↓';
 
+  const linkProps = buildSourceLinkProps(data?.sourceUrl, 'BTC — open source');
+
   return (
-    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
+    <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
       <div className="card-inner">
         <span className="card-label">BTC</span>
 
