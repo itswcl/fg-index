@@ -164,6 +164,44 @@ describe("ticker service — BTC-USD / crypto path", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
   });
 
+  it("never returns a NaN `change` for a non-crypto Google-scraped ticker (garbage prev-close)", async () => {
+    // Regression guard: previously, scrapeGoogleFinance on e.g. AAPL would
+    // recover `previousClose` to `price` when its regex captured garbage,
+    // but `change` had already been computed from NaN — so the response
+    // shipped { price: ok, previousClose: ok, change: NaN, changePercent: 0 }
+    // and the frontend sanitizer dropped the whole quote. After the fix:
+    // either all four numeric fields are finite, or the quote is null.
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        // "." matches the `[0-9.,]+` capture but parseFloat(".") is NaN.
+        // Before the fix this returned a NaN `change` alongside a valid price.
+        return new Response(
+          '<html><div class="zzDege">Apple</div>' +
+            '<div data-last-price="180.50"></div>' +
+            '<div class="P6K39c">$.</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      // Any other upstream (suffix retries, yahoo fallback) returns nothing.
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    // Quote either resolves with all-finite numeric fields OR is null — but
+    // must NEVER carry a NaN change / changePercent to the wire.
+    if (quote !== null) {
+      expect(Number.isFinite(quote.price)).toBe(true);
+      expect(Number.isFinite(quote.previousClose)).toBe(true);
+      expect(Number.isFinite(quote.change)).toBe(true);
+      expect(Number.isFinite(quote.changePercent)).toBe(true);
+    }
+  });
+
   it("returns null instead of falling through to Google when both Yahoo and CoinGecko fail", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

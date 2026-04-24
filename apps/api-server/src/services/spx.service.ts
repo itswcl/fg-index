@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { validateTickerQuote } from "./validateQuote.js";
 
 const SPX_TICKER = "SPX";
 const SPX_NAME = "S&P 500";
@@ -27,7 +28,7 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
     const changePercent =
       previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
 
-    return {
+    return validateTickerQuote({
       ticker: SPX_TICKER,
       name: SPX_NAME,
       price,
@@ -36,7 +37,7 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
       changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.GOOGLE_FINANCE_SPX_URL,
-    };
+    });
   } catch {
     return null;
   }
@@ -56,7 +57,7 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
     if (!priceMatch) return null;
 
     const price = parseFloat(priceMatch[1].replace(/,/g, ""));
-    return {
+    return validateTickerQuote({
       ticker: SPX_TICKER,
       name: SPX_NAME,
       price,
@@ -65,7 +66,7 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.YAHOO_FINANCE_SPX_URL,
-    };
+    });
   } catch {
     return null;
   }
