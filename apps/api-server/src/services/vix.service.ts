@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { validateTickerQuote } from "./validateQuote.js";
 
 // Identity fields applied to every VIX response regardless of which
 // scraper produced the price.
@@ -26,7 +27,7 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
     const change = +(price - previousClose).toFixed(2);
     const changePercent = previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
 
-    return {
+    return validateTickerQuote({
       ticker: VIX_TICKER,
       name: VIX_NAME,
       price,
@@ -35,7 +36,7 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
       changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.GOOGLE_FINANCE_VIX_URL,
-    };
+    });
   } catch {
     return null;
   }
@@ -57,7 +58,7 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
       const spanMatch = html.match(/<span[^>]*class="[^"]*Fz\(36px\)[^"]*"[^>]*>([0-9.]+)</);
       if (!spanMatch) return null;
       const price = parseFloat(spanMatch[1]);
-      return {
+      return validateTickerQuote({
         ticker: VIX_TICKER,
         name: VIX_NAME,
         price,
@@ -66,11 +67,11 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
         changePercent: 0,
         fetchedAt: new Date().toISOString(),
         sourceUrl: env.YAHOO_FINANCE_VIX_URL,
-      };
+      });
     }
 
     const price = parseFloat(priceMatch[1]);
-    return {
+    return validateTickerQuote({
       ticker: VIX_TICKER,
       name: VIX_NAME,
       price,
@@ -79,7 +80,7 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
       changePercent: 0,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.YAHOO_FINANCE_VIX_URL,
-    };
+    });
   } catch {
     return null;
   }

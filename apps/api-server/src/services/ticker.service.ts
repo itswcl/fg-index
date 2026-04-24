@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { validateTickerQuote } from "./validateQuote.js";
 
 // ─── Cache ─────────────────────────────────────────────────────────
 interface CacheEntry {
@@ -95,16 +96,26 @@ async function scrapeGoogleFinance(
       ? tickerFormat.split(":")[0]
       : tickerFormat;
 
-    return {
+    // Guard `change` alongside `previousClose`: when prevClose parsed to NaN,
+    // we recover it with `price` but `change` was already computed from NaN
+    // above. Recompute here so the returned quote never ships NaN fields.
+    const safePreviousClose = isNaN(previousClose) ? price : previousClose;
+    const safeChange = +(price - safePreviousClose).toFixed(4);
+    const safeChangePercent =
+      safePreviousClose > 0
+        ? +((safeChange / safePreviousClose) * 100).toFixed(4)
+        : 0;
+
+    return validateTickerQuote({
       ticker: tickerSymbol,
       name: nameMatch ? nameMatch[1].trim() : undefined,
       price,
-      previousClose: isNaN(previousClose) ? price : previousClose,
-      change,
-      changePercent,
+      previousClose: safePreviousClose,
+      change: safeChange,
+      changePercent: safeChangePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: url,
-    };
+    });
   } catch {
     return null;
   }
@@ -378,8 +389,11 @@ export async function fetchTickerQuote(
   const knownFormat = resolvedFormatCache.get(upperTicker);
   if (knownFormat) {
     const cached = getCached(knownFormat);
-    if (cached) return cached;
+    if (cached) return validateTickerQuote(cached);
   }
 
-  return resolveAndFetch(upperTicker);
+  // Defense-in-depth: every exit through the public API runs through the
+  // validator so any future scraper regression that lets a non-finite field
+  // slip through gets coerced to null here instead of reaching the wire.
+  return validateTickerQuote(await resolveAndFetch(upperTicker));
 }
