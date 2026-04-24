@@ -54,10 +54,8 @@ function MarketIndicators() {
   const {
     fearGreed: wsFearGreed,
     vix: wsVix,
-    vixAvailable,
     btc: wsBtc,
     spx: wsSpx,
-    spxAvailable,
     wsStatus,
     lastFearGreedUpdate,
     lastVixUpdate,
@@ -100,8 +98,6 @@ function MarketIndicators() {
   const vixData = currentVixData ?? (vixFetching ? lastGoodVixRef.current : null);
   const btcData = currentBtcData ?? (btcFetching ? lastGoodBtcRef.current : null);
   const spxData = currentSpxData ?? (spxFetching ? lastGoodSpxRef.current : null);
-  const effectiveVixAvailable = vixData !== null || vixAvailable;
-  const effectiveSpxAvailable = spxData !== null || spxAvailable;
 
   const { theme, setTheme, isDark } = useTheme();
   useTickerSync();
@@ -238,14 +234,12 @@ function MarketIndicators() {
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
             fgIsRefreshing={fgFetching}
             vixData={vixData}
-            vixAvailable={effectiveVixAvailable}
             vixIsLoading={vixLoading && !wsVix && !httpVix}
             vixIsRefreshing={vixFetching}
             btcData={btcData}
             btcIsLoading={btcLoading && !wsBtc && !httpBtc}
             btcIsRefreshing={btcFetching}
             spxData={spxData}
-            spxAvailable={effectiveSpxAvailable}
             spxIsLoading={spxLoading && !wsSpx && !httpSpx}
             spxIsRefreshing={spxFetching}
           />
@@ -263,7 +257,6 @@ function MarketIndicators() {
             fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
             fgIsRefreshing={fgFetching}
             vixData={vixData}
-            vixAvailable={effectiveVixAvailable}
             vixLastUpdate={vixDisplayUpdate}
             vixIsLoading={vixLoading && !wsVix && !httpVix}
             vixIsRefreshing={vixFetching}
@@ -272,7 +265,6 @@ function MarketIndicators() {
             btcIsLoading={btcLoading && !wsBtc && !httpBtc}
             btcIsRefreshing={btcFetching}
             spxData={spxData}
-            spxAvailable={effectiveSpxAvailable}
             spxLastUpdate={spxDisplayUpdate}
             spxIsLoading={spxLoading && !wsSpx && !httpSpx}
             spxIsRefreshing={spxFetching}

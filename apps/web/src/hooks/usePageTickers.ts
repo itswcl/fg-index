@@ -86,18 +86,39 @@ export function usePageTickers(symbols: string[], opts: UsePageTickersOptions = 
     }
   }, [sortedSymbols, queryClient]);
 
-  // Fan out into per-symbol cache so useTicker readers re-render. null is a
-  // legitimate cached value ("batch returned no data for this symbol") —
-  // distinct from undefined ("cache not seeded yet").
+  // Fan out into per-symbol cache so useTicker readers re-render.
+  //
+  //   quote (non-null)  -> overwrite cache + persist to localStorage
+  //   quote === null    -> only write null if the slot has NO existing
+  //                        good value. Preserves a previously-good quote
+  //                        through transient scraper failures, but still
+  //                        surfaces "Not Found" on the first-fetch-null
+  //                        case (user typo'd a symbol).
+  //
+  // So once a ticker has loaded at least once, a null response keeps the
+  // last real price on screen (matching the indicator behavior above) —
+  // the only way the card ever shows "Not Found" is if the very first
+  // fetch for that symbol returned null.
   useEffect(() => {
     const quotes = query.data?.quotes;
     if (!quotes) return;
     for (const [sym, quote] of Object.entries(quotes)) {
-      queryClient.setQueryData<TickerQuote | null>(['ticker', sym], quote ?? null);
-      // Persist successful fetches so the next reload can paint them
-      // immediately. Null payloads are intentionally not persisted — see
-      // `saveQuote` docs in lib/quoteCache.ts.
-      saveQuote(sym, quote);
+      if (quote) {
+        queryClient.setQueryData<TickerQuote | null>(['ticker', sym], quote);
+        saveQuote(sym, quote);
+      } else {
+        const existing = queryClient.getQueryData<TickerQuote | null | undefined>([
+          'ticker',
+          sym,
+        ]);
+        // `existing` is a non-null quote -> keep it (transient failure).
+        // `existing` is null -> already "Not Found", leave it.
+        // `existing` is undefined -> first fetch came back null, write null so
+        //   the card can show "Not Found" instead of spinning forever.
+        if (existing === undefined) {
+          queryClient.setQueryData<TickerQuote | null>(['ticker', sym], null);
+        }
+      }
     }
   }, [query.data, queryClient]);
 

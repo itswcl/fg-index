@@ -6,7 +6,6 @@ import { AnimatedNumber } from './AnimatedNumber';
 
 interface SpxCardProps {
   data: TickerQuote | null;
-  spxAvailable: boolean;
   lastUpdate: Date | null;
   isLoading?: boolean;
   isRefreshing?: boolean;
@@ -17,29 +16,11 @@ function formatSpxPrice(price: number): string {
   return price.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
-export function SpxCard({ data, spxAvailable, lastUpdate, isLoading, isRefreshing, isDark }: SpxCardProps) {
+export function SpxCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: SpxCardProps) {
+  // No "Market Closed" branch by design — see VixCard for the rationale.
+  // Once we have any value, a later null payload from the server is
+  // ignored upstream and the last known price keeps showing.
   const showLoading = isLoading || (isRefreshing && !data);
-
-  if (!spxAvailable) {
-    return (
-      <div className={`card ${isDark ? 'card-dark' : 'card-light'}`}>
-        <div className="card-inner">
-          <span className="card-label">S&P 500</span>
-          <div className="price-container">
-            <span className="na-text">N/A</span>
-            <span className="na-subtext">Market Closed</span>
-          </div>
-          <div className="footer-row">
-            {lastUpdate && (
-              <span className={`updated-at ${isDark ? '' : 'updated-at-light'}`}>
-                Last Close {formatAbsoluteTime(lastUpdate)}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   const change = data?.change ?? 0;
   const changePct = data?.changePercent ?? 0;
