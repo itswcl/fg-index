@@ -81,3 +81,70 @@ export function resolveMarketSession(
 export function isExtendedHoursSession(session: MarketSession): session is 'pre' | 'post' {
   return session === 'pre' || session === 'post';
 }
+
+/**
+ * The numbers to actually paint on the card.
+ *
+ * The backend payload exposes BOTH the regular-session print (`price`,
+ * `change`, `changePercent`) and — when applicable — the extended-hours
+ * print (`postMarketPrice`, `postMarketChange`, …). The card has a single
+ * price slot, so this helper picks the right cluster:
+ *
+ *   - session 'post' + postMarketPrice present → post-market triplet
+ *   - session 'pre'  + preMarketPrice present  → pre-market triplet
+ *   - otherwise (regular / closed / missing extended-hours fields) →
+ *     regular-session triplet
+ *
+ * Falls back gracefully when the backend ships a session enum but omits
+ * the numeric fields (Yahoo cool-down etc.) — we keep the regular price
+ * rather than painting `undefined`.
+ *
+ * Each field is independently checked because a partial extended-hours
+ * payload (price but no change%, say) is rare but possible; we don't
+ * want a single missing field to demote the whole row back to regular.
+ */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+export interface DisplayQuote {
+  price: number;
+  change: number;
+  changePercent: number;
+}
+
+export function getDisplayQuote(
+  quote: TickerQuote | null | undefined,
+  session: MarketSession,
+): DisplayQuote | null {
+  if (!quote) return null;
+
+  if (session === 'post' && isFiniteNumber(quote.postMarketPrice)) {
+    return {
+      price: quote.postMarketPrice,
+      // Fall back to the regular change values if the backend gave us a
+      // post-market price but no post-market deltas — better to show the
+      // day's move than a blank.
+      change: isFiniteNumber(quote.postMarketChange) ? quote.postMarketChange : quote.change,
+      changePercent: isFiniteNumber(quote.postMarketChangePercent)
+        ? quote.postMarketChangePercent
+        : quote.changePercent,
+    };
+  }
+
+  if (session === 'pre' && isFiniteNumber(quote.preMarketPrice)) {
+    return {
+      price: quote.preMarketPrice,
+      change: isFiniteNumber(quote.preMarketChange) ? quote.preMarketChange : quote.change,
+      changePercent: isFiniteNumber(quote.preMarketChangePercent)
+        ? quote.preMarketChangePercent
+        : quote.changePercent,
+    };
+  }
+
+  return {
+    price: quote.price,
+    change: quote.change,
+    changePercent: quote.changePercent,
+  };
+}

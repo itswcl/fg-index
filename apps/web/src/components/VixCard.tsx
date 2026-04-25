@@ -3,7 +3,7 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
-import { resolveMarketSession } from '../lib/marketSession';
+import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 import { MarketSessionBadge } from './MarketSessionBadge';
@@ -29,10 +29,16 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
   // quotes missing any numeric field, but a stale cache entry or race during
   // refresh can still deliver a partial object. `.toFixed` on null throws and
   // blanks the whole page.
-  const hasPrice = hasFiniteNumber(data?.price);
-  const hasChange = hasFiniteNumber(data?.change);
-  const hasChangePct = hasFiniteNumber(data?.changePercent);
-  const change = hasChange ? (data!.change as number) : 0;
+  //
+  // VIX is a computed index, so it virtually never carries pre/post fields,
+  // but we still go through getDisplayQuote so the rare case where it does
+  // (or any future indices that publish extended-hours values) Just Works.
+  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
+  const display = getDisplayQuote(data, session);
+  const hasPrice = hasFiniteNumber(display?.price);
+  const hasChange = hasFiniteNumber(display?.change);
+  const hasChangePct = hasFiniteNumber(display?.changePercent);
+  const change = hasChange ? (display!.change as number) : 0;
   const isPositive = change >= 0;
   // Match the direction-based ticker convention used by BtcCard/SpxCard:
   // up = green, down = red. (Previously inverted because "VIX up = fear",
@@ -42,12 +48,6 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
   const fmt2 = (n: number) => n.toFixed(2);
 
   const linkProps = buildSourceLinkProps(data?.sourceUrl, 'VIX — open source');
-
-  // Hide the moon during loading or when there's no data — never flag a
-  // session against shimmer/empty (per spec). VIX is a US-equity-hours
-  // index, so we trust the backend `marketSession` and fall back to the
-  // ET-derived value if it's missing.
-  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
 
   return (
     <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
@@ -66,14 +66,14 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
           <>
             <div className="price-container">
               {hasPrice ? (
-                <AnimatedNumber value={data!.price} formatter={fmt2} className={`price ${isDark ? '' : 'price-light'}`} />
+                <AnimatedNumber value={display!.price} formatter={fmt2} className={`price ${isDark ? '' : 'price-light'}`} />
               ) : (
                 <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
               )}
               {hasChange && hasChangePct && (
                 <div className="change-box">
                   <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${n.toFixed(2)}`} className="change" style={{ color }} />
-                  <AnimatedNumber value={Math.abs(data!.changePercent as number)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
+                  <AnimatedNumber value={Math.abs(display!.changePercent)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
                 </div>
               )}
             </div>

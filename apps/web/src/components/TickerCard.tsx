@@ -2,7 +2,7 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
-import { resolveMarketSession } from '../lib/marketSession';
+import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
 import { MarketSessionBadge } from './MarketSessionBadge';
@@ -59,26 +59,34 @@ export function TickerCard({
     );
   }
 
+  // Hide moon during shimmer / partial-data states; only flag a session
+  // we trust. `withRemoveButton` shifts the moon left so it never collides
+  // with the hover-reveal red × button on `.card-custom`.
+  //
+  // During post/pre we paint the extended-hours triplet (postMarketPrice +
+  // postMarketChange + postMarketChangePercent). getDisplayQuote falls
+  // back to the regular triplet if the corresponding extended-hours
+  // fields aren't present, so a quote with `marketSession: 'post'` but
+  // missing `postMarketPrice` (e.g. Yahoo cooldown) keeps showing the
+  // regular last-trade rather than blanking.
+  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
+  const display = getDisplayQuote(data, session);
+
   // Defensive: previous "null quote crash" fix hardened BtcCard/SpxCard/VixCard
   // with hasFiniteNumber but missed this component — and TickerCard renders for
   // every custom ticker, so any non-finite field that slips past sanitizeTickerQuote
   // (e.g. from a stale cache entry) would reach toLocaleString/toFixed below and
   // blow up the whole page. Gate each numeric field so a partial quote still
   // renders a safe em-dash instead of crashing.
-  const hasPrice = hasFiniteNumber(data?.price);
-  const hasChange = hasFiniteNumber(data?.change);
-  const hasChangePct = hasFiniteNumber(data?.changePercent);
-  const change = hasChange ? (data!.change as number) : 0;
+  const hasPrice = hasFiniteNumber(display?.price);
+  const hasChange = hasFiniteNumber(display?.change);
+  const hasChangePct = hasFiniteNumber(display?.changePercent);
+  const change = hasChange ? (display!.change as number) : 0;
   const isPositive = change >= 0;
   // Standard stock coloring: green = up, red = down (opposite of VIX)
   const color = isPositive ? '#27AE60' : '#E74C3C';
   const arrow = isPositive ? '↑' : '↓';
   const fmtPrice = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  // Hide moon during shimmer / partial-data states; only flag a session
-  // we trust. `withRemoveButton` shifts the moon left so it never collides
-  // with the hover-reveal red × button on `.card-custom`.
-  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
 
   return (
     <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
@@ -115,14 +123,14 @@ export function TickerCard({
                 </span>
               )}
               {hasPrice ? (
-                <AnimatedNumber value={data!.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
+                <AnimatedNumber value={display!.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
               ) : (
                 <span className={`price ${isDark ? '' : 'price-light'}`}>–</span>
               )}
               {hasChange && hasChangePct && (
                 <div className="change-box">
                   <AnimatedNumber value={Math.abs(change)} formatter={(n) => `${arrow} ${fmtPrice(n)}`} className="change" style={{ color }} />
-                  <AnimatedNumber value={Math.abs(data!.changePercent as number)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
+                  <AnimatedNumber value={Math.abs(display!.changePercent)} formatter={(n) => ` (${n.toFixed(2)}%)`} className="change-pct" style={{ color }} />
                 </div>
               )}
             </div>
