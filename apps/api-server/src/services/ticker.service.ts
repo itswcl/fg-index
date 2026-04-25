@@ -129,11 +129,15 @@ function canonicalCryptoTicker(ticker: string): string {
 // Caveats:
 //   - Indices (^VIX, ^GSPC) don't have this block — they're computed, not
 //     traded — so this returns {} and the quote ships without session info.
-//   - When the page is "Closed" overnight we still want to surface the most
-//     recent post-market print. Google keeps the After Hours block visible
-//     through the overnight gap; we map that to marketSession='closed'
-//     (vs 'post') by checking for the "Closed:" label that appears further
-//     down the page.
+//   - We deliberately do NOT try to distinguish "active post-market" from
+//     "overnight, last AH print still showing". A previous version classified
+//     by checking for a "Closed: <date>" marker on the page, but that marker
+//     just shows the regular-session close *timestamp* — Google renders it
+//     during ACTIVE post-market too. The result was `marketSession='closed'`
+//     shipping during real post-market hours, breaking the FE moon indicator
+//     in exactly the case it was designed for. The simpler rule — "if there
+//     is a postMarketPrice in the response, the session is 'post'" — is
+//     internally consistent and matches what the data means.
 interface SessionFields {
   marketSession?: MarketSession;
   postMarketPrice?: number;
@@ -170,11 +174,11 @@ function extractGoogleSessionFields(html: string): SessionFields {
   );
   const m = html.match(blockRe);
 
-  // Determine session: if the page also says "Closed:" (Google's overnight
-  // marker), the extended-hours print is from a session that's already over,
-  // so we report 'closed'. Otherwise we're actively in pre/post.
-  const isClosed = /Closed:\s*(?:[A-Z][a-z]+|\d)/.test(html);
-  const baseSession: MarketSession = isClosed ? "closed" : isPre ? "pre" : "post";
+  // Session = whichever extended block is present. Pre-market block → 'pre',
+  // After Hours block → 'post'. We do not try to derive 'closed' here — see
+  // the long comment on the Caveats above for why the previous "Closed:"
+  // detection was wrong.
+  const baseSession: MarketSession = isPre ? "pre" : "post";
 
   // Even without numeric extraction, knowing the session is useful — emit
   // the session flag so the FE indicator works.

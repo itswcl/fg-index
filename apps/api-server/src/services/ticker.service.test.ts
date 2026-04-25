@@ -568,12 +568,17 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     expect(quote?.postMarketPrice).toBeUndefined();
   });
 
-  it("uses 'closed' (not 'post') when Google's After Hours block is paired with the 'Closed:' overnight marker (production AMD case)", async () => {
-    // Regression for the production response captured 2026-04-25 21:14 UTC:
-    // Google still shows "After Hours: $348.84 / 0.30% / +1.04" overnight,
-    // alongside "Closed: Apr 24, 7:59:54 PM GMT-4". The session is closed —
-    // the post-market window has ended — but the most recent extended-hours
-    // print is still the one we want to surface for the FE.
+  it("emits marketSession='post' even when Google's page also has the 'Closed:' regular-session timestamp", async () => {
+    // Regression for the bug FE flagged: Google renders the "Closed: <date>"
+    // line whenever the regular session has ended (i.e. throughout BOTH
+    // active post-market AND overnight). A previous version of this code
+    // treated that line as an "overnight" signal and emitted
+    // marketSession='closed', which silenced the FE moon indicator during
+    // the exact post-market hours it was designed for. The contract is now
+    // simple: if the After Hours block (and therefore postMarketPrice)
+    // is present, the session is 'post' — full stop. If FE later wants to
+    // distinguish "live AH" from "stale overnight AH", it can do so from
+    // the quote's `fetchedAt` timestamp.
     const fetchMock = vi.fn(async () =>
       new Response(
         fakeGoogleFinancePage({
@@ -585,7 +590,7 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
             price: "$348.84",
             pct: "0.30",
             change: "+1.04",
-            closed: true,
+            closed: true, // "Closed:" timestamp present — must NOT downgrade session
           },
         }),
         { status: 200, headers: { "Content-Type": "text/html" } }
@@ -597,7 +602,8 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     mod._resetTickerServiceState();
     const quote = await mod.fetchTickerQuote("AMD");
 
-    expect(quote?.marketSession).toBe("closed");
+    // Internally consistent: postMarketPrice present → session is 'post'.
+    expect(quote?.marketSession).toBe("post");
     expect(quote?.postMarketPrice).toBe(348.84);
     expect(quote?.postMarketChange).toBe(1.04);
     expect(quote?.postMarketChangePercent).toBe(0.3);
