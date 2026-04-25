@@ -1,16 +1,11 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
 import { validateTickerQuote } from "./validateQuote.js";
-import { fetchYahooSession } from "./ticker.service.js";
 
 // Identity fields applied to every VIX response regardless of which
 // scraper produced the price.
 const VIX_TICKER = "VIX";
 const VIX_NAME = "CBOE Volatility Index";
-// Yahoo's symbol for the CBOE Volatility Index. Used only to enrich the
-// scraped quote with `marketSession` — the price itself still comes from
-// the Google/Yahoo HTML scrape paths above.
-const VIX_YAHOO_SYMBOL = "^VIX";
 
 async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
   try {
@@ -92,13 +87,8 @@ async function scrapeYahooFinance(): Promise<TickerQuote | null> {
 }
 
 export async function fetchVixData(): Promise<TickerQuote | null> {
-  const quote = (await scrapeGoogleFinance()) ?? (await scrapeYahooFinance());
-  if (!quote) return null;
-
-  // Enrich with marketSession. ^VIX is index-computed (no after-hours print),
-  // so typically only `marketSession` is added; pre/post price fields stay
-  // undefined. Best-effort — Yahoo cooldown or upstream miss leaves the quote
-  // intact rather than dropping it.
-  const session = await fetchYahooSession(VIX_YAHOO_SYMBOL);
-  return Object.keys(session).length === 0 ? quote : { ...quote, ...session };
+  // VIX is an index computed from option premiums — there's no extended-hours
+  // trade print, so we don't enrich with session data. The FE shows no moon
+  // indicator for VIX, which matches the spec.
+  return (await scrapeGoogleFinance()) ?? (await scrapeYahooFinance());
 }
