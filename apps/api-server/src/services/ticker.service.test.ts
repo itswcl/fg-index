@@ -390,6 +390,52 @@ describe("ticker service — stale-on-error fallback", () => {
   });
 });
 
+// ─── Helpers for the after-hours enrichment tests ────────────────────
+// Build a minimal Yahoo HTML quote page that contains the embedded v7 quote
+// `<script>` block our scraper looks for. The real page is ~2.5 MB; this
+// stripped-down version only contains the fields the parser cares about so
+// tests stay legible.
+function fakeYahooHtmlPage(symbol: string, fields: {
+  marketState?: string;
+  postMarketPrice?: number;
+  postMarketChange?: number;
+  postMarketChangePercent?: number;
+  preMarketPrice?: number;
+  preMarketChange?: number;
+  preMarketChangePercent?: number;
+}): string {
+  // v7 wraps each numeric in { raw, fmt }; the scraper only uses `raw`.
+  const num = (v: number | undefined) => (v === undefined ? null : { raw: v, fmt: String(v) });
+  const result = {
+    symbol,
+    marketState: fields.marketState ?? null,
+    regularMarketPrice: { raw: 180.5, fmt: "180.50" },
+    postMarketPrice: num(fields.postMarketPrice),
+    postMarketChange: num(fields.postMarketChange),
+    postMarketChangePercent: num(fields.postMarketChangePercent),
+    preMarketPrice: num(fields.preMarketPrice),
+    preMarketChange: num(fields.preMarketChange),
+    preMarketChangePercent: num(fields.preMarketChangePercent),
+  };
+  // Outer envelope mirrors what Yahoo's sveltekit fetcher embeds. The body
+  // field is a *string* containing escaped JSON (matches production exactly).
+  const body = JSON.stringify({ quoteResponse: { result: [result], error: null } });
+  const envelope = JSON.stringify({ status: 200, statusText: "OK", headers: {}, body });
+  // The scraper matches on data-url containing v7/finance/quote, the symbol,
+  // and `postMarketPrice`. Build a URL with all three so the script block
+  // is selected.
+  const dataUrl =
+    `https://query1.finance.yahoo.com/v7/finance/quote?fields=postMarketPrice%2CpreMarketPrice` +
+    `&symbols=${encodeURIComponent(symbol)}`;
+  return (
+    `<html><body>` +
+    `<script type="application/json" data-sveltekit-fetched data-url="${dataUrl}" data-ttl="60">` +
+    envelope +
+    `</script>` +
+    `</body></html>`
+  );
+}
+
 describe("ticker service — marketSession + after-hours enrichment", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -398,11 +444,10 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     applyEnv();
   });
 
-  it("merges marketSession='post' and postMarketPrice from Yahoo onto a Google-scraped stock", async () => {
+  it("merges marketSession='post' and postMarketPrice from the Yahoo HTML page onto a Google-scraped stock", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("google.com/finance/quote/AAPL")) {
-        // Direct hit on the bare ticker — Google returns regular-session price.
         return new Response(
           '<html><div class="zzDege">Apple Inc.</div>' +
             '<div data-last-price="180.50"></div>' +
@@ -410,27 +455,17 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
           { status: 200, headers: { "Content-Type": "text/html" } }
         );
       }
-      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/AAPL")) {
-        // Yahoo's chart-meta tells us we're in post-market with a real tick.
+      if (url.includes("finance.yahoo.com/quote/AAPL")) {
+        // Yahoo's HTML quote page embeds the v7 quote response as JSON.
+        // We're in post-market with a real after-hours tick.
         return new Response(
-          JSON.stringify({
-            chart: {
-              result: [
-                {
-                  meta: {
-                    symbol: "AAPL",
-                    marketState: "POST",
-                    regularMarketPrice: 180.5,
-                    chartPreviousClose: 179.0,
-                    postMarketPrice: 181.42,
-                    postMarketChange: 0.92,
-                    postMarketChangePercent: 0.51,
-                  },
-                },
-              ],
-            },
+          fakeYahooHtmlPage("AAPL", {
+            marketState: "POST",
+            postMarketPrice: 181.42,
+            postMarketChange: 0.92,
+            postMarketChangePercent: 0.51,
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          { status: 200, headers: { "Content-Type": "text/html" } }
         );
       }
       return new Response("", { status: 404 });
@@ -444,14 +479,14 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     // Regular-session number stays canonical — we never overwrite `price`.
     expect(quote?.price).toBe(180.5);
     expect(quote?.previousClose).toBe(179.0);
-    // New session/aftermarket fields populated from Yahoo's meta block.
+    // New session/aftermarket fields populated from Yahoo's embedded v7 JSON.
     expect(quote?.marketSession).toBe("post");
     expect(quote?.postMarketPrice).toBe(181.42);
     expect(quote?.postMarketChange).toBe(0.92);
     expect(quote?.postMarketChangePercent).toBe(0.51);
   });
 
-  it("ships the plain quote (no session fields) when the Yahoo enrichment 429s", async () => {
+  it("ships the plain quote (no session fields) when the Yahoo HTML fetch 429s", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("google.com/finance/quote/AAPL")) {
@@ -462,7 +497,7 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
           { status: 200, headers: { "Content-Type": "text/html" } }
         );
       }
-      if (url.includes("query1.finance.yahoo.com")) {
+      if (url.includes("finance.yahoo.com/quote/")) {
         // Rate-limited — `fetchYahooSession` returns {} and the quote ships
         // without session fields rather than failing the whole request.
         return new Response("too many requests", { status: 429 });
@@ -485,8 +520,10 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("query1.finance.yahoo.com/v8/finance/chart/BTC-USD")) {
-        // Yahoo could report any state for crypto (it varies), but we always
-        // override to 'regular' for crypto so the FE moon indicator stays off.
+        // BTC still goes through the chart endpoint as its primary source —
+        // the chart endpoint still returns regularMarketPrice for crypto.
+        // marketState would be irrelevant anyway: we always override to
+        // 'regular' for crypto so the FE moon indicator stays off.
         return new Response(
           JSON.stringify({
             chart: {
@@ -529,25 +566,15 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
           { status: 200, headers: { "Content-Type": "text/html" } }
         );
       }
-      if (url.includes("query1.finance.yahoo.com")) {
+      if (url.includes("finance.yahoo.com/quote/AAPL")) {
         return new Response(
-          JSON.stringify({
-            chart: {
-              result: [
-                {
-                  meta: {
-                    symbol: "AAPL",
-                    marketState: "PREPRE", // pre-pre-market → folded to 'pre'
-                    regularMarketPrice: 180.5,
-                    preMarketPrice: 178.22,
-                    preMarketChange: -2.28,
-                    preMarketChangePercent: -1.26,
-                  },
-                },
-              ],
-            },
+          fakeYahooHtmlPage("AAPL", {
+            marketState: "PREPRE", // pre-pre-market → folded to 'pre'
+            preMarketPrice: 178.22,
+            preMarketChange: -2.28,
+            preMarketChangePercent: -1.26,
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          { status: 200, headers: { "Content-Type": "text/html" } }
         );
       }
       return new Response("", { status: 404 });
@@ -563,5 +590,97 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     expect(quote?.preMarketChange).toBe(-2.28);
     expect(quote?.preMarketChangePercent).toBe(-1.26);
     expect(quote?.postMarketPrice).toBeUndefined();
+  });
+
+  it("maps Yahoo's OVERNIGHT state to 'closed' and still forwards the most recent post-market price (AMD-style)", async () => {
+    // Regression for the actual production bug: at 12:11 am ET (between
+    // post-market close and pre-market open) Yahoo reports
+    // marketState=OVERNIGHT with the previous post-market session's
+    // postMarketPrice still attached. We want to surface that print so the FE
+    // can show "last AH price" even though no session is active right now.
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AMD")) {
+        return new Response(
+          '<html><div class="zzDege">Advanced Micro Devices</div>' +
+            '<div data-last-price="305.33"></div>' +
+            '<div class="P6K39c">$305.33</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("finance.yahoo.com/quote/AMD")) {
+        return new Response(
+          fakeYahooHtmlPage("AMD", {
+            marketState: "OVERNIGHT",
+            postMarketPrice: 328.76,
+            postMarketChange: 23.43,
+            postMarketChangePercent: 7.67,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AMD");
+
+    expect(quote?.marketSession).toBe("closed");
+    expect(quote?.postMarketPrice).toBe(328.76);
+    expect(quote?.postMarketChange).toBe(23.43);
+    expect(quote?.postMarketChangePercent).toBe(7.67);
+  });
+
+  it("caches the parsed session for 60s — does not refetch the heavy HTML page on every quote refresh", async () => {
+    vi.useFakeTimers({ now: new Date("2026-04-25T12:00:00Z") });
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          '<html><div class="zzDege">Apple Inc.</div>' +
+            '<div data-last-price="180.50"></div>' +
+            '<div class="P6K39c">$179.00</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("finance.yahoo.com/quote/AAPL")) {
+        return new Response(
+          fakeYahooHtmlPage("AAPL", {
+            marketState: "POST",
+            postMarketPrice: 181.42,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    // First call: hits Google + Yahoo HTML
+    await mod.fetchTickerQuote("AAPL");
+    const yahooCallsAfterFirst = fetchMock.mock.calls.filter(([u]) =>
+      String(u).includes("finance.yahoo.com/quote/AAPL")
+    ).length;
+    expect(yahooCallsAfterFirst).toBe(1);
+
+    // Advance past the 15s quote cache so the second call refetches Google,
+    // but stay within the 60s session cache so Yahoo HTML is reused.
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const second = await mod.fetchTickerQuote("AAPL");
+    const yahooCallsAfterSecond = fetchMock.mock.calls.filter(([u]) =>
+      String(u).includes("finance.yahoo.com/quote/AAPL")
+    ).length;
+    expect(yahooCallsAfterSecond).toBe(1); // still 1 — session cache hit
+    expect(second?.marketSession).toBe("post");
+    expect(second?.postMarketPrice).toBe(181.42);
+
+    vi.useRealTimers();
   });
 });

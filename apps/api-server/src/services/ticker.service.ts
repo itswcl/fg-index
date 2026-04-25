@@ -57,6 +57,7 @@ export function _resetTickerServiceState(): void {
   quoteCache.clear();
   lastKnownCache.clear();
   lastKnownStoredAt.clear();
+  sessionCache.clear();
   yahooCooldownUntil = 0;
 }
 
@@ -228,8 +229,11 @@ async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | nul
 // uses a broader vocabulary than we expose — PREPRE / POSTPOST are the
 // "futures have opened but the equity session hasn't started/resumed" states,
 // which we fold into `pre` / `post` because the FE only needs to know
-// "regular vs extended". Anything we don't recognize returns undefined so
-// the FE falls back to its own timestamp heuristic instead of guessing.
+// "regular vs extended". OVERNIGHT (the gap between post-market close at
+// 8 pm ET and pre-market open at 4 am ET) folds to `closed` — there's no
+// active session, even though Yahoo still surfaces the most recent post-
+// market print. Anything we don't recognize returns undefined so the FE
+// falls back to its own timestamp heuristic instead of guessing.
 function mapMarketState(state: string | undefined): MarketSession | undefined {
   switch (state) {
     case "REGULAR":
@@ -241,6 +245,7 @@ function mapMarketState(state: string | undefined): MarketSession | undefined {
     case "POSTPOST":
       return "post";
     case "CLOSED":
+    case "OVERNIGHT":
       return "closed";
     default:
       return undefined;
@@ -260,7 +265,8 @@ interface SessionFields {
 // Pull the session + extended-hours fields out of a Yahoo meta block. Numeric
 // fields are only forwarded when they're finite and (for prices) positive —
 // same discipline as validateTickerQuote applies here so NaN can't ship over
-// the wire as JSON `null`.
+// the wire as JSON `null`. Used both for the chart-meta crypto path and (via
+// the v7 quote shape) the HTML-scrape stock enrichment.
 function sessionFieldsFromMeta(meta: YahooChartMeta): SessionFields {
   const out: SessionFields = {};
   const session = mapMarketState(meta.marketState);
@@ -286,17 +292,151 @@ function sessionFieldsFromMeta(meta: YahooChartMeta): SessionFields {
   return out;
 }
 
+// ─── Yahoo HTML scrape: session + extended-hours fields ──────────────
+// Yahoo's `v8/finance/chart/<symbol>` endpoint stopped exposing marketState /
+// postMarketPrice / preMarketPrice — the meta block returns null for all of
+// them now (verified live for AMD, TSLA on 2026-04-25). The full data is only
+// available through `v7/finance/quote`, which is gated behind a crumb cookie.
+//
+// Workaround: Yahoo's HTML quote page (https://finance.yahoo.com/quote/<S>/)
+// server-side fetches the v7 endpoint and embeds the response in a script tag
+// with `data-url` matching the v7 URL. We scrape that embedded JSON. The page
+// is heavy (~2.5 MB) so we cache the parsed session result with a longer TTL
+// than the 15s quote cache — session state changes on the order of minutes,
+// not seconds, so 60s is plenty fresh and ~4× cheaper on Yahoo egress.
+const SESSION_CACHE_TTL_MS = 60_000;
+interface SessionCacheEntry {
+  fields: SessionFields;
+  expiresAt: number;
+}
+const sessionCache = new Map<string, SessionCacheEntry>();
+
+// Fields we ask Yahoo to include on the embedded v7 response. Used both as
+// the search needle when locating the script block AND as the source of the
+// extracted values.
+const V7_QUOTE_FIELDS_NEEDLE = "postMarketPrice";
+
+interface V7Quote {
+  symbol?: string;
+  marketState?: string;
+  // v7 wraps each numeric field as { raw: number, fmt: string }. We only
+  // care about `raw`.
+  postMarketPrice?: { raw?: number };
+  postMarketChange?: { raw?: number };
+  postMarketChangePercent?: { raw?: number };
+  preMarketPrice?: { raw?: number };
+  preMarketChange?: { raw?: number };
+  preMarketChangePercent?: { raw?: number };
+}
+
+// Walk the embedded scripts to find the one whose data-url targets the v7
+// quote endpoint for our symbol AND requests extended-hours fields. Then
+// JSON-parse the wrapping `{status, body}` envelope and the inner string body.
+// Returns the first matching v7 quote object, or null.
+function extractV7QuoteFromHtml(html: string, symbol: string): V7Quote | null {
+  const sym = encodeURIComponent(symbol);
+  // The script tag content runs from `>` to `</script>`. JSON bodies don't
+  // contain `<` outside escaped string contents on Yahoo's pages, so the
+  // lazy `[\s\S]*?` is safe.
+  const re = /<script type="application\/json" data-sveltekit-fetched data-url="([^"]+)"[^>]*>([\s\S]*?)<\/script>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const url = m[1];
+    if (
+      !url.includes("v7/finance/quote") ||
+      !url.includes(V7_QUOTE_FIELDS_NEEDLE) ||
+      !url.includes(`symbols=${sym}`)
+    ) {
+      continue;
+    }
+    try {
+      const outer = JSON.parse(m[2]) as { body?: string };
+      if (typeof outer.body !== "string") return null;
+      const inner = JSON.parse(outer.body) as {
+        quoteResponse?: { result?: V7Quote[] };
+      };
+      const result = inner.quoteResponse?.result?.[0];
+      return result ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Convert a parsed v7 quote into the chart-meta-shape so we can reuse
+// `sessionFieldsFromMeta` for the validation rules. Strips the `{raw, fmt}`
+// envelope down to plain numbers.
+function v7QuoteToMetaShape(q: V7Quote): YahooChartMeta {
+  const num = (v: { raw?: number } | undefined): number | undefined => v?.raw;
+  return {
+    symbol: q.symbol,
+    marketState: q.marketState,
+    postMarketPrice: num(q.postMarketPrice),
+    postMarketChange: num(q.postMarketChange),
+    postMarketChangePercent: num(q.postMarketChangePercent),
+    preMarketPrice: num(q.preMarketPrice),
+    preMarketChange: num(q.preMarketChange),
+    preMarketChangePercent: num(q.preMarketChangePercent),
+  };
+}
+
+async function fetchYahooSessionFromHtml(
+  yahooSymbol: string
+): Promise<SessionFields> {
+  try {
+    // Trailing slash matches Yahoo's canonical URL — the page redirects
+    // without it, costing an extra round-trip for no gain.
+    const url = `https://finance.yahoo.com/quote/${encodeURIComponent(yahooSymbol)}/`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": env.SCRAPER_USER_AGENT,
+        // Yahoo serves brotli/gzip and the page is ~2.5 MB raw — let the
+        // runtime decompress to cut transit time in half.
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+    });
+
+    if (response.status === 429) {
+      tripYahooCooldown();
+      return {};
+    }
+    if (!response.ok) return {};
+
+    const html = await response.text();
+    const v7 = extractV7QuoteFromHtml(html, yahooSymbol);
+    if (!v7) return {};
+    return sessionFieldsFromMeta(v7QuoteToMetaShape(v7));
+  } catch {
+    return {};
+  }
+}
+
 // Public helper for other services (VIX, SPX) to enrich their own scraped
 // quotes with session info. Respects the Yahoo cooldown so a rate-limit event
-// on the chart endpoint pauses enrichment without poisoning the main scrape.
-// Yahoo symbol is caller's responsibility (^VIX, ^GSPC, etc.).
+// pauses enrichment without poisoning the main scrape. Caches the parsed
+// session result for 60 s — much longer than the 15 s quote cache, because
+// session state changes on the order of minutes, not seconds, and the HTML
+// fetch is by far the heaviest call in our pipeline.
+//
+// Yahoo symbol is caller's responsibility (^VIX, ^GSPC, AAPL, etc.).
 export async function fetchYahooSession(
   yahooSymbol: string
 ): Promise<SessionFields> {
   if (isYahooInCooldown()) return {};
-  const meta = await fetchYahooChartMeta(yahooSymbol);
-  if (!meta) return {};
-  return sessionFieldsFromMeta(meta);
+
+  const cached = sessionCache.get(yahooSymbol);
+  if (cached && Date.now() < cached.expiresAt) return cached.fields;
+
+  const fields = await fetchYahooSessionFromHtml(yahooSymbol);
+  // Cache even empty results for a shorter window so we don't hammer Yahoo
+  // when a symbol legitimately has no extended-hours data right now.
+  sessionCache.set(yahooSymbol, {
+    fields,
+    expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
+  });
+  return fields;
 }
 
 async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null> {
