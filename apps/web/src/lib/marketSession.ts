@@ -58,12 +58,28 @@ export function deriveMarketSession(fetchedAt: string | Date | undefined): Marke
   return 'closed';
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 /**
  * Resolve the session for a quote, preferring the backend-supplied value
  * and falling back to a `fetchedAt`-based derivation.
  *
  * `forceRegular` short-circuits the lookup — used by F&G and BTC cards
  * where the moon never makes sense (no session concept / 24-7 market).
+ *
+ * Defensive override:
+ *   The backend has been observed shipping `marketSession: 'closed'` on
+ *   quotes that ALSO carry a populated `postMarketPrice` / `preMarketPrice`
+ *   — internally inconsistent (a closed market doesn't print extended-
+ *   hours ticks). When that happens we trust the price field over the
+ *   enum and surface the moon, because the user's mental model is
+ *   "there's an extended-hours print, so flag it." Same logic for a
+ *   stale 'regular' enum that's clearly outside RTH but ships pre/post
+ *   data. The override only fires when the corresponding extended-hours
+ *   price actually exists, so a correctly-flagged 'closed' overnight
+ *   quote (no postMarketPrice) is left alone.
  */
 export function resolveMarketSession(
   quote: TickerQuote | null | undefined,
@@ -71,7 +87,20 @@ export function resolveMarketSession(
 ): MarketSession {
   if (options.forceRegular) return 'regular';
   if (!quote) return 'closed';
-  return quote.marketSession ?? deriveMarketSession(quote.fetchedAt);
+
+  const reported = quote.marketSession ?? deriveMarketSession(quote.fetchedAt);
+
+  // Already an extended-hours session — nothing to upgrade.
+  if (reported === 'pre' || reported === 'post') return reported;
+
+  // Backend says closed/regular but ships an extended-hours print:
+  // upgrade based on which side of the day populated. Post wins ties
+  // because that's the more common path (Yahoo holds post data into
+  // the late evening more often than pre into the early morning).
+  if (isFiniteNumber(quote.postMarketPrice)) return 'post';
+  if (isFiniteNumber(quote.preMarketPrice)) return 'pre';
+
+  return reported;
 }
 
 /**
