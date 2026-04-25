@@ -1,5 +1,5 @@
 import { env } from "../config/env.js";
-import type { TickerQuote } from "@shared/types";
+import type { MarketSession, TickerQuote } from "@shared/types";
 import { validateTickerQuote } from "./validateQuote.js";
 
 // ─── Cache ─────────────────────────────────────────────────────────
@@ -171,7 +171,30 @@ async function scrapeGoogleFinance(
   }
 }
 
-async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null> {
+// Yahoo's chart `meta` block is the one upstream that tells us the current
+// market session and the extended-hours prints in a single JSON call. We use
+// it two ways:
+//   1. As a primary quote source for crypto (`fetchYahooChartQuote`).
+//   2. As best-effort enrichment for Google-scraped stocks, so every /quote
+//      response carries `marketSession` and (when applicable) the post/pre
+//      market tick. See `fetchYahooSession` below.
+interface YahooChartMeta {
+  regularMarketPrice?: number;
+  chartPreviousClose?: number;
+  previousClose?: number;
+  longName?: string;
+  shortName?: string;
+  symbol?: string;
+  marketState?: string;
+  postMarketPrice?: number;
+  postMarketChange?: number;
+  postMarketChangePercent?: number;
+  preMarketPrice?: number;
+  preMarketChange?: number;
+  preMarketChangePercent?: number;
+}
+
+async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | null> {
   try {
     const url =
       `https://query1.finance.yahoo.com/v8/finance/chart/` +
@@ -191,51 +214,126 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
     }
     if (!response.ok) return null;
 
-    const json = await response.json() as {
-      chart?: {
-        result?: Array<{
-          meta?: {
-            regularMarketPrice?: number;
-            chartPreviousClose?: number;
-            previousClose?: number;
-            longName?: string;
-            shortName?: string;
-            symbol?: string;
-          };
-        }>;
-      };
+    const json = (await response.json()) as {
+      chart?: { result?: Array<{ meta?: YahooChartMeta }> };
     };
 
-    const meta = json.chart?.result?.[0]?.meta;
-    const price = meta?.regularMarketPrice;
-    if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
-      return null;
-    }
-
-    const previousCloseCandidate = meta?.chartPreviousClose ?? meta?.previousClose;
-    const previousClose =
-      typeof previousCloseCandidate === "number" &&
-      Number.isFinite(previousCloseCandidate) &&
-      previousCloseCandidate > 0
-        ? previousCloseCandidate
-        : price;
-    const change = +(price - previousClose).toFixed(4);
-    const changePercent =
-      previousClose > 0 ? +((change / previousClose) * 100).toFixed(4) : 0;
-
-    return {
-      ticker: meta?.symbol ?? ticker,
-      name: meta?.longName ?? meta?.shortName,
-      price,
-      previousClose,
-      change,
-      changePercent,
-      fetchedAt: new Date().toISOString(),
-      sourceUrl: url,
-    };
+    return json.chart?.result?.[0]?.meta ?? null;
   } catch {
     return null;
   }
+}
+
+// Map Yahoo's raw `marketState` enum onto our public session union. Yahoo
+// uses a broader vocabulary than we expose — PREPRE / POSTPOST are the
+// "futures have opened but the equity session hasn't started/resumed" states,
+// which we fold into `pre` / `post` because the FE only needs to know
+// "regular vs extended". Anything we don't recognize returns undefined so
+// the FE falls back to its own timestamp heuristic instead of guessing.
+function mapMarketState(state: string | undefined): MarketSession | undefined {
+  switch (state) {
+    case "REGULAR":
+      return "regular";
+    case "PRE":
+    case "PREPRE":
+      return "pre";
+    case "POST":
+    case "POSTPOST":
+      return "post";
+    case "CLOSED":
+      return "closed";
+    default:
+      return undefined;
+  }
+}
+
+interface SessionFields {
+  marketSession?: MarketSession;
+  postMarketPrice?: number;
+  postMarketChange?: number;
+  postMarketChangePercent?: number;
+  preMarketPrice?: number;
+  preMarketChange?: number;
+  preMarketChangePercent?: number;
+}
+
+// Pull the session + extended-hours fields out of a Yahoo meta block. Numeric
+// fields are only forwarded when they're finite and (for prices) positive —
+// same discipline as validateTickerQuote applies here so NaN can't ship over
+// the wire as JSON `null`.
+function sessionFieldsFromMeta(meta: YahooChartMeta): SessionFields {
+  const out: SessionFields = {};
+  const session = mapMarketState(meta.marketState);
+  if (session) out.marketSession = session;
+
+  const finitePos = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v) && v > 0;
+  const finite = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v);
+
+  if (finitePos(meta.postMarketPrice)) {
+    out.postMarketPrice = meta.postMarketPrice;
+    if (finite(meta.postMarketChange)) out.postMarketChange = meta.postMarketChange;
+    if (finite(meta.postMarketChangePercent))
+      out.postMarketChangePercent = meta.postMarketChangePercent;
+  }
+  if (finitePos(meta.preMarketPrice)) {
+    out.preMarketPrice = meta.preMarketPrice;
+    if (finite(meta.preMarketChange)) out.preMarketChange = meta.preMarketChange;
+    if (finite(meta.preMarketChangePercent))
+      out.preMarketChangePercent = meta.preMarketChangePercent;
+  }
+  return out;
+}
+
+// Public helper for other services (VIX, SPX) to enrich their own scraped
+// quotes with session info. Respects the Yahoo cooldown so a rate-limit event
+// on the chart endpoint pauses enrichment without poisoning the main scrape.
+// Yahoo symbol is caller's responsibility (^VIX, ^GSPC, etc.).
+export async function fetchYahooSession(
+  yahooSymbol: string
+): Promise<SessionFields> {
+  if (isYahooInCooldown()) return {};
+  const meta = await fetchYahooChartMeta(yahooSymbol);
+  if (!meta) return {};
+  return sessionFieldsFromMeta(meta);
+}
+
+async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null> {
+  const meta = await fetchYahooChartMeta(ticker);
+  if (!meta) return null;
+
+  const price = meta.regularMarketPrice;
+  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+    return null;
+  }
+
+  const previousCloseCandidate = meta.chartPreviousClose ?? meta.previousClose;
+  const previousClose =
+    typeof previousCloseCandidate === "number" &&
+    Number.isFinite(previousCloseCandidate) &&
+    previousCloseCandidate > 0
+      ? previousCloseCandidate
+      : price;
+  const change = +(price - previousClose).toFixed(4);
+  const changePercent =
+    previousClose > 0 ? +((change / previousClose) * 100).toFixed(4) : 0;
+
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(ticker)}?interval=1d&range=5d`;
+
+  return {
+    ticker: meta.symbol ?? ticker,
+    name: meta.longName ?? meta.shortName,
+    price,
+    previousClose,
+    change,
+    changePercent,
+    fetchedAt: new Date().toISOString(),
+    sourceUrl: url,
+    ...sessionFieldsFromMeta(meta),
+  };
 }
 
 // ─── CoinGecko fallback for crypto ─────────────────────────────────
@@ -366,6 +464,28 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
 // (see the CRYPTO_TICKERS comment). Crypto routes through its own path above.
 const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME"];
 
+// Extract the Yahoo-compatible symbol from whatever format Google used.
+// Google's "AAPL:NASDAQ" maps to Yahoo's "AAPL"; indices like ^VIX are already
+// in Yahoo form. Anything else goes across as-is.
+function yahooSymbolFor(rawOrResolvedTicker: string): string {
+  return rawOrResolvedTicker.includes(":")
+    ? rawOrResolvedTicker.split(":")[0]
+    : rawOrResolvedTicker;
+}
+
+// Merge session/aftermarket fields onto a Google-scraped stock quote. We call
+// Yahoo's chart-meta endpoint as a best-effort enrichment — when Yahoo is
+// cooling down or rate-limits us, we fall back to the plain Google quote
+// without session info rather than failing the whole fetch.
+async function enrichStockWithSession(
+  quote: TickerQuote,
+  yahooSymbol: string
+): Promise<TickerQuote> {
+  const session = await fetchYahooSession(yahooSymbol);
+  if (Object.keys(session).length === 0) return quote;
+  return { ...quote, ...session };
+}
+
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   // ─── Crypto: Yahoo → CoinGecko. Never Google. ────────────────────
   if (isCryptoTicker(rawTicker)) {
@@ -375,9 +495,13 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
 
     const crypto = await fetchCryptoQuote(canonical);
     if (crypto) {
+      // Crypto markets run 24/7 — there's no pre / post / closed session.
+      // Pin to `regular` so the FE's session-based UI (moon indicator) stays
+      // off for BTC regardless of which upstream (Yahoo vs CoinGecko) won.
+      const withSession: TickerQuote = { ...crypto, marketSession: "regular" };
       resolvedFormatCache.set(rawTicker, canonical);
-      setCache(canonical, crypto, CRYPTO_CACHE_TTL_MS);
-      return crypto;
+      setCache(canonical, withSession, CRYPTO_CACHE_TTL_MS);
+      return withSession;
     }
     // If both crypto sources fail, return null rather than serving stale
     // Google data. The caller surfaces this as a missing/null quote.
@@ -392,17 +516,19 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     if (cached) return cached;
     const result = await scrapeGoogleFinance(knownFormat);
     if (result) {
-      setCache(knownFormat, result);
-      return result;
+      const enriched = await enrichStockWithSession(result, yahooSymbolFor(knownFormat));
+      setCache(knownFormat, enriched);
+      return enriched;
     }
   }
 
   // 2. Try raw ticker on Google Finance
   const direct = await scrapeGoogleFinance(rawTicker);
   if (direct) {
+    const enriched = await enrichStockWithSession(direct, yahooSymbolFor(rawTicker));
     resolvedFormatCache.set(rawTicker, rawTicker);
-    setCache(rawTicker, direct);
-    return direct;
+    setCache(rawTicker, enriched);
+    return enriched;
   }
 
   // 3. Try common exchange suffixes
@@ -410,9 +536,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     const fmt = `${rawTicker}${suffix}`;
     const result = await scrapeGoogleFinance(fmt);
     if (result) {
+      const enriched = await enrichStockWithSession(result, yahooSymbolFor(fmt));
       resolvedFormatCache.set(rawTicker, fmt);
-      setCache(fmt, result);
-      return result;
+      setCache(fmt, enriched);
+      return enriched;
     }
   }
 

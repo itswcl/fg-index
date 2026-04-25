@@ -389,3 +389,179 @@ describe("ticker service — stale-on-error fallback", () => {
     vi.useRealTimers();
   });
 });
+
+describe("ticker service — marketSession + after-hours enrichment", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    vi.useRealTimers();
+    applyEnv();
+  });
+
+  it("merges marketSession='post' and postMarketPrice from Yahoo onto a Google-scraped stock", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        // Direct hit on the bare ticker — Google returns regular-session price.
+        return new Response(
+          '<html><div class="zzDege">Apple Inc.</div>' +
+            '<div data-last-price="180.50"></div>' +
+            '<div class="P6K39c">$179.00</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/AAPL")) {
+        // Yahoo's chart-meta tells us we're in post-market with a real tick.
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "AAPL",
+                    marketState: "POST",
+                    regularMarketPrice: 180.5,
+                    chartPreviousClose: 179.0,
+                    postMarketPrice: 181.42,
+                    postMarketChange: 0.92,
+                    postMarketChangePercent: 0.51,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    // Regular-session number stays canonical — we never overwrite `price`.
+    expect(quote?.price).toBe(180.5);
+    expect(quote?.previousClose).toBe(179.0);
+    // New session/aftermarket fields populated from Yahoo's meta block.
+    expect(quote?.marketSession).toBe("post");
+    expect(quote?.postMarketPrice).toBe(181.42);
+    expect(quote?.postMarketChange).toBe(0.92);
+    expect(quote?.postMarketChangePercent).toBe(0.51);
+  });
+
+  it("ships the plain quote (no session fields) when the Yahoo enrichment 429s", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          '<html><div class="zzDege">Apple Inc.</div>' +
+            '<div data-last-price="180.50"></div>' +
+            '<div class="P6K39c">$179.00</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("query1.finance.yahoo.com")) {
+        // Rate-limited — `fetchYahooSession` returns {} and the quote ships
+        // without session fields rather than failing the whole request.
+        return new Response("too many requests", { status: 429 });
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote?.price).toBe(180.5);
+    expect(quote?.marketSession).toBeUndefined();
+    expect(quote?.postMarketPrice).toBeUndefined();
+    expect(quote?.preMarketPrice).toBeUndefined();
+  });
+
+  it("pins BTC to marketSession='regular' (crypto trades 24/7)", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/BTC-USD")) {
+        // Yahoo could report any state for crypto (it varies), but we always
+        // override to 'regular' for crypto so the FE moon indicator stays off.
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "BTC-USD",
+                    longName: "Bitcoin USD",
+                    marketState: "PRE",
+                    regularMarketPrice: 79000,
+                    chartPreviousClose: 78500,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("BTC-USD");
+
+    expect(quote?.ticker).toBe("BTC-USD");
+    expect(quote?.marketSession).toBe("regular");
+  });
+
+  it("maps Yahoo's PREPRE state to 'pre' and forwards preMarketPrice", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          '<html><div class="zzDege">Apple Inc.</div>' +
+            '<div data-last-price="180.50"></div>' +
+            '<div class="P6K39c">$179.00</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "AAPL",
+                    marketState: "PREPRE", // pre-pre-market → folded to 'pre'
+                    regularMarketPrice: 180.5,
+                    preMarketPrice: 178.22,
+                    preMarketChange: -2.28,
+                    preMarketChangePercent: -1.26,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote?.marketSession).toBe("pre");
+    expect(quote?.preMarketPrice).toBe(178.22);
+    expect(quote?.preMarketChange).toBe(-2.28);
+    expect(quote?.preMarketChangePercent).toBe(-1.26);
+    expect(quote?.postMarketPrice).toBeUndefined();
+  });
+});
