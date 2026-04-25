@@ -3,8 +3,10 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
+import { resolveMarketSession } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
+import { MarketSessionBadge } from './MarketSessionBadge';
 
 interface VixCardProps {
   data: TickerQuote | null;
@@ -41,8 +43,20 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
 
   const linkProps = buildSourceLinkProps(data?.sourceUrl, 'VIX — open source');
 
+  // Hide the moon during loading or when there's no data — never flag a
+  // session against shimmer/empty (per spec). VIX is a US-equity-hours
+  // index, so we trust the backend `marketSession` and fall back to the
+  // ET-derived value if it's missing.
+  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
+
   return (
     <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
+      <MarketSessionBadge
+        session={session}
+        isDark={isDark}
+        placement="corner"
+        fetchedAt={data?.fetchedAt}
+      />
       <div className="card-inner">
         <span className="card-label">VIX</span>
 

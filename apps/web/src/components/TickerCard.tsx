@@ -2,8 +2,10 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
+import { resolveMarketSession } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
+import { MarketSessionBadge } from './MarketSessionBadge';
 
 interface TickerCardProps {
   ticker: string;
@@ -73,8 +75,20 @@ export function TickerCard({
   const arrow = isPositive ? '↑' : '↓';
   const fmtPrice = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Hide moon during shimmer / partial-data states; only flag a session
+  // we trust. `withRemoveButton` shifts the moon left so it never collides
+  // with the hover-reveal red × button on `.card-custom`.
+  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
+
   return (
     <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
+      <MarketSessionBadge
+        session={session}
+        isDark={isDark}
+        placement="corner"
+        withRemoveButton
+        fetchedAt={data?.fetchedAt}
+      />
       <button
         className="card-remove-btn"
         onClick={(e) => { e.stopPropagation(); onRemove(); }}

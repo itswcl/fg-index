@@ -14,6 +14,7 @@ import { usePageTickers } from '../hooks/usePageTickers';
 import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import { FEAR_GREED_COLORS } from '../constants';
 import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
+import { resolveMarketSession } from '../lib/marketSession';
 import { MetricRow, type MetricRowData } from './MetricRow';
 import './MobileMetricList.css';
 
@@ -98,6 +99,10 @@ function TickerMetricRow({
     isLoading: showLoading,
     isNa: notFound,
     sourceUrl: data?.sourceUrl,
+    // Custom tickers respect whatever session the backend reports, with
+    // the timestamp fallback inside resolveMarketSession.
+    marketSession: data ? resolveMarketSession(data) : undefined,
+    fetchedAt: data?.fetchedAt,
   };
 
   return (
@@ -127,6 +132,8 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'none',
         isLoading: showLoading,
         sourceUrl: fg?.sourceUrl,
+        // F&G has no concept of market session — never show the moon.
+        marketSession: 'regular',
       };
     }
     case 'vix': {
@@ -142,6 +149,8 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'inverted',
         isLoading: showLoading,
         sourceUrl: v?.sourceUrl,
+        marketSession: v ? resolveMarketSession(v) : undefined,
+        fetchedAt: v?.fetchedAt,
       };
     }
     case 'btc': {
@@ -157,6 +166,8 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'standard',
         isLoading: showLoading,
         sourceUrl: b?.sourceUrl,
+        // Crypto trades 24/7 — force regular so the moon never appears.
+        marketSession: 'regular',
       };
     }
     case 'spx': {
@@ -172,6 +183,8 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'standard',
         isLoading: showLoading,
         sourceUrl: s?.sourceUrl,
+        marketSession: s ? resolveMarketSession(s) : undefined,
+        fetchedAt: s?.fetchedAt,
       };
     }
     default:

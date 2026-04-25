@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import type { MarketSession } from '../types';
 import { AnimatedNumber } from './AnimatedNumber';
+import { MarketSessionBadge } from './MarketSessionBadge';
 import { Shimmer } from './Shimmer';
 import './MetricRow.css';
 
@@ -33,6 +35,19 @@ export interface MetricRowData {
   isNa?: boolean;
   /** When set (and not in edit mode), row becomes a link that opens this URL in a new tab. */
   sourceUrl?: string;
+  /**
+   * Market session of this row's quote. When `'pre'` or `'post'`, an
+   * inline crescent moon glyph renders next to the label. Defaults to
+   * `'regular'` (no moon) — F&G and BTC pass `'regular'` explicitly so
+   * their rows never get a session flag.
+   */
+  marketSession?: MarketSession;
+  /**
+   * ISO timestamp of the quote — used by the moon glyph's tooltip to
+   * show "last trade HH:MM ET". Only relevant when `marketSession` is
+   * an extended-hours value.
+   */
+  fetchedAt?: string;
 }
 
 interface MetricRowProps extends MetricRowData {
@@ -80,6 +95,8 @@ export function MetricRow(props: MetricRowProps) {
     isLoading,
     isNa,
     sourceUrl,
+    marketSession,
+    fetchedAt,
     isDark,
     editMode,
     isCustom,
@@ -174,7 +191,24 @@ export function MetricRow(props: MetricRowProps) {
           </>
         ) : (
           <>
-            <span className="metric-row-label">{label}</span>
+            <span className="metric-row-label">
+              {label}
+              {/*
+                Inline moon glyph per spec — sits right of the ticker
+                label with a 4px gap (handled inside the badge). Hidden
+                during loading / N/A states because we don't render this
+                branch then. F&G and BTC pass `'regular'` so their badges
+                no-op.
+              */}
+              {marketSession && (
+                <MarketSessionBadge
+                  session={marketSession}
+                  isDark={isDark}
+                  placement="inline"
+                  fetchedAt={fetchedAt}
+                />
+              )}
+            </span>
             {subLabel && <span className="metric-row-sub">{subLabel}</span>}
           </>
         )}
