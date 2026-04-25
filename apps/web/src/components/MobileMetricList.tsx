@@ -14,7 +14,7 @@ import { usePageTickers } from '../hooks/usePageTickers';
 import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import { FEAR_GREED_COLORS } from '../constants';
 import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
-import { resolveMarketSession } from '../lib/marketSession';
+import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
 import { MetricRow, type MetricRowData } from './MetricRow';
 import './MobileMetricList.css';
 
@@ -88,20 +88,26 @@ function TickerMetricRow({
   const showLoading = isLoading || (isFetching && data === undefined);
   const notFound = !isLoading && data === null;
 
+  // During post/pre we paint the extended-hours triplet — same swap the
+  // desktop TickerCard performs. getDisplayQuote falls back to regular
+  // numbers when the extended-hours fields aren't present.
+  const session = data ? resolveMarketSession(data) : undefined;
+  const display = session ? getDisplayQuote(data, session) : null;
+
   const rowData: MetricRowData = {
     id,
     label: id,
     subLabel: data?.name,
-    value: data?.price ?? null,
+    value: display?.price ?? null,
     valueFormatter: formatPrice,
-    changePercent: data?.changePercent ?? null,
+    changePercent: display?.changePercent ?? null,
     changeMode: 'standard',
     isLoading: showLoading,
     isNa: notFound,
     sourceUrl: data?.sourceUrl,
     // Custom tickers respect whatever session the backend reports, with
     // the timestamp fallback inside resolveMarketSession.
-    marketSession: data ? resolveMarketSession(data) : undefined,
+    marketSession: session,
     fetchedAt: data?.fetchedAt,
   };
 
@@ -139,17 +145,19 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
     case 'vix': {
       const v = p.vixData;
       const showLoading = p.vixIsLoading || (p.vixIsRefreshing && !v);
+      const vSession = v ? resolveMarketSession(v) : undefined;
+      const vDisplay = vSession ? getDisplayQuote(v, vSession) : null;
       return {
         id,
         label: 'VIX',
         subLabel: 'Volatility',
-        value: v?.price ?? null,
+        value: vDisplay?.price ?? null,
         valueFormatter: (n) => n.toFixed(2),
-        changePercent: v?.changePercent ?? null,
+        changePercent: vDisplay?.changePercent ?? null,
         changeMode: 'inverted',
         isLoading: showLoading,
         sourceUrl: v?.sourceUrl,
-        marketSession: v ? resolveMarketSession(v) : undefined,
+        marketSession: vSession,
         fetchedAt: v?.fetchedAt,
       };
     }
@@ -173,17 +181,19 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
     case 'spx': {
       const s = p.spxData;
       const showLoading = p.spxIsLoading || (p.spxIsRefreshing && !s);
+      const sSession = s ? resolveMarketSession(s) : undefined;
+      const sDisplay = sSession ? getDisplayQuote(s, sSession) : null;
       return {
         id,
         label: 'S&P 500',
         subLabel: 'Index',
-        value: s?.price ?? null,
+        value: sDisplay?.price ?? null,
         valueFormatter: formatSpxPrice,
-        changePercent: s?.changePercent ?? null,
+        changePercent: sDisplay?.changePercent ?? null,
         changeMode: 'standard',
         isLoading: showLoading,
         sourceUrl: s?.sourceUrl,
-        marketSession: s ? resolveMarketSession(s) : undefined,
+        marketSession: sSession,
         fetchedAt: s?.fetchedAt,
       };
     }
