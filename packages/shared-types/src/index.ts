@@ -25,6 +25,15 @@ export const FearGreedSchema = z.object({
 // ─── Ticker Quote ─────────────────────────────────────────────────
 // Unified shape for any scraped price series — user-added tickers
 // plus the built-in VIX / SPX / BTC cards. See aliases below.
+//
+// `price` / `previousClose` / `change` / `changePercent` ALWAYS refer to the
+// regular-session print (the official last-trade / close). Extended-hours
+// activity is exposed in the optional post/pre-market fields so the frontend
+// can decide whether to display the regular close or overlay the aftermarket
+// tick — we don't silently swap the main number.
+export const MarketSessionSchema = z.enum(["regular", "pre", "post", "closed"]);
+export type MarketSession = z.infer<typeof MarketSessionSchema>;
+
 export const TickerQuoteSchema = z.object({
   ticker: z.string(),
   name: z.string().optional(),
@@ -38,6 +47,25 @@ export const TickerQuoteSchema = z.object({
   // users can verify the quote. Optional — older cache entries or
   // future data sources may not populate it.
   sourceUrl: z.string().url().optional(),
+
+  // ─── Market-session fields (optional) ─────────────────────────────
+  // Populated from Yahoo's chart-meta `marketState` when we can reach it.
+  // Undefined means the producer couldn't determine the session (Yahoo
+  // cooling down, non-US listing, etc.) and the FE should fall back to its
+  // own timestamp-based heuristic or treat it as `regular`.
+  marketSession: MarketSessionSchema.optional(),
+
+  // Post-market (after-hours) last print. Present only when the upstream
+  // reports one AND the session is or recently was `post`. Indices like
+  // ^VIX / ^GSPC never have these — they're computed, not traded.
+  postMarketPrice: z.number().positive().optional(),
+  postMarketChange: z.number().optional(),
+  postMarketChangePercent: z.number().optional(),
+
+  // Pre-market last print. Same optional-presence rules as post-market.
+  preMarketPrice: z.number().positive().optional(),
+  preMarketChange: z.number().optional(),
+  preMarketChangePercent: z.number().optional(),
 });
 
 export type TickerQuote = z.infer<typeof TickerQuoteSchema>;
