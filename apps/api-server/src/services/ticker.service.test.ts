@@ -700,6 +700,68 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     )).toBe(true);
   });
 
+  it("enriches Yahoo-sourced stock quotes with Google after-market fields", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AVGO")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AVGO",
+            exchange: "NASDAQ",
+            name: "Broadcom Inc",
+            price: 200.9,
+            change: 1,
+            changePercent: 0.4998,
+            previousClose: 199.9,
+            ext:
+              `<div class="ivZBbf ygUjEc" jsname="QRHKC">After Hours:` +
+              `<span><div class="YMlKec fxKbKc">$201.20</div></span>` +
+              `<span><span>0.15%</span></span>` +
+              `<span><span>+0.30</span></span>` +
+              `</div>`,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/AVGO")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "AVGO",
+                    longName: "Broadcom Inc",
+                    regularMarketPrice: 200.9,
+                    chartPreviousClose: 199.9,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AVGO");
+
+    expect(quote).toMatchObject({
+      ticker: "AVGO",
+      name: "Broadcom Inc",
+      price: 200.9,
+      previousClose: 199.9,
+      marketSession: "post",
+      postMarketPrice: 201.2,
+      postMarketChange: 0.3,
+      postMarketChangePercent: 0.15,
+    });
+  });
+
   it("ships a plain quote (no session fields) when Google's page has no extended-hours block", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
