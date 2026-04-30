@@ -7,12 +7,12 @@ import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js"
 
 const MAX_TICKERS_PER_USER = 32;
 
-// Symbol format: 1–10 chars, A–Z/0–9/.-_, normalized to upper-case.
+// Symbol format matches quote endpoints and supports futures/index symbols.
 const SymbolSchema = z
   .string()
   .min(1)
-  .max(10)
-  .regex(/^[A-Za-z0-9._-]+$/, "Invalid ticker symbol")
+  .max(20)
+  .regex(/^[A-Za-z0-9:.\-^=_]+$/, "Invalid ticker symbol")
   .transform((s) => s.toUpperCase());
 
 const AddSchema = z.object({ symbol: SymbolSchema });

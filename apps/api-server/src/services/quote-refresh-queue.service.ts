@@ -5,14 +5,31 @@ import { fetchFreshTickerQuote } from "./ticker.service.js";
 const queue: string[] = [];
 const queued = new Set<string>();
 const inFlight = new Set<string>();
+const failedUntil = new Map<string, number>();
 
 let activeWorkers = 0;
 let lastActiveSyncAt: Date | null = null;
 let lastActiveSyncError: string | null = null;
 let trackedSymbolsCount = 0;
+let lastRefreshFailure: { symbol: string; error: string; at: Date } | null = null;
 
 function normalizeSymbol(symbol: string): string {
   return symbol.trim().toUpperCase();
+}
+
+function isCoolingDown(symbol: string): boolean {
+  const until = failedUntil.get(symbol);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    failedUntil.delete(symbol);
+    return false;
+  }
+  return true;
+}
+
+function recordWorkerFailure(symbol: string, error: string): void {
+  failedUntil.set(symbol, Date.now() + env.QUOTE_REFRESH_FAILURE_COOLDOWN_MS);
+  lastRefreshFailure = { symbol, error, at: new Date() };
 }
 
 function drainQueue(): void {
@@ -21,6 +38,9 @@ function drainQueue(): void {
     if (!symbol) continue;
 
     queued.delete(symbol);
+    if (isCoolingDown(symbol)) {
+      continue;
+    }
     inFlight.add(symbol);
     activeWorkers += 1;
 
@@ -33,18 +53,25 @@ function drainQueue(): void {
 }
 
 async function processSymbol(symbol: string): Promise<void> {
-  const snapshot = await getCachedQuoteSnapshot(symbol);
-  if (snapshot.isFresh) return;
-
   try {
-    const quote = await fetchFreshTickerQuote(symbol);
-    if (!quote) {
-      await recordQuoteRefreshFailure(symbol, "Upstream quote fetch returned null");
+    const snapshot = await getCachedQuoteSnapshot(symbol);
+    if (snapshot.isFresh) {
+      failedUntil.delete(symbol);
       return;
     }
+
+    const quote = await fetchFreshTickerQuote(symbol);
+    if (!quote) {
+      const message = "Upstream quote fetch returned null";
+      recordWorkerFailure(symbol, message);
+      await recordQuoteRefreshFailure(symbol, message);
+      return;
+    }
+    failedUntil.delete(symbol);
     await upsertCachedQuote(symbol, quote);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    recordWorkerFailure(symbol, message);
     await recordQuoteRefreshFailure(symbol, message);
   }
 }
@@ -53,7 +80,7 @@ export function enqueueQuoteRefresh(symbols: string[] | string): void {
   const items = Array.isArray(symbols) ? symbols : [symbols];
   for (const raw of items) {
     const symbol = normalizeSymbol(raw);
-    if (!symbol || queued.has(symbol) || inFlight.has(symbol)) {
+    if (!symbol || queued.has(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
       continue;
     }
     queue.push(symbol);
@@ -74,13 +101,17 @@ export function recordActiveTickerSyncFailure(error: string): void {
 }
 
 export function getQuoteRefreshQueueStats() {
+  const coolingDownSymbols = Array.from(failedUntil.keys()).filter(isCoolingDown);
+
   return {
     queuedSymbols: queue.length,
     inFlightSymbols: inFlight.size,
     activeWorkers,
+    coolingDownSymbols: coolingDownSymbols.length,
     trackedSymbolsCount,
     lastActiveSyncAt,
     lastActiveSyncError,
+    lastRefreshFailure,
   };
 }
 
@@ -94,8 +125,10 @@ export function __resetQuoteRefreshQueueForTests(): void {
   queue.length = 0;
   queued.clear();
   inFlight.clear();
+  failedUntil.clear();
   activeWorkers = 0;
   trackedSymbolsCount = 0;
   lastActiveSyncAt = null;
   lastActiveSyncError = null;
+  lastRefreshFailure = null;
 }

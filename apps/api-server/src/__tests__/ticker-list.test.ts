@@ -154,6 +154,23 @@ describe("addTicker", () => {
     expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("AAPL");
   });
 
+  it("accepts futures symbols with equals", async () => {
+    countSpy.mockResolvedValue(0);
+    createSpy.mockImplementation(async (args: { data: unknown }) => ({
+      id: "t1",
+      ...(args.data as object),
+    }));
+
+    const res = mockRes();
+    await addTicker(mockReq({ userId: USER, body: { symbol: "es=f" } }), res);
+
+    expect(res._status).toBe(201);
+    expect(createSpy).toHaveBeenCalledWith({
+      data: { userId: USER, symbol: "ES=F", position: 0 },
+    });
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("ES=F");
+  });
+
   it("rejects when user already has the max", async () => {
     countSpy.mockResolvedValue(32);
     const res = mockRes();
