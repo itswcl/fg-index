@@ -103,6 +103,10 @@ function isCryptoTicker(ticker: string): boolean {
   return CRYPTO_TICKERS.has(ticker);
 }
 
+export function getTickerCacheTtlMs(ticker: string): number {
+  return isCryptoTicker(ticker.toUpperCase()) ? CRYPTO_CACHE_TTL_MS : CACHE_TTL_MS;
+}
+
 // Map any supported crypto input to its canonical `-USD` form so we hit the
 // same cache/CoinGecko key regardless of whether the caller sent "BTC" or
 // "BTC-USD".
@@ -550,8 +554,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   return null;
 }
 
-// ─── Public API ────────────────────────────────────────────────────
-export async function fetchTickerQuote(
+export async function fetchFreshTickerQuote(
   rawTicker: string
 ): Promise<TickerQuote | null> {
   const upperTicker = rawTicker.toUpperCase();
@@ -566,7 +569,17 @@ export async function fetchTickerQuote(
   // Defense-in-depth: every exit through the public API runs through the
   // validator so any future scraper regression that lets a non-finite field
   // slip through gets coerced to null here instead of reaching the wire.
-  const fresh = validateTickerQuote(await resolveAndFetch(upperTicker));
+  return validateTickerQuote(await resolveAndFetch(upperTicker));
+}
+
+// ─── Public API ────────────────────────────────────────────────────
+export async function fetchTickerQuote(
+  rawTicker: string
+): Promise<TickerQuote | null> {
+  const upperTicker = rawTicker.toUpperCase();
+  const knownFormat = resolvedFormatCache.get(upperTicker);
+
+  const fresh = await fetchFreshTickerQuote(upperTicker);
   if (fresh) return fresh;
 
   // Fresh fetch missed (transient scraper flake, upstream hiccup, etc.).

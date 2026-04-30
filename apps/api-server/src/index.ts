@@ -16,6 +16,7 @@ import { startFearGreedScheduler } from "./schedulers/fear-greed.scheduler.js";
 import { startVixScheduler } from "./schedulers/vix.scheduler.js";
 import { startBtcScheduler } from "./schedulers/btc.scheduler.js";
 import { startSpxScheduler } from "./schedulers/spx.scheduler.js";
+import { startTickerQuoteScheduler } from "./schedulers/ticker-quote.scheduler.js";
 import { startWsServer } from "./ws.js";
 import { getHealth } from "./controllers/health.controller.js";
 import { globalRateLimiter } from "./middlewares/rateLimit.js";
@@ -57,6 +58,7 @@ startFearGreedScheduler();
 startVixScheduler();
 startBtcScheduler();
 startSpxScheduler();
+startTickerQuoteScheduler();
 
 // Create HTTP server
 const server = http.createServer(app);

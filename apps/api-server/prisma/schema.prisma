@@ -33,6 +33,33 @@ model UserTicker {
   @@index([userId])
 }
 
+model TickerQuoteCache {
+  symbol                  String   @id
+  name                    String?
+  price                   Float
+  previousClose           Float
+  change                  Float
+  changePercent           Float
+  fetchedAt               DateTime
+  sourceUrl               String?
+  marketSession           String?
+  postMarketPrice         Float?
+  postMarketChange        Float?
+  postMarketChangePercent Float?
+  preMarketPrice          Float?
+  preMarketChange         Float?
+  preMarketChangePercent  Float?
+  staleAt                 DateTime
+  lastRefreshAttemptAt    DateTime?
+  lastRefreshSuccessAt    DateTime?
+  lastRefreshError        String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@index([staleAt])
+  @@index([lastRefreshAttemptAt])
+}
+
 model Alert {
   id              String      @id @default(uuid())
   userId          String

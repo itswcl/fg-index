@@ -9,6 +9,12 @@ import {
 } from "../controllers/ticker-list.controller.js";
 import { prisma } from "../services/db.js";
 
+vi.mock("../services/quote-refresh-queue.service.js", () => ({
+  enqueueQuoteRefresh: vi.fn(),
+}));
+
+import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
+
 // ─── Prisma stubs ────────────────────────────────────────────────
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const findManySpy = vi.spyOn(prisma.userTicker, "findMany") as unknown as any;
@@ -16,6 +22,8 @@ const countSpy = vi.spyOn(prisma.userTicker, "count") as unknown as any;
 const createSpy = vi.spyOn(prisma.userTicker, "create") as unknown as any;
 const deleteManySpy = vi.spyOn(prisma.userTicker, "deleteMany") as unknown as any;
 const txSpy = vi.spyOn(prisma, "$transaction") as unknown as any;
+const enqueueQuoteRefreshMock =
+  enqueueQuoteRefresh as unknown as ReturnType<typeof vi.fn>;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 txSpy.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -79,6 +87,7 @@ beforeEach(() => {
   countSpy.mockReset();
   createSpy.mockReset();
   deleteManySpy.mockReset();
+  enqueueQuoteRefreshMock.mockReset();
 });
 
 describe("ticker-list controller — auth gate", () => {
@@ -142,6 +151,7 @@ describe("addTicker", () => {
     expect(createSpy).toHaveBeenCalledWith({
       data: { userId: USER, symbol: "AAPL", position: 2 },
     });
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("AAPL");
   });
 
   it("rejects when user already has the max", async () => {
@@ -213,6 +223,7 @@ describe("bulkReplaceTickers", () => {
     expect(createSpy).toHaveBeenNthCalledWith(2, {
       data: { userId: USER, symbol: "MSFT", position: 1 },
     });
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
     expect((res._body as { tickers: unknown[] }).tickers).toHaveLength(2);
   });
 

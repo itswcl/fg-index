@@ -19,6 +19,8 @@ const envSchema = z.object({
   VIX_FALLBACK_INTERVAL_MS: z.string().transform(Number).default("300000"),
   BTC_INTERVAL_MS: z.string().transform(Number).default("60000"),
   SPX_INTERVAL_MS: z.string().transform(Number).default("10000"),
+  QUOTE_REFRESH_INTERVAL_MS: z.string().transform(Number).default("15000"),
+  QUOTE_REFRESH_CONCURRENCY: z.string().transform(Number).default("3"),
   CORS_ORIGIN: z.string().default("*"),
   INTERNAL_API_KEY: z.string().default("dev-key-123"),
   // Supabase / Postgres — Feature 6 persistence

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
+import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
 
 const MAX_TICKERS_PER_USER = 32;
 
@@ -63,6 +64,7 @@ export async function addTicker(req: Request, res: Response): Promise<void> {
       const ticker = await prisma.userTicker.create({
         data: { userId, symbol, position: count },
       });
+      enqueueQuoteRefresh(symbol);
       res.status(201).json({ ticker });
     } catch (err) {
       // Unique violation = duplicate symbol for this user
@@ -139,6 +141,7 @@ export async function bulkReplaceTickers(
       });
     });
 
+    enqueueQuoteRefresh(unique);
     res.json({ tickers });
   } catch (err) {
     handleError(res, err);
