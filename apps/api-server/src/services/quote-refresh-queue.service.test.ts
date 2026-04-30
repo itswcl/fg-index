@@ -17,6 +17,7 @@ function applyEnv() {
   process.env.SPX_INTERVAL_MS = "10000";
   process.env.QUOTE_REFRESH_INTERVAL_MS = "15000";
   process.env.QUOTE_REFRESH_CONCURRENCY = "2";
+  process.env.QUOTE_REFRESH_FAILURE_COOLDOWN_MS = "60000";
   process.env.CORS_ORIGIN = "*";
   process.env.INTERNAL_API_KEY = "test-key";
   process.env.DATABASE_URL = "https://example.com/db";
@@ -125,5 +126,31 @@ describe("quote refresh queue service", () => {
       "TSLA",
       "Upstream quote fetch returned null"
     );
+  });
+
+  it("does not immediately requeue symbols that are cooling down after failure", async () => {
+    getCachedQuoteSnapshotMock.mockResolvedValue({
+      quote: null,
+      isFresh: false,
+    });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+
+    mod.enqueueQuoteRefresh("ESW00");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    mod.enqueueQuoteRefresh("ESW00");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(1);
+    expect(recordQuoteRefreshFailureMock).toHaveBeenCalledTimes(1);
+    expect(mod.getQuoteRefreshQueueStats()).toMatchObject({
+      coolingDownSymbols: 1,
+      lastRefreshFailure: {
+        symbol: "ESW00",
+        error: "Upstream quote fetch returned null",
+      },
+    });
   });
 });
