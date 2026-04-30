@@ -43,6 +43,13 @@ const CRYPTO_TICKERS = new Set(["BTC", "BTC-USD"]);
 const YAHOO_COOLDOWN_MS = 5 * 60_000; // 5 min
 let yahooCooldownUntil = 0;
 
+function buildYahooChartUrl(ticker: string): string {
+  return (
+    `https://query1.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(ticker)}?interval=1d&range=1d`
+  );
+}
+
 function isYahooInCooldown(): boolean {
   return Date.now() < yahooCooldownUntil;
 }
@@ -304,9 +311,7 @@ interface YahooChartMeta {
 
 async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | null> {
   try {
-    const url =
-      `https://query1.finance.yahoo.com/v8/finance/chart/` +
-      `${encodeURIComponent(ticker)}?interval=1d&range=5d`;
+    const url = buildYahooChartUrl(ticker);
     const response = await fetchWithTimeout(url, {
       headers: {
         "User-Agent": env.SCRAPER_USER_AGENT,
@@ -352,9 +357,7 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
   const changePercent =
     previousClose > 0 ? +((change / previousClose) * 100).toFixed(4) : 0;
 
-  const url =
-    `https://query1.finance.yahoo.com/v8/finance/chart/` +
-    `${encodeURIComponent(ticker)}?interval=1d&range=5d`;
+  const url = buildYahooChartUrl(ticker);
 
   return {
     ticker: meta.symbol ?? ticker,
