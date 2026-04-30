@@ -93,7 +93,8 @@ describe("getTicker", () => {
 
     expect(res._status).toBe(200);
     expect(res._body).toEqual(quote);
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("aapl");
+    expect(getCachedQuoteSnapshotMock).toHaveBeenCalledWith("AAPL");
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("AAPL");
   });
 
   it("returns 404 for an uncached symbol but still enqueues refresh", async () => {
@@ -107,7 +108,8 @@ describe("getTicker", () => {
 
     expect(res._status).toBe(404);
     expect((res._body as { code: string }).code).toBe("TICKER_NOT_FOUND");
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("tsla");
+    expect(getCachedQuoteSnapshotMock).toHaveBeenCalledWith("TSLA");
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("TSLA");
   });
 });
 
@@ -175,5 +177,28 @@ describe("getBatchQuotes", () => {
     expect(res._status).toBe(200);
     expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
     expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
+  });
+
+  it("canonicalizes default market index aliases before cache lookup", async () => {
+    const res = mockRes();
+    getCachedQuotesBatchMock.mockResolvedValue({
+      VIX: makeQuote("VIX", 16),
+      SPX: makeQuote("SPX", 5250),
+    });
+
+    await getBatchQuotes(
+      mockReq({ query: { symbols: "vix,^gspc,sp500" } }),
+      res
+    );
+
+    expect(res._status).toBe(200);
+    expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(["VIX", "SPX"]);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["VIX", "SPX"]);
+    expect(res._body).toEqual({
+      quotes: {
+        VIX: expect.objectContaining({ ticker: "VIX" }),
+        SPX: expect.objectContaining({ ticker: "SPX" }),
+      },
+    });
   });
 });

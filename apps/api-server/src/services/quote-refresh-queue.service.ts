@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
 import { getCachedQuoteSnapshot, recordQuoteRefreshFailure, upsertCachedQuote } from "./ticker-cache.service.js";
 import { fetchFreshTickerQuote } from "./ticker.service.js";
 
@@ -14,7 +15,7 @@ let trackedSymbolsCount = 0;
 let lastRefreshFailure: { symbol: string; error: string; at: Date } | null = null;
 
 function normalizeSymbol(symbol: string): string {
-  return symbol.trim().toUpperCase();
+  return normalizeQuoteSymbol(symbol);
 }
 
 function isCoolingDown(symbol: string): boolean {

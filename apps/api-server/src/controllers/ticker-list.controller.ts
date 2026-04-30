@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
 import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
+import { normalizeQuoteSymbol } from "../services/quote-symbols.service.js";
 
 const MAX_TICKERS_PER_USER = 32;
 
@@ -13,7 +14,7 @@ const SymbolSchema = z
   .min(1)
   .max(20)
   .regex(/^[A-Za-z0-9:.\-^=_]+$/, "Invalid ticker symbol")
-  .transform((s) => s.toUpperCase());
+  .transform(normalizeQuoteSymbol);
 
 const AddSchema = z.object({ symbol: SymbolSchema });
 const BulkSchema = z.object({
