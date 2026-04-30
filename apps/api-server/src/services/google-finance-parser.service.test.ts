@@ -166,4 +166,43 @@ describe("parseGoogleFinanceQuoteHtml", () => {
 
     expect(quote).toBeNull();
   });
+
+  it("extracts extended-hours price from AF data", () => {
+    const html =
+      `AF_initDataCallback({key: 'ds:2', data:[[[[` +
+      `"/m/test",["AAPL","NASDAQ"],"Apple Inc",0,"USD",` +
+      `[271.35,1.18,0.4368,2,2,2],null,270.17,` +
+      `"#666666","US","/m/0k8z",[1777585274],"America/New_York",-14400,"/m/test",` +
+      `null,[283,11.65,4.2933,2,2,2],[1777579201],[1777585273],` +
+      `[[1,[2026,4,30,9,30,null,null,[-14400]],[2026,4,30,16,null,null,null,[-14400]]]],` +
+      `null,"AAPL:NASDAQ",0,null,null,null,0]]]], sideChannel: {}});`;
+
+    const quote = parseGoogleFinanceQuoteHtml(html, { tickerFormat: "AAPL:NASDAQ" });
+
+    expect(quote).toMatchObject({
+      ticker: "AAPL",
+      price: 271.35,
+      previousClose: 270.17,
+      extendedPrice: 283,
+      extendedChange: 11.65,
+      extendedChangePercent: 4.2933,
+    });
+  });
+
+  it("returns no extended fields when AF data has no extended array", () => {
+    const quote = parseGoogleFinanceQuoteHtml(
+      afQuoteRecord({
+        ticker: "AAPL",
+        exchange: "NASDAQ",
+        name: "Apple Inc",
+        price: 271.35,
+        change: 1.18,
+        changePercent: 0.4368,
+        previousClose: 270.17,
+      }),
+      { tickerFormat: "AAPL:NASDAQ" }
+    );
+
+    expect(quote?.extendedPrice).toBeUndefined();
+  });
 });

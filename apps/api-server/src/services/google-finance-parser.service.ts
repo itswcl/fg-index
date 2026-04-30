@@ -6,6 +6,9 @@ export interface ParsedGoogleFinanceQuote {
   previousClose: number;
   change: number;
   changePercent: number;
+  extendedPrice?: number;
+  extendedChange?: number;
+  extendedChangePercent?: number;
 }
 
 interface ParseGoogleFinanceQuoteOptions {
@@ -126,7 +129,8 @@ function parseAfQuote(
   const recordRe = new RegExp(
     String.raw`\[\s*"[^"]+"\s*,\s*\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]\s*,\s*"([^"]*)"` +
       String.raw`[\s\S]{0,120}?\[\s*(${number})\s*,\s*(${number})\s*,\s*(${number})[^\]]*\]` +
-      String.raw`(?:\s*,\s*null\s*,\s*(${number}))?`,
+      String.raw`(?:\s*,\s*null\s*,\s*(${number}))?` +
+      String.raw`(?:[\s\S]{0,300}?null\s*,\s*\[\s*(${number})\s*,\s*(${number})\s*,\s*(${number})[^\]]*\])?`,
     "g"
   );
 
@@ -145,7 +149,18 @@ function parseAfQuote(
       changePercent: parseNumber(match[6]),
       previousClose: parseNumber(match[7]),
     });
-    if (parsed) return parsed;
+    if (!parsed) continue;
+
+    const extPrice = parseNumber(match[8]);
+    if (isFiniteNumber(extPrice) && extPrice > 0) {
+      parsed.extendedPrice = extPrice;
+      const extChange = parseNumber(match[9]);
+      if (isFiniteNumber(extChange)) parsed.extendedChange = +extChange.toFixed(4);
+      const extPct = parseNumber(match[10]);
+      if (isFiniteNumber(extPct)) parsed.extendedChangePercent = +extPct.toFixed(4);
+    }
+
+    return parsed;
   }
 
   return null;
