@@ -21,6 +21,7 @@ const envSchema = z.object({
   SPX_INTERVAL_MS: z.string().transform(Number).default("10000"),
   QUOTE_REFRESH_INTERVAL_MS: z.string().transform(Number).default("15000"),
   QUOTE_REFRESH_CONCURRENCY: z.string().transform(Number).default("3"),
+  QUOTE_FETCH_TIMEOUT_MS: z.string().transform(Number).default("5000"),
   CORS_ORIGIN: z.string().default("*"),
   INTERNAL_API_KEY: z.string().default("dev-key-123"),
   // Supabase / Postgres — Feature 6 persistence

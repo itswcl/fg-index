@@ -474,8 +474,9 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     expect(quote?.postMarketPrice).toBe(181.42);
     expect(quote?.postMarketChange).toBe(0.92);
     expect(quote?.postMarketChangePercent).toBe(0.51);
-    // No second Yahoo fetch is made — atomic with the Google scrape.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) =>
+      String(u).includes("google.com/finance/quote/AAPL")
+    )).toBe(true);
   });
 
   it("ships a plain quote (no session fields) when Google's page has no extended-hours block", async () => {
@@ -635,5 +636,29 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
 
     expect(quote?.marketSession).toBe("post"); // label seen, no Closed marker
     expect(quote?.postMarketPrice).toBeUndefined(); // numbers couldn't be parsed
+  });
+
+  it("aborts slow upstream requests so refresh workers can continue", async () => {
+    process.env.QUOTE_FETCH_TIMEOUT_MS = "10";
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("missing abort signal"));
+          return;
+        }
+        signal.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchFreshTickerQuote("BTC-USD");
+
+    expect(quote).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // Yahoo chart, then CoinGecko fallback
   });
 });

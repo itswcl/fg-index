@@ -51,6 +51,22 @@ function tripYahooCooldown(): void {
   yahooCooldownUntil = Date.now() + YAHOO_COOLDOWN_MS;
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), env.QUOTE_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Exposed for tests so each `it` starts with a clean cooldown state.
 export function _resetTickerServiceState(): void {
   resolvedFormatCache.clear();
@@ -215,7 +231,7 @@ async function scrapeGoogleFinance(
 ): Promise<TickerQuote | null> {
   try {
     const url = `https://www.google.com/finance/quote/${encodeURIComponent(tickerFormat)}`;
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
     });
 
@@ -291,7 +307,7 @@ async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | nul
     const url =
       `https://query1.finance.yahoo.com/v8/finance/chart/` +
       `${encodeURIComponent(ticker)}?interval=1d&range=5d`;
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         "User-Agent": env.SCRAPER_USER_AGENT,
         Accept: "application/json",
@@ -382,7 +398,7 @@ async function fetchCoinGeckoQuote(ticker: string): Promise<TickerQuote | null> 
     const url =
       `https://api.coingecko.com/api/v3/simple/price` +
       `?ids=${encodeURIComponent(mapped.id)}&vs_currencies=usd&include_24hr_change=true`;
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         "User-Agent": env.SCRAPER_USER_AGENT,
         Accept: "application/json",
@@ -444,7 +460,7 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
     // Yahoo uses plain tickers (BTC-USD for crypto, ^GSPC for indices, AAPL for stocks)
     const yahooTicker = ticker.includes(":") ? ticker.split(":")[0] : ticker;
     const url = `https://finance.yahoo.com/quote/${encodeURIComponent(yahooTicker)}`;
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
     });
 
@@ -503,13 +519,16 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   }
 
   // ─── Stocks / indices ────────────────────────────────────────────
-  // Each Google scrape now self-enriches with session + after-hours fields
-  // (extracted from the same HTML), so there's no separate enrichment step.
   // 1. Check resolved format cache
   const knownFormat = resolvedFormatCache.get(rawTicker);
   if (knownFormat) {
     const cached = getCached(knownFormat);
     if (cached) return cached;
+    const yahooChart = await fetchYahooChartQuote(knownFormat);
+    if (yahooChart) {
+      setCache(knownFormat, yahooChart);
+      return yahooChart;
+    }
     const result = await scrapeGoogleFinance(knownFormat);
     if (result) {
       setCache(knownFormat, result);
@@ -517,7 +536,16 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 2. Try raw ticker on Google Finance
+  // 2. Prefer Yahoo chart JSON for stocks/ETFs. It is structured and has
+  // proved much more reliable on Render than Google Finance's HTML pages.
+  const yahooChart = await fetchYahooChartQuote(rawTicker);
+  if (yahooChart) {
+    resolvedFormatCache.set(rawTicker, rawTicker);
+    setCache(rawTicker, yahooChart);
+    return yahooChart;
+  }
+
+  // 3. Try raw ticker on Google Finance
   const direct = await scrapeGoogleFinance(rawTicker);
   if (direct) {
     resolvedFormatCache.set(rawTicker, rawTicker);
@@ -525,9 +553,15 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     return direct;
   }
 
-  // 3. Try common exchange suffixes
+  // 4. Try common exchange suffixes
   for (const suffix of EXCHANGE_SUFFIXES) {
     const fmt = `${rawTicker}${suffix}`;
+    const yahooWithSuffix = await fetchYahooChartQuote(fmt);
+    if (yahooWithSuffix) {
+      resolvedFormatCache.set(rawTicker, fmt);
+      setCache(fmt, yahooWithSuffix);
+      return yahooWithSuffix;
+    }
     const result = await scrapeGoogleFinance(fmt);
     if (result) {
       resolvedFormatCache.set(rawTicker, fmt);
@@ -536,14 +570,20 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 4. Yahoo Finance fallback — try as-is
+  // 5. Yahoo Finance fallback — try as-is
   const yahoo = await scrapeYahooFinance(rawTicker);
   if (yahoo) {
     return yahoo;
   }
 
-  // 5. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
+  // 6. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
   if (!rawTicker.includes("=") && !rawTicker.includes(":")) {
+    const yahooChartFutures = await fetchYahooChartQuote(`${rawTicker}=F`);
+    if (yahooChartFutures) {
+      resolvedFormatCache.set(rawTicker, `${rawTicker}=F`);
+      setCache(`${rawTicker}=F`, yahooChartFutures);
+      return yahooChartFutures;
+    }
     const yahooFutures = await scrapeYahooFinance(`${rawTicker}=F`);
     if (yahooFutures) {
       resolvedFormatCache.set(rawTicker, `${rawTicker}=F`);
