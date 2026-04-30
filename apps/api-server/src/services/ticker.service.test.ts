@@ -70,8 +70,10 @@ describe("ticker service — BTC-USD / crypto path", () => {
       previousClose: 78000,
     });
     expect(quote?.sourceUrl).toContain("query1.finance.yahoo.com/v8/finance/chart/BTC-USD");
+    expect(quote?.sourceUrl).toContain("range=1d");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toContain("query1.finance.yahoo.com");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("range=1d");
   });
 
   it("falls back to CoinGecko (not Google) when the Yahoo chart request fails", async () => {
