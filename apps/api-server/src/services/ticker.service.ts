@@ -57,6 +57,13 @@ function buildYahooChartUrl(ticker: string): string {
   );
 }
 
+function buildYahooIntradayChartUrl(ticker: string): string {
+  return (
+    `https://query1.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(ticker)}?interval=1m&range=1d&includePrePost=true`
+  );
+}
+
 function isYahooInCooldown(): boolean {
   return Date.now() < yahooCooldownUntil;
 }
@@ -267,7 +274,6 @@ async function scrapeGoogleFinance(
       changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: url,
-      // Atomic with the regular price — same HTML response. No second fetch.
       ...extractGoogleSessionFields(html),
     });
   } catch {
@@ -275,11 +281,101 @@ async function scrapeGoogleFinance(
   }
 }
 
+interface YahooTradingPeriod {
+  start?: number;
+  end?: number;
+}
+
+interface YahooChartPayload {
+  meta?: YahooChartMeta;
+  timestamp?: number[];
+  indicators?: { quote?: Array<{ close?: Array<number | null> }> };
+}
+
+function sessionForTimestamp(
+  timestamp: number,
+  periods: YahooChartMeta["currentTradingPeriod"]
+): "pre" | "post" | null {
+  const pre = periods?.pre;
+  if (pre?.start && pre?.end && timestamp >= pre.start && timestamp < pre.end) return "pre";
+
+  const post = periods?.post;
+  if (post?.start && post?.end && timestamp >= post.start && timestamp < post.end) return "post";
+
+  return null;
+}
+
+function yahooSessionFields(
+  session: "pre" | "post",
+  sessionPrice: number,
+  regularPrice: number
+): SessionFields {
+  const change = +(sessionPrice - regularPrice).toFixed(4);
+  const changePercent = regularPrice > 0 ? +((change / regularPrice) * 100).toFixed(4) : 0;
+
+  if (session === "pre") {
+    return {
+      marketSession: "pre",
+      preMarketPrice: sessionPrice,
+      preMarketChange: change,
+      preMarketChangePercent: changePercent,
+    };
+  }
+
+  return {
+    marketSession: "post",
+    postMarketPrice: sessionPrice,
+    postMarketChange: change,
+    postMarketChangePercent: changePercent,
+  };
+}
+
+async function fetchYahooSessionFields(
+  ticker: string,
+  regularPrice: number
+): Promise<SessionFields> {
+  try {
+    const response = await fetchWithTimeout(buildYahooIntradayChartUrl(ticker), {
+      headers: { "User-Agent": env.SCRAPER_USER_AGENT },
+    });
+
+    if (response.status === 429) {
+      tripYahooCooldown();
+      return {};
+    }
+    if (!response.ok) return {};
+
+    const json = (await response.json()) as { chart?: { result?: YahooChartPayload[] } };
+    const result = json.chart?.result?.[0];
+    const timestamps = result?.timestamp ?? [];
+    const closes = result?.indicators?.quote?.[0]?.close ?? [];
+
+    for (let i = timestamps.length - 1; i >= 0; i -= 1) {
+      const close = closes[i];
+      if (!finitePos(close)) continue;
+
+      const session = sessionForTimestamp(timestamps[i], result?.meta?.currentTradingPeriod);
+      if (session) return yahooSessionFields(session, +close.toFixed(4), regularPrice);
+      return {};
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
+async function enrichWithYahooSessionFields(
+  quote: TickerQuote,
+  ticker: string
+): Promise<TickerQuote> {
+  const sessionFields = await fetchYahooSessionFields(ticker, quote.price);
+  return Object.keys(sessionFields).length > 0 ? { ...quote, ...sessionFields } : quote;
+}
+
 // Yahoo's chart endpoint is the primary quote source for crypto BTC. It still
-// exposes regularMarketPrice + previousClose for crypto; we deliberately do
-// NOT use it for marketState / postMarketPrice anymore — those fields started
-// returning null on this endpoint in April 2026. For stock extended-hours
-// data we now scrape Google directly (see `extractGoogleSessionFields`).
+// exposes regularMarketPrice + previousClose for crypto; stocks use a second
+// intraday chart request for pre/post-market fields when Yahoo wins.
 interface YahooChartMeta {
   regularMarketPrice?: number;
   chartPreviousClose?: number;
@@ -287,6 +383,11 @@ interface YahooChartMeta {
   longName?: string;
   shortName?: string;
   symbol?: string;
+  currentTradingPeriod?: {
+    pre?: YahooTradingPeriod;
+    regular?: YahooTradingPeriod;
+    post?: YahooTradingPeriod;
+  };
 }
 
 async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | null> {
@@ -545,8 +646,9 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     if (cached) return cached;
     const yahooChart = await fetchYahooChartQuote(knownFormat);
     if (yahooChart) {
-      setCache(knownFormat, yahooChart);
-      return yahooChart;
+      const enriched = await enrichWithYahooSessionFields(yahooChart, knownFormat);
+      setCache(knownFormat, enriched);
+      return enriched;
     }
     const result = await scrapeGoogleFinance(knownFormat);
     if (result) {
@@ -559,9 +661,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   // proved much more reliable on Render than Google Finance's HTML pages.
   const yahooChart = await fetchYahooChartQuote(rawTicker);
   if (yahooChart) {
+    const enriched = await enrichWithYahooSessionFields(yahooChart, rawTicker);
     resolvedFormatCache.set(rawTicker, rawTicker);
-    setCache(rawTicker, yahooChart);
-    return yahooChart;
+    setCache(rawTicker, enriched);
+    return enriched;
   }
 
   // 3. Try raw ticker on Google Finance
@@ -577,9 +680,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     const fmt = `${rawTicker}${suffix}`;
     const yahooWithSuffix = await fetchYahooChartQuote(fmt);
     if (yahooWithSuffix) {
+      const enriched = await enrichWithYahooSessionFields(yahooWithSuffix, fmt);
       resolvedFormatCache.set(rawTicker, fmt);
-      setCache(fmt, yahooWithSuffix);
-      return yahooWithSuffix;
+      setCache(fmt, enriched);
+      return enriched;
     }
     const result = await scrapeGoogleFinance(fmt);
     if (result) {
