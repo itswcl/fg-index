@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
 // Identity fields applied to every VIX response regardless of which
@@ -16,24 +17,18 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
     if (!response.ok) return null;
 
     const html = await response.text();
-
-    const priceMatch = html.match(/data-last-price="([^"]+)"/);
-    const prevCloseMatch = html.match(/class="P6K39c"[^>]*>([0-9.]+)</);
-
-    if (!priceMatch) return null;
-
-    const price = parseFloat(priceMatch[1]);
-    const previousClose = prevCloseMatch ? parseFloat(prevCloseMatch[1]) : price;
-    const change = +(price - previousClose).toFixed(2);
-    const changePercent = previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
+    const parsed = parseGoogleFinanceQuoteHtml(html, {
+      tickerFormat: `${VIX_TICKER}:INDEXCBOE`,
+    });
+    if (!parsed) return null;
 
     return validateTickerQuote({
       ticker: VIX_TICKER,
       name: VIX_NAME,
-      price,
-      previousClose,
-      change,
-      changePercent,
+      price: parsed.price,
+      previousClose: parsed.previousClose,
+      change: parsed.change,
+      changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.GOOGLE_FINANCE_VIX_URL,
     });

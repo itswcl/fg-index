@@ -56,6 +56,64 @@ describe("vix.service — partial/NaN rejection", () => {
     expect(Number.isFinite(q?.changePercent)).toBe(true);
   });
 
+  it("parses Google AF_initDataCallback when data-last-price is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("vix-google")) {
+          return new Response(
+            `AF_initDataCallback({key: 'ds:2', data:[[[[` +
+              `"/m/test",["VIX","INDEXCBOE"],"VIX",0,"USD",` +
+              `[17.11,-1.6999989,-9.03774,2,2,2],null,18.81,` +
+              `"#666666","US"]]]], sideChannel: {}});`,
+            { status: 200, headers: { "Content-Type": "text/html" } }
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const { fetchVixData } = await import("./vix.service.js");
+    const q = await fetchVixData();
+    expect(q).toMatchObject({
+      ticker: "VIX",
+      name: "CBOE Volatility Index",
+      price: 17.11,
+      previousClose: 18.81,
+    });
+    expect(Number.isFinite(q?.change)).toBe(true);
+    expect(Number.isFinite(q?.changePercent)).toBe(true);
+  });
+
+  it("falls through to Yahoo or null when Google AF data is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("vix-google")) {
+          return new Response(
+            `AF_initDataCallback({key: 'ds:2', data:[[[[` +
+              `"/m/test",["VIX","INDEXCBOE"],"VIX",0,"USD",` +
+              `[null,-1.6999989,-9.03774],null,18.81]]]], sideChannel: {}});`,
+            { status: 200, headers: { "Content-Type": "text/html" } }
+          );
+        }
+        if (url.includes("vix-yahoo")) {
+          return new Response("<html><body>offline</body></html>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const { fetchVixData } = await import("./vix.service.js");
+    const q = await fetchVixData();
+    expect(q).toBeNull();
+  });
+
   it("rejects the Google payload (falls through to Yahoo or null) when prev-close is non-numeric", async () => {
     // Google matches data-last-price fine but prev-close is garbage → parseFloat = NaN.
     // Before the fix this returned { price: 18.52, previousClose: 18.52, change: NaN, ... }.

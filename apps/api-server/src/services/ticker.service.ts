@@ -6,6 +6,7 @@ import {
   isMappedMarketSymbol,
   normalizeQuoteSymbol,
 } from "./quote-symbols.service.js";
+import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
 // ─── Cache ─────────────────────────────────────────────────────────
@@ -251,46 +252,19 @@ async function scrapeGoogleFinance(
     if (!response.ok) return null;
 
     const html = await response.text();
-
-    const priceMatch = html.match(/data-last-price="([^"]+)"/);
-    if (!priceMatch) return null;
-
-    const prevCloseMatch = html.match(/class="P6K39c"[^>]*>\$?([0-9.,]+)</);
-    const nameMatch = html.match(/<div class="zzDege">([^<]+)<\/div>/);
-
-    const rawPrice = priceMatch[1].replace(/,/g, "");
-    const price = parseFloat(rawPrice);
-    if (isNaN(price) || price <= 0) return null;
-
-    const rawPrev = prevCloseMatch ? prevCloseMatch[1].replace(/,/g, "") : rawPrice;
-    const previousClose = parseFloat(rawPrev);
-
-    const change = +(price - previousClose).toFixed(4);
-    const changePercent =
-      previousClose > 0 ? +((change / previousClose) * 100).toFixed(4) : 0;
-
-    // Extract the clean ticker symbol (e.g. "AAPL" from "AAPL:NASDAQ")
-    const tickerSymbol = tickerFormat.includes(":")
-      ? tickerFormat.split(":")[0]
-      : tickerFormat;
-
-    // Guard `change` alongside `previousClose`: when prevClose parsed to NaN,
-    // we recover it with `price` but `change` was already computed from NaN
-    // above. Recompute here so the returned quote never ships NaN fields.
-    const safePreviousClose = isNaN(previousClose) ? price : previousClose;
-    const safeChange = +(price - safePreviousClose).toFixed(4);
-    const safeChangePercent =
-      safePreviousClose > 0
-        ? +((safeChange / safePreviousClose) * 100).toFixed(4)
-        : 0;
+    const parsed = parseGoogleFinanceQuoteHtml(html, {
+      tickerFormat,
+      recoverInvalidPreviousClose: true,
+    });
+    if (!parsed) return null;
 
     return validateTickerQuote({
-      ticker: tickerSymbol,
-      name: nameMatch ? nameMatch[1].trim() : undefined,
-      price,
-      previousClose: safePreviousClose,
-      change: safeChange,
-      changePercent: safeChangePercent,
+      ticker: parsed.ticker,
+      name: parsed.name,
+      price: parsed.price,
+      previousClose: parsed.previousClose,
+      change: parsed.change,
+      changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: url,
       // Atomic with the regular price — same HTML response. No second fetch.
