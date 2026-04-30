@@ -274,6 +274,25 @@ async function scrapeGoogleFinance(
   }
 }
 
+async function enrichWithGoogleSessionFields(
+  quote: TickerQuote,
+  tickerFormat: string
+): Promise<TickerQuote> {
+  const google = await scrapeGoogleFinance(tickerFormat);
+  if (!google) return quote;
+
+  const fields: SessionFields = {};
+  if (google.marketSession) fields.marketSession = google.marketSession;
+  if (finitePos(google.postMarketPrice)) fields.postMarketPrice = google.postMarketPrice;
+  if (finite(google.postMarketChange)) fields.postMarketChange = google.postMarketChange;
+  if (finite(google.postMarketChangePercent)) fields.postMarketChangePercent = google.postMarketChangePercent;
+  if (finitePos(google.preMarketPrice)) fields.preMarketPrice = google.preMarketPrice;
+  if (finite(google.preMarketChange)) fields.preMarketChange = google.preMarketChange;
+  if (finite(google.preMarketChangePercent)) fields.preMarketChangePercent = google.preMarketChangePercent;
+
+  return Object.keys(fields).length > 0 ? { ...quote, ...fields } : quote;
+}
+
 // Yahoo's chart endpoint is the primary quote source for crypto BTC. It still
 // exposes regularMarketPrice + previousClose for crypto; stocks prefer Google
 // first (price + after-market in one request), then Yahoo chart as fallback.
@@ -547,8 +566,9 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
     const yahooChart = await fetchYahooChartQuote(knownFormat);
     if (yahooChart) {
-      setCache(knownFormat, yahooChart);
-      return yahooChart;
+      const enriched = await enrichWithGoogleSessionFields(yahooChart, knownFormat);
+      setCache(knownFormat, enriched);
+      return enriched;
     }
   }
 
@@ -565,9 +585,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   // 3. Yahoo chart JSON as fallback
   const yahooChart = await fetchYahooChartQuote(rawTicker);
   if (yahooChart) {
+    const enriched = await enrichWithGoogleSessionFields(yahooChart, rawTicker);
     resolvedFormatCache.set(rawTicker, rawTicker);
-    setCache(rawTicker, yahooChart);
-    return yahooChart;
+    setCache(rawTicker, enriched);
+    return enriched;
   }
 
   // 4. Try common exchange suffixes
@@ -581,9 +602,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
     const yahooWithSuffix = await fetchYahooChartQuote(fmt);
     if (yahooWithSuffix) {
+      const enriched = await enrichWithGoogleSessionFields(yahooWithSuffix, fmt);
       resolvedFormatCache.set(rawTicker, fmt);
-      setCache(fmt, yahooWithSuffix);
-      return yahooWithSuffix;
+      setCache(fmt, enriched);
+      return enriched;
     }
   }
 
