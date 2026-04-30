@@ -155,5 +155,5 @@ export function parseGoogleFinanceQuoteHtml(
   html: string,
   options: ParseGoogleFinanceQuoteOptions
 ): ParsedGoogleFinanceQuote | null {
-  return parseLegacyQuote(html, options) ?? parseAfQuote(html, options);
+  return parseAfQuote(html, options) ?? parseLegacyQuote(html, options);
 }

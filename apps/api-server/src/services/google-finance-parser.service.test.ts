@@ -63,6 +63,31 @@ describe("parseGoogleFinanceQuoteHtml", () => {
     expect(quote?.changePercent).toBeCloseTo(1.562, 3);
   });
 
+  it("prefers structured AF data over stale legacy markup", () => {
+    const quote = parseGoogleFinanceQuoteHtml(
+      '<html><div data-last-price="2009"></div><div class="P6K39c">2008</div></html>' +
+        afQuoteRecord({
+          ticker: "AVGO",
+          exchange: "NASDAQ",
+          name: "Broadcom Inc",
+          price: 200.9,
+          change: 1,
+          changePercent: 0.4998,
+          previousClose: 199.9,
+        }),
+      { tickerFormat: "AVGO:NASDAQ" }
+    );
+
+    expect(quote).toMatchObject({
+      ticker: "AVGO",
+      exchange: "NASDAQ",
+      name: "Broadcom Inc",
+      price: 200.9,
+      previousClose: 199.9,
+      change: 1,
+    });
+  });
+
   it("matches dotted Google Finance symbols in AF_initDataCallback data", () => {
     const quote = parseGoogleFinanceQuoteHtml(
       afQuoteRecord({

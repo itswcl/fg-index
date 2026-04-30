@@ -689,11 +689,8 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     mod._resetTickerServiceState();
     const quote = await mod.fetchTickerQuote("AAPL");
 
-    // Regular-session number stays canonical — we never overwrite `price`.
     expect(quote?.price).toBe(180.5);
     expect(quote?.previousClose).toBe(179.0);
-    // Session + aftermarket fields extracted from the same Google HTML — no
-    // second upstream call.
     expect(quote?.marketSession).toBe("post");
     expect(quote?.postMarketPrice).toBe(181.42);
     expect(quote?.postMarketChange).toBe(0.92);
@@ -701,6 +698,71 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     expect(fetchMock.mock.calls.some(([u]) =>
       String(u).includes("google.com/finance/quote/AAPL")
     )).toBe(true);
+  });
+
+  it("enriches Yahoo stock quotes with Yahoo post-market fields", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/AVGO") && url.includes("includePrePost=true")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    currentTradingPeriod: {
+                      regular: { start: 1000, end: 2000 },
+                      post: { start: 2000, end: 3000 },
+                    },
+                  },
+                  timestamp: [1999, 2500],
+                  indicators: { quote: [{ close: [200.9, 201.2] }] },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/AVGO")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "AVGO",
+                    longName: "Broadcom Inc",
+                    regularMarketPrice: 200.9,
+                    chartPreviousClose: 199.9,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AVGO");
+
+    expect(quote).toMatchObject({
+      ticker: "AVGO",
+      name: "Broadcom Inc",
+      price: 200.9,
+      previousClose: 199.9,
+      marketSession: "post",
+      postMarketPrice: 201.2,
+      postMarketChange: 0.3,
+      postMarketChangePercent: 0.1493,
+    });
+    expect(quote?.sourceUrl).toContain("query1.finance.yahoo.com/v8/finance/chart/AVGO");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("ships a plain quote (no session fields) when Google's page has no extended-hours block", async () => {
