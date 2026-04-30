@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import type { TickerQuote } from "@shared/types";
-import { fetchTickerQuote } from "../services/ticker.service.js";
+import { getCachedQuoteSnapshot, getCachedQuotesBatch } from "../services/ticker-cache.service.js";
+import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
 
 const TICKER_REGEX = /^[A-Za-z0-9:.\-^=_]{1,20}$/;
 const MAX_BATCH_SYMBOLS = 12;
@@ -17,9 +18,10 @@ export async function getTicker(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const data = await fetchTickerQuote(ticker);
+  const data = await getCachedQuoteSnapshot(ticker);
+  enqueueQuoteRefresh(ticker);
 
-  if (!data) {
+  if (!data.quote) {
     res.status(404).json({
       status: 404,
       message: `Ticker "${ticker.toUpperCase()}" not found.`,
@@ -29,7 +31,7 @@ export async function getTicker(req: Request, res: Response): Promise<void> {
   }
 
   res.set("Cache-Control", "public, max-age=15");
-  res.json(data);
+  res.json(data.quote);
 }
 
 // ─── GET /api/quote/batch?symbols=A,B,C ───────────────────────────
@@ -90,15 +92,8 @@ export async function getBatchQuotes(
     }
   }
 
-  const results = await Promise.allSettled(
-    symbols.map((sym) => fetchTickerQuote(sym))
-  );
-
-  const quotes: Record<string, TickerQuote | null> = {};
-  for (let i = 0; i < symbols.length; i++) {
-    const r = results[i];
-    quotes[symbols[i]] = r.status === "fulfilled" ? r.value : null;
-  }
+  const quotes: Record<string, TickerQuote | null> = await getCachedQuotesBatch(symbols);
+  enqueueQuoteRefresh(symbols);
 
   res.set("Cache-Control", "public, max-age=15");
   res.json({ quotes });

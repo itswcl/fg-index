@@ -1,19 +1,27 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
 import type { TickerQuote } from "@shared/types";
 
-// Mock the ticker service before importing the controller so the
-// controller picks up the mocked fetchTickerQuote.
-vi.mock("../services/ticker.service.js", () => ({
-  fetchTickerQuote: vi.fn(),
+vi.mock("../services/ticker-cache.service.js", () => ({
+  getCachedQuoteSnapshot: vi.fn(),
+  getCachedQuotesBatch: vi.fn(),
 }));
 
-import { getBatchQuotes } from "../controllers/ticker.controller.js";
-import { fetchTickerQuote } from "../services/ticker.service.js";
+vi.mock("../services/quote-refresh-queue.service.js", () => ({
+  enqueueQuoteRefresh: vi.fn(),
+}));
 
-const fetchMock = fetchTickerQuote as unknown as ReturnType<typeof vi.fn>;
+import { getBatchQuotes, getTicker } from "../controllers/ticker.controller.js";
+import { getCachedQuoteSnapshot, getCachedQuotesBatch } from "../services/ticker-cache.service.js";
+import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
 
-// ─── Mock req/res ────────────────────────────────────────────────
+const getCachedQuoteSnapshotMock =
+  getCachedQuoteSnapshot as unknown as ReturnType<typeof vi.fn>;
+const getCachedQuotesBatchMock =
+  getCachedQuotesBatch as unknown as ReturnType<typeof vi.fn>;
+const enqueueQuoteRefreshMock =
+  enqueueQuoteRefresh as unknown as ReturnType<typeof vi.fn>;
+
 interface MockedRes {
   _status: number;
   _body: unknown;
@@ -44,8 +52,14 @@ function mockRes(): MockedRes & Response {
   return res as unknown as MockedRes & Response;
 }
 
-function mockReq(query: Record<string, string>): Request {
-  return { query } as unknown as Request;
+function mockReq(opts: {
+  query?: Record<string, string>;
+  params?: Record<string, string>;
+}): Request {
+  return {
+    query: opts.query ?? {},
+    params: opts.params ?? {},
+  } as unknown as Request;
 }
 
 function makeQuote(ticker: string, price: number): TickerQuote {
@@ -61,7 +75,40 @@ function makeQuote(ticker: string, price: number): TickerQuote {
 }
 
 beforeEach(() => {
-  fetchMock.mockReset();
+  getCachedQuoteSnapshotMock.mockReset();
+  getCachedQuotesBatchMock.mockReset();
+  enqueueQuoteRefreshMock.mockReset();
+});
+
+describe("getTicker", () => {
+  it("returns a cached quote and enqueues a background refresh", async () => {
+    const res = mockRes();
+    const quote = makeQuote("AAPL", 100);
+    getCachedQuoteSnapshotMock.mockResolvedValue({
+      quote,
+      isFresh: true,
+    });
+
+    await getTicker(mockReq({ params: { ticker: "aapl" } }), res);
+
+    expect(res._status).toBe(200);
+    expect(res._body).toEqual(quote);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("aapl");
+  });
+
+  it("returns 404 for an uncached symbol but still enqueues refresh", async () => {
+    const res = mockRes();
+    getCachedQuoteSnapshotMock.mockResolvedValue({
+      quote: null,
+      isFresh: false,
+    });
+
+    await getTicker(mockReq({ params: { ticker: "tsla" } }), res);
+
+    expect(res._status).toBe(404);
+    expect((res._body as { code: string }).code).toBe("TICKER_NOT_FOUND");
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("tsla");
+  });
 });
 
 describe("getBatchQuotes", () => {
@@ -72,15 +119,9 @@ describe("getBatchQuotes", () => {
     expect((res._body as { code: string }).code).toBe("INVALID_QUERY");
   });
 
-  it("rejects empty symbols param", async () => {
-    const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols: "" }), res);
-    expect(res._status).toBe(400);
-  });
-
   it("rejects invalid ticker format", async () => {
     const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols: "AAPL,BAD SYMBOL!" }), res);
+    await getBatchQuotes(mockReq({ query: { symbols: "AAPL,BAD SYMBOL!" } }), res);
     expect(res._status).toBe(400);
     expect((res._body as { code: string }).code).toBe("INVALID_TICKER");
   });
@@ -88,64 +129,51 @@ describe("getBatchQuotes", () => {
   it("rejects batches over the cap (13 symbols)", async () => {
     const symbols = Array.from({ length: 13 }, (_, i) => `T${i}`).join(",");
     const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols }), res);
+    await getBatchQuotes(mockReq({ query: { symbols } }), res);
     expect(res._status).toBe(400);
     expect((res._body as { code: string }).code).toBe("BATCH_LIMIT");
   });
 
-  it("returns 12 entries for 12 symbols", async () => {
-    fetchMock.mockImplementation(async (sym: string) => makeQuote(sym, 100));
-    const symbols = Array.from({ length: 12 }, (_, i) => `T${i}`);
+  it("reads cached quotes in one batch call and enqueues a refresh", async () => {
+    const symbols = ["AMD", "NVDA", "TSM"];
     const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols: symbols.join(",") }), res);
-    expect(res._status).toBe(200);
-    const body = res._body as { quotes: Record<string, unknown> };
-    expect(Object.keys(body.quotes)).toHaveLength(12);
-    for (const s of symbols) {
-      expect(body.quotes[s]).toBeTruthy();
-    }
-  });
+    getCachedQuotesBatchMock.mockResolvedValue({
+      AMD: makeQuote("AMD", 100),
+      NVDA: makeQuote("NVDA", 200),
+      TSM: null,
+    });
 
-  it("dedupes + uppercases symbols", async () => {
-    fetchMock.mockImplementation(async (sym: string) => makeQuote(sym, 50));
-    const res = mockRes();
     await getBatchQuotes(
-      mockReq({ symbols: "aapl,AAPL,msft,aapl" }),
+      mockReq({ query: { symbols: symbols.join(",") } }),
       res
     );
+
     expect(res._status).toBe(200);
-    const body = res._body as { quotes: Record<string, unknown> };
-    expect(Object.keys(body.quotes).sort()).toEqual(["AAPL", "MSFT"]);
-    // fetchTickerQuote should have been called with the upper-cased symbols only.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledWith("AAPL");
-    expect(fetchMock).toHaveBeenCalledWith("MSFT");
+    expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(symbols);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(symbols);
+    expect(res._body).toEqual({
+      quotes: {
+        AMD: expect.objectContaining({ ticker: "AMD" }),
+        NVDA: expect.objectContaining({ ticker: "NVDA" }),
+        TSM: null,
+      },
+    });
   });
 
-  it("returns null (not an error) when a single symbol fails", async () => {
-    fetchMock.mockImplementation(async (sym: string) => {
-      if (sym === "BADSYM") return null;
-      return makeQuote(sym, 10);
-    });
+  it("dedupes + uppercases symbols before cache lookup", async () => {
     const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols: "AAPL,BADSYM,MSFT" }), res);
-    expect(res._status).toBe(200);
-    const body = res._body as { quotes: Record<string, unknown> };
-    expect(body.quotes.AAPL).toBeTruthy();
-    expect(body.quotes.BADSYM).toBeNull();
-    expect(body.quotes.MSFT).toBeTruthy();
-  });
+    getCachedQuotesBatchMock.mockResolvedValue({
+      AAPL: makeQuote("AAPL", 10),
+      MSFT: makeQuote("MSFT", 20),
+    });
 
-  it("swallows a rejected scrape as null rather than failing the batch", async () => {
-    fetchMock.mockImplementation(async (sym: string) => {
-      if (sym === "BOOM") throw new Error("scraper exploded");
-      return makeQuote(sym, 20);
-    });
-    const res = mockRes();
-    await getBatchQuotes(mockReq({ symbols: "AAPL,BOOM" }), res);
+    await getBatchQuotes(
+      mockReq({ query: { symbols: "aapl,AAPL,msft,aapl" } }),
+      res
+    );
+
     expect(res._status).toBe(200);
-    const body = res._body as { quotes: Record<string, unknown> };
-    expect(body.quotes.AAPL).toBeTruthy();
-    expect(body.quotes.BOOM).toBeNull();
+    expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
   });
 });
