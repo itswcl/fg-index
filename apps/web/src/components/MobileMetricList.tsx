@@ -248,16 +248,12 @@ export function MobileMetricList(props: MobileMetricListProps) {
 
   // ── Batch quote fetch for on-page custom tickers (FE-6) ──
   // Same contract as CardGrid: defaults have their own hooks, placeholders
-  // are synthetic, user symbols batch through /api/quote/batch. One request
-  // per page + a silent prefetch of the next page for fast swipe-forward.
+  // are synthetic, user symbols batch through /api/quote/batch. Fetch only
+  // the visible page; the backend active-symbol queue keeps nearby data warm.
   const customSymbolsOnPage = pageItems.filter(
     (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
   );
-  const nextPageItems = order.slice(pageEnd, pageEnd + perPage);
-  const customSymbolsNextPage = nextPageItems.filter(
-    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
-  );
-  usePageTickers(customSymbolsOnPage, { prefetchNeighbor: customSymbolsNextPage });
+  usePageTickers(customSymbolsOnPage);
 
   // ── Horizontal swipe to page ──
   // Gated off during edit mode (rows own the gesture). We track a start point

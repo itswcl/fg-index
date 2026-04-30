@@ -36,26 +36,12 @@ async function fetchBatch(symbols: string[]): Promise<BatchResponse> {
   return { quotes };
 }
 
-export interface UsePageTickersOptions {
-  /**
-   * Symbols on the next page (if any). Fired as a silent prefetch so
-   * page-turning feels instant — no loading flash after the swipe.
-   * Pass undefined or [] to skip prefetch.
-   */
-  prefetchNeighbor?: string[];
-}
-
-export function usePageTickers(symbols: string[], opts: UsePageTickersOptions = {}) {
+export function usePageTickers(symbols: string[]) {
   const queryClient = useQueryClient();
-  const { prefetchNeighbor } = opts;
 
   // Sort to keep queryKey stable across in-page reorders — dragging cards
   // shouldn't reissue the batch under a different key and refetch.
   const sortedSymbols = useMemo(() => [...symbols].sort(), [symbols.join(',')]);
-  const sortedNeighbor = useMemo(
-    () => (prefetchNeighbor && prefetchNeighbor.length > 0 ? [...prefetchNeighbor].sort() : null),
-    [prefetchNeighbor?.join(',')],
-  );
 
   const query = useQuery<BatchResponse, Error>({
     queryKey: ['tickers', 'batch', sortedSymbols],
@@ -121,17 +107,6 @@ export function usePageTickers(symbols: string[], opts: UsePageTickersOptions = 
       }
     }
   }, [query.data, queryClient]);
-
-  // Neighbor prefetch — silent, shares staleTime so the real useQuery on
-  // the next page hydrates from this prefetched cache without re-firing.
-  useEffect(() => {
-    if (!sortedNeighbor) return;
-    void queryClient.prefetchQuery({
-      queryKey: ['tickers', 'batch', sortedNeighbor],
-      queryFn: () => fetchBatch(sortedNeighbor),
-      staleTime: TICKER_REFETCH_INTERVAL_MS,
-    });
-  }, [sortedNeighbor, queryClient]);
 
   return query;
 }
