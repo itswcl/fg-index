@@ -274,6 +274,94 @@ describe("ticker service — BTC-USD / crypto path", () => {
   });
 });
 
+describe("ticker service — default market index aliases", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    applyEnv();
+  });
+
+  it("maps VIX to Yahoo ^VIX but returns the default VIX response identity", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/%5EVIX")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "^VIX",
+                    longName: "CBOE Volatility Index",
+                    regularMarketPrice: 16.42,
+                    chartPreviousClose: 17,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("VIX");
+
+    expect(quote).toMatchObject({
+      ticker: "VIX",
+      name: "CBOE Volatility Index",
+      price: 16.42,
+      previousClose: 17,
+    });
+    expect(quote?.sourceUrl).toContain("%5EVIX");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps SPX to Yahoo ^GSPC but returns the default S&P 500 response identity", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/%5EGSPC")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "^GSPC",
+                    longName: "S&P 500",
+                    regularMarketPrice: 5250.33,
+                    chartPreviousClose: 5220.11,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("SPX");
+
+    expect(quote).toMatchObject({
+      ticker: "SPX",
+      name: "S&P 500",
+      price: 5250.33,
+      previousClose: 5220.11,
+    });
+    expect(quote?.sourceUrl).toContain("%5EGSPC");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ticker service — stale-on-error fallback", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

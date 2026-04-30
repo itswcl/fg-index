@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import type { TickerQuote } from "@shared/types";
 import { getCachedQuoteSnapshot, getCachedQuotesBatch } from "../services/ticker-cache.service.js";
 import { enqueueQuoteRefresh } from "../services/quote-refresh-queue.service.js";
+import { normalizeQuoteSymbol } from "../services/quote-symbols.service.js";
 
 const TICKER_REGEX = /^[A-Za-z0-9:.\-^=_]{1,20}$/;
 const MAX_BATCH_SYMBOLS = 12;
@@ -18,13 +19,14 @@ export async function getTicker(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const data = await getCachedQuoteSnapshot(ticker);
-  enqueueQuoteRefresh(ticker);
+  const symbol = normalizeQuoteSymbol(ticker);
+  const data = await getCachedQuoteSnapshot(symbol);
+  enqueueQuoteRefresh(symbol);
 
   if (!data.quote) {
     res.status(404).json({
       status: 404,
-      message: `Ticker "${ticker.toUpperCase()}" not found.`,
+      message: `Ticker "${symbol}" not found.`,
       code: "TICKER_NOT_FOUND",
     });
     return;
@@ -56,7 +58,7 @@ export async function getBatchQuotes(
   const seen = new Set<string>();
   const symbols: string[] = [];
   for (const part of raw.split(",")) {
-    const s = part.trim().toUpperCase();
+    const s = normalizeQuoteSymbol(part);
     if (!s) continue;
     if (seen.has(s)) continue;
     seen.add(s);

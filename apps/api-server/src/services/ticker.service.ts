@@ -1,5 +1,11 @@
 import { env } from "../config/env.js";
 import type { MarketSession, TickerQuote } from "@shared/types";
+import {
+  applyQuoteSymbolMapping,
+  getQuoteSymbolMapping,
+  isMappedMarketSymbol,
+  normalizeQuoteSymbol,
+} from "./quote-symbols.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
 // ─── Cache ─────────────────────────────────────────────────────────
@@ -123,11 +129,11 @@ function setCache(ticker: string, data: TickerQuote, ttlMs = CACHE_TTL_MS): void
 }
 
 function isCryptoTicker(ticker: string): boolean {
-  return CRYPTO_TICKERS.has(ticker);
+  return CRYPTO_TICKERS.has(normalizeQuoteSymbol(ticker));
 }
 
 export function getTickerCacheTtlMs(ticker: string): number {
-  return isCryptoTicker(ticker.toUpperCase()) ? CRYPTO_CACHE_TTL_MS : CACHE_TTL_MS;
+  return isCryptoTicker(ticker) ? CRYPTO_CACHE_TTL_MS : CACHE_TTL_MS;
 }
 
 // Map any supported crypto input to its canonical `-USD` form so we hit the
@@ -500,9 +506,11 @@ async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
 const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINIS", ":CME"];
 
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
+  const mapping = getQuoteSymbolMapping(rawTicker);
+
   // ─── Crypto: Yahoo → CoinGecko. Never Google. ────────────────────
-  if (isCryptoTicker(rawTicker)) {
-    const canonical = canonicalCryptoTicker(rawTicker);
+  if (isCryptoTicker(mapping.canonicalSymbol)) {
+    const canonical = canonicalCryptoTicker(mapping.canonicalSymbol);
     const cached = getCached(canonical);
     if (cached) return cached;
 
@@ -512,12 +520,46 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
       // Pin to `regular` so the FE's session-based UI (moon indicator) stays
       // off for BTC regardless of which upstream (Yahoo vs CoinGecko) won.
       const withSession: TickerQuote = { ...crypto, marketSession: "regular" };
-      resolvedFormatCache.set(rawTicker, canonical);
+      resolvedFormatCache.set(mapping.canonicalSymbol, canonical);
       setCache(canonical, withSession, CRYPTO_CACHE_TTL_MS);
       return withSession;
     }
     // If both crypto sources fail, return null rather than serving stale
     // Google data. The caller surfaces this as a missing/null quote.
+    return null;
+  }
+
+  if (isMappedMarketSymbol(rawTicker)) {
+    const cached = getCached(mapping.canonicalSymbol);
+    if (cached) return cached;
+
+    const yahooChart = await fetchYahooChartQuote(mapping.providerSymbol);
+    if (yahooChart) {
+      const normalized = applyQuoteSymbolMapping(yahooChart, mapping);
+      resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
+      setCache(mapping.canonicalSymbol, normalized);
+      rememberLastKnown(mapping.providerSymbol, normalized);
+      return normalized;
+    }
+
+    const google = await scrapeGoogleFinance(mapping.providerSymbol);
+    if (google) {
+      const normalized = applyQuoteSymbolMapping(google, mapping);
+      resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
+      setCache(mapping.canonicalSymbol, normalized);
+      rememberLastKnown(mapping.providerSymbol, normalized);
+      return normalized;
+    }
+
+    const yahooHtml = await scrapeYahooFinance(mapping.providerSymbol);
+    if (yahooHtml) {
+      const normalized = applyQuoteSymbolMapping(yahooHtml, mapping);
+      resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
+      setCache(mapping.canonicalSymbol, normalized);
+      rememberLastKnown(mapping.providerSymbol, normalized);
+      return normalized;
+    }
+
     return null;
   }
 
@@ -600,7 +642,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
 export async function fetchFreshTickerQuote(
   rawTicker: string
 ): Promise<TickerQuote | null> {
-  const upperTicker = rawTicker.toUpperCase();
+  const upperTicker = normalizeQuoteSymbol(rawTicker);
 
   // Check quote cache with known resolved format first
   const knownFormat = resolvedFormatCache.get(upperTicker);
@@ -619,7 +661,7 @@ export async function fetchFreshTickerQuote(
 export async function fetchTickerQuote(
   rawTicker: string
 ): Promise<TickerQuote | null> {
-  const upperTicker = rawTicker.toUpperCase();
+  const upperTicker = normalizeQuoteSymbol(rawTicker);
   const knownFormat = resolvedFormatCache.get(upperTicker);
 
   const fresh = await fetchFreshTickerQuote(upperTicker);

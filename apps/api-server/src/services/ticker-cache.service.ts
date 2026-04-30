@@ -1,5 +1,6 @@
 import type { TickerQuote } from "@shared/types";
 import { prisma } from "./db.js";
+import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
 import { getTickerCacheTtlMs } from "./ticker.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
@@ -7,7 +8,7 @@ const MAX_SERVED_QUOTE_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_REFRESH_ERROR_LENGTH = 500;
 
 function normalizeSymbol(symbol: string): string {
-  return symbol.trim().toUpperCase();
+  return normalizeQuoteSymbol(symbol);
 }
 
 function isServable(row: { fetchedAt: Date }): boolean {
