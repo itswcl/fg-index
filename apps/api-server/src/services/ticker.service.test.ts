@@ -274,6 +274,140 @@ describe("ticker service — BTC-USD / crypto path", () => {
   });
 });
 
+function fakeGoogleAfQuotePage(args: {
+  ticker: string;
+  exchange: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  previousClose?: number;
+  ext?: string;
+}): string {
+  const previousClose =
+    args.previousClose === undefined ? "" : `,null,${args.previousClose}`;
+  return (
+    `<html><body>` +
+    `AF_initDataCallback({key: 'ds:2', data:[[[[` +
+    `"/m/test",["${args.ticker}","${args.exchange}"],"${args.name}",0,"USD",` +
+    `[${args.price},${args.change},${args.changePercent},2,2,2]${previousClose},` +
+    `"#666666","US"]]]], sideChannel: {}});` +
+    (args.ext ?? "") +
+    `</body></html>`
+  );
+}
+
+describe("ticker service — Google Finance AF_initDataCallback parser", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    applyEnv();
+  });
+
+  it("parses AF quote data when Google no longer serves data-last-price", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AAPL",
+            exchange: "NASDAQ",
+            name: "Apple Inc",
+            price: 274.39,
+            change: 4.220001,
+            changePercent: 1.5619799,
+            previousClose: 270.17,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote).toMatchObject({
+      ticker: "AAPL",
+      name: "Apple Inc",
+      price: 274.39,
+      previousClose: 270.17,
+      change: 4.22,
+    });
+    expect(Number.isFinite(quote?.changePercent)).toBe(true);
+    expect(quote?.sourceUrl).toContain("google.com/finance/quote/AAPL");
+  });
+
+  it("preserves extended-hours fields when the regular quote comes from AF data", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AAPL",
+            exchange: "NASDAQ",
+            name: "Apple Inc",
+            price: 274.39,
+            change: 4.220001,
+            changePercent: 1.5619799,
+            previousClose: 270.17,
+            ext:
+              `<div class="ivZBbf ygUjEc" jsname="QRHKC">After Hours:` +
+              `<span><div class="YMlKec fxKbKc">$275.10</div></span>` +
+              `<span><span>0.26%</span></span>` +
+              `<span><span>+0.71</span></span>` +
+              `</div>`,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote?.price).toBe(274.39);
+    expect(quote?.marketSession).toBe("post");
+    expect(quote?.postMarketPrice).toBe(275.1);
+    expect(quote?.postMarketChange).toBe(0.71);
+    expect(quote?.postMarketChangePercent).toBe(0.26);
+  });
+
+  it("returns null for malformed AF quote data", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          `AF_initDataCallback({key: 'ds:2', data:[[[["/m/test",["AAPL","NASDAQ"],"Apple Inc",0,"USD",[null,4.22,1.56],null,270.17]]]], sideChannel: {}});`,
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote).toBeNull();
+  });
+});
+
 describe("ticker service — default market index aliases", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
