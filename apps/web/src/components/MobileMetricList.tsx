@@ -145,8 +145,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
     case 'vix': {
       const v = p.vixData;
       const showLoading = p.vixIsLoading || (p.vixIsRefreshing && !v);
-      const vSession = v ? resolveMarketSession(v) : undefined;
-      const vDisplay = vSession ? getDisplayQuote(v, vSession) : null;
+      const vDisplay = getDisplayQuote(v, 'regular');
       return {
         id,
         label: 'VIX',
@@ -157,8 +156,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'inverted',
         isLoading: showLoading,
         sourceUrl: v?.sourceUrl,
-        marketSession: vSession,
-        fetchedAt: v?.fetchedAt,
+        marketSession: 'regular',
       };
     }
     case 'btc': {
@@ -181,8 +179,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
     case 'spx': {
       const s = p.spxData;
       const showLoading = p.spxIsLoading || (p.spxIsRefreshing && !s);
-      const sSession = s ? resolveMarketSession(s) : undefined;
-      const sDisplay = sSession ? getDisplayQuote(s, sSession) : null;
+      const sDisplay = getDisplayQuote(s, 'regular');
       return {
         id,
         label: 'S&P 500',
@@ -193,8 +190,7 @@ function buildRowData(id: string, p: MobileMetricListProps): MetricRowData {
         changeMode: 'standard',
         isLoading: showLoading,
         sourceUrl: s?.sourceUrl,
-        marketSession: sSession,
-        fetchedAt: s?.fetchedAt,
+        marketSession: 'regular',
       };
     }
     default:

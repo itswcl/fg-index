@@ -3,10 +3,9 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
-import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
+import { getDisplayQuote } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
-import { MarketSessionBadge } from './MarketSessionBadge';
 
 interface VixCardProps {
   data: TickerQuote | null;
@@ -29,12 +28,7 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
   // quotes missing any numeric field, but a stale cache entry or race during
   // refresh can still deliver a partial object. `.toFixed` on null throws and
   // blanks the whole page.
-  //
-  // VIX is a computed index, so it virtually never carries pre/post fields,
-  // but we still go through getDisplayQuote so the rare case where it does
-  // (or any future indices that publish extended-hours values) Just Works.
-  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
-  const display = getDisplayQuote(data, session);
+  const display = getDisplayQuote(data, 'regular');
   const hasPrice = hasFiniteNumber(display?.price);
   const hasChange = hasFiniteNumber(display?.change);
   const hasChangePct = hasFiniteNumber(display?.changePercent);
@@ -51,12 +45,6 @@ export function VixCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: V
 
   return (
     <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
-      <MarketSessionBadge
-        session={session}
-        isDark={isDark}
-        placement="corner"
-        fetchedAt={data?.fetchedAt}
-      />
       <div className="card-inner">
         <span className="card-label">VIX</span>
 

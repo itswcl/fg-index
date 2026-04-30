@@ -2,10 +2,9 @@ import type { TickerQuote } from '../types';
 import { formatAbsoluteTime } from '../services/time.utils';
 import { hasFiniteNumber } from '../lib/marketData';
 import { buildSourceLinkProps } from '../lib/openSourceLink';
-import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
+import { getDisplayQuote } from '../lib/marketSession';
 import { CardShimmer } from './CardShimmer';
 import { AnimatedNumber } from './AnimatedNumber';
-import { MarketSessionBadge } from './MarketSessionBadge';
 
 interface SpxCardProps {
   data: TickerQuote | null;
@@ -25,14 +24,7 @@ export function SpxCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: S
   // ignored upstream and the last known price keeps showing.
   const showLoading = isLoading || (isRefreshing && !data);
 
-  // See VixCard for moon-glyph rationale. SPX is a computed index so the
-  // backend may not always populate `marketSession`; the ET-derived
-  // fallback inside resolveMarketSession handles that path. We route
-  // through getDisplayQuote so any future post/pre prints surface the
-  // extended-hours numbers; today they almost always fall back to
-  // regular because indices aren't traded.
-  const session = !showLoading && data ? resolveMarketSession(data) : 'regular';
-  const display = getDisplayQuote(data, session);
+  const display = getDisplayQuote(data, 'regular');
   const change = display?.change ?? 0;
   const changePct = display?.changePercent ?? 0;
   const isPositive = change >= 0;
@@ -43,12 +35,6 @@ export function SpxCard({ data, lastUpdate, isLoading, isRefreshing, isDark }: S
 
   return (
     <div className={`card ${isDark ? 'card-dark' : 'card-light'}`} {...linkProps}>
-      <MarketSessionBadge
-        session={session}
-        isDark={isDark}
-        placement="corner"
-        fetchedAt={data?.fetchedAt}
-      />
       <div className="card-inner">
         <span className="card-label">S&P 500</span>
 
