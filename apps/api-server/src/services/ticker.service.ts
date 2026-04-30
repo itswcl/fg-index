@@ -258,6 +258,22 @@ async function scrapeGoogleFinance(
     });
     if (!parsed) return null;
 
+    // Session fields: prefer structured AF extended-hours data, fall back to
+    // the rendered HTML label ("After Hours:" / "Pre-market:") extraction.
+    let sessionFields: SessionFields = {};
+    if (finitePos(parsed.extendedPrice)) {
+      const change = parsed.extendedChange ?? +(parsed.extendedPrice - parsed.price).toFixed(4);
+      const pct = parsed.extendedChangePercent ?? (parsed.price > 0 ? +((change / parsed.price) * 100).toFixed(4) : 0);
+      sessionFields = {
+        marketSession: "post",
+        postMarketPrice: parsed.extendedPrice,
+        ...(finite(change) ? { postMarketChange: change } : {}),
+        ...(finite(pct) ? { postMarketChangePercent: pct } : {}),
+      };
+    } else {
+      sessionFields = extractGoogleSessionFields(html);
+    }
+
     return validateTickerQuote({
       ticker: parsed.ticker,
       name: parsed.name,
@@ -267,7 +283,7 @@ async function scrapeGoogleFinance(
       changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: url,
-      ...extractGoogleSessionFields(html),
+      ...sessionFields,
     });
   } catch {
     return null;

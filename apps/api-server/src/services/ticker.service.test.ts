@@ -283,15 +283,22 @@ function fakeGoogleAfQuotePage(args: {
   changePercent: number;
   previousClose?: number;
   ext?: string;
+  afExt?: { price: number; change: number; changePercent: number };
 }): string {
   const previousClose =
     args.previousClose === undefined ? "" : `,null,${args.previousClose}`;
+  const afExtBlock = args.afExt
+    ? `,"#666666","US","/m/0k8z",[1777585274],"America/New_York",-14400,"/m/test",` +
+      `null,[${args.afExt.price},${args.afExt.change},${args.afExt.changePercent},2,2,2],` +
+      `[1777579201],[1777585273],[[1,[2026,4,30,9,30,null,null,[-14400]],[2026,4,30,16,null,null,null,[-14400]]]],` +
+      `null,"${args.ticker}:${args.exchange}",0,null,null,null,0`
+    : "";
   return (
     `<html><body>` +
     `AF_initDataCallback({key: 'ds:2', data:[[[[` +
     `"/m/test",["${args.ticker}","${args.exchange}"],"${args.name}",0,"USD",` +
-    `[${args.price},${args.change},${args.changePercent},2,2,2]${previousClose},` +
-    `"#666666","US"]]]], sideChannel: {}});` +
+    `[${args.price},${args.change},${args.changePercent},2,2,2]${previousClose}` +
+    `${afExtBlock}]]]], sideChannel: {}});` +
     (args.ext ?? "") +
     `</body></html>`
   );
@@ -343,7 +350,43 @@ describe("ticker service — Google Finance AF_initDataCallback parser", () => {
     expect(quote?.sourceUrl).toContain("google.com/finance/quote/AAPL");
   });
 
-  it("preserves extended-hours fields when the regular quote comes from AF data", async () => {
+  it("extracts postMarketPrice from AF extended-hours data", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AAPL",
+            exchange: "NASDAQ",
+            name: "Apple Inc",
+            price: 271.35,
+            change: 1.18,
+            changePercent: 0.4368,
+            previousClose: 270.17,
+            afExt: { price: 283, change: 11.65, changePercent: 4.2933 },
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote?.price).toBe(271.35);
+    expect(quote?.marketSession).toBe("post");
+    expect(quote?.postMarketPrice).toBe(283);
+    expect(quote?.postMarketChange).toBe(11.65);
+    expect(quote?.postMarketChangePercent).toBe(4.2933);
+  });
+
+  it("falls back to HTML label extraction when AF has no extended array", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("query1.finance.yahoo.com")) {
