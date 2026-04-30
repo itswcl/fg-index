@@ -255,12 +255,7 @@ export function CardGrid(props: CardGridProps) {
   const customSymbolsOnPage = pageItems.filter(
     (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
   );
-  // Prefetch the next page's symbols so swipe/click-forward is instant.
-  const nextPageItems = order.slice(pageEnd, pageEnd + perPage);
-  const customSymbolsNextPage = nextPageItems.filter(
-    (id) => !(DEFAULT_CARD_IDS as readonly string[]).includes(id) && !isPlaceholderId(id),
-  );
-  usePageTickers(customSymbolsOnPage, { prefetchNeighbor: customSymbolsNextPage });
+  usePageTickers(customSymbolsOnPage);
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as string);
