@@ -63,6 +63,29 @@ describe("parseGoogleFinanceQuoteHtml", () => {
     expect(quote?.changePercent).toBeCloseTo(1.562, 3);
   });
 
+  it("matches dotted Google Finance symbols in AF_initDataCallback data", () => {
+    const quote = parseGoogleFinanceQuoteHtml(
+      afQuoteRecord({
+        ticker: ".INX",
+        exchange: "INDEXSP",
+        name: "S&P 500",
+        price: 6684.76,
+        change: 17.6,
+        changePercent: 0.26397,
+        previousClose: 6667.16,
+      }),
+      { tickerFormat: ".INX:INDEXSP" }
+    );
+
+    expect(quote).toMatchObject({
+      ticker: ".INX",
+      exchange: "INDEXSP",
+      name: "S&P 500",
+      price: 6684.76,
+      previousClose: 6667.16,
+    });
+  });
+
   it("derives previous close from price and change when AF data omits it", () => {
     const quote = parseGoogleFinanceQuoteHtml(
       afQuoteRecord({

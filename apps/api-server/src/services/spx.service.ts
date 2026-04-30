@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
 const SPX_TICKER = "SPX";
@@ -14,27 +15,18 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
     if (!response.ok) return null;
 
     const html = await response.text();
-
-    const priceMatch = html.match(/data-last-price="([^"]+)"/);
-    const prevCloseMatch = html.match(/class="P6K39c"[^>]*>([0-9.,]+)</);
-
-    if (!priceMatch) return null;
-
-    const price = parseFloat(priceMatch[1].replace(/,/g, ""));
-    const previousClose = prevCloseMatch
-      ? parseFloat(prevCloseMatch[1].replace(/,/g, ""))
-      : price;
-    const change = +(price - previousClose).toFixed(2);
-    const changePercent =
-      previousClose > 0 ? +((change / previousClose) * 100).toFixed(2) : 0;
+    const parsed = parseGoogleFinanceQuoteHtml(html, {
+      tickerFormat: ".INX:INDEXSP",
+    });
+    if (!parsed) return null;
 
     return validateTickerQuote({
       ticker: SPX_TICKER,
       name: SPX_NAME,
-      price,
-      previousClose,
-      change,
-      changePercent,
+      price: parsed.price,
+      previousClose: parsed.previousClose,
+      change: parsed.change,
+      changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
       sourceUrl: env.GOOGLE_FINANCE_SPX_URL,
     });
