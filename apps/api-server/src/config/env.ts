@@ -23,6 +23,15 @@ const envSchema = z.object({
   QUOTE_REFRESH_CONCURRENCY: z.string().transform(Number).default("3"),
   QUOTE_REFRESH_FAILURE_COOLDOWN_MS: z.string().transform(Number).default("60000"),
   QUOTE_FETCH_TIMEOUT_MS: z.string().transform(Number).default("5000"),
+  MASSIVE_API_KEY: z.string().default(""),
+  MASSIVE_MARKET_STATUS_URL: z
+    .string()
+    .url()
+    .default("https://api.massive.com/v1/marketstatus/now"),
+  MARKET_STATUS_REFRESH_ENABLED: z
+    .string()
+    .transform((value) => value !== "false")
+    .default("true"),
   CORS_ORIGIN: z.string().default("*"),
   INTERNAL_API_KEY: z.string().default("dev-key-123"),
   // Supabase / Postgres — Feature 6 persistence
