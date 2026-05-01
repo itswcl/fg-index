@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import type { TickerQuote } from "@shared/types";
+import { withGoogleFinanceLocale } from "./google-finance-url.service.js";
 import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
@@ -8,7 +9,8 @@ const SPX_NAME = "S&P 500";
 
 async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
   try {
-    const response = await fetch(env.GOOGLE_FINANCE_SPX_URL, {
+    const url = withGoogleFinanceLocale(env.GOOGLE_FINANCE_SPX_URL);
+    const response = await fetch(url, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
     });
 
@@ -28,7 +30,7 @@ async function scrapeGoogleFinance(): Promise<TickerQuote | null> {
       change: parsed.change,
       changePercent: parsed.changePercent,
       fetchedAt: new Date().toISOString(),
-      sourceUrl: env.GOOGLE_FINANCE_SPX_URL,
+      sourceUrl: url,
     });
   } catch {
     return null;

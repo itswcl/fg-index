@@ -6,6 +6,7 @@ import {
   isMappedMarketSymbol,
   normalizeQuoteSymbol,
 } from "./quote-symbols.service.js";
+import { buildGoogleFinanceQuoteUrl } from "./google-finance-url.service.js";
 import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
@@ -244,7 +245,7 @@ async function scrapeGoogleFinance(
   tickerFormat: string
 ): Promise<TickerQuote | null> {
   try {
-    const url = `https://www.google.com/finance/quote/${encodeURIComponent(tickerFormat)}`;
+    const url = buildGoogleFinanceQuoteUrl(tickerFormat);
     const response = await fetchWithTimeout(url, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
     });
