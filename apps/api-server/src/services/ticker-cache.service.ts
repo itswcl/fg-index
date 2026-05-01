@@ -1,4 +1,5 @@
 import type { TickerQuote } from "@shared/types";
+import { env } from "../config/env.js";
 import { prisma } from "./db.js";
 import { applyGlobalMarketSessionToQuote } from "./market-status.service.js";
 import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
@@ -8,12 +9,50 @@ import { validateTickerQuote } from "./validateQuote.js";
 const MAX_SERVED_QUOTE_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_REFRESH_ERROR_LENGTH = 500;
 
+export class SuspiciousQuotePriceMoveError extends Error {
+  constructor(symbol: string, previousPrice: number, nextPrice: number, movePercent: number) {
+    super(
+      `Suspicious quote price move for ${symbol}: ${previousPrice} -> ${nextPrice} (${movePercent.toFixed(2)}%)`
+    );
+    this.name = "SuspiciousQuotePriceMoveError";
+  }
+}
+
 function normalizeSymbol(symbol: string): string {
   return normalizeQuoteSymbol(symbol);
 }
 
 function isServable(row: { fetchedAt: Date }): boolean {
   return Date.now() - row.fetchedAt.getTime() <= MAX_SERVED_QUOTE_AGE_MS;
+}
+
+function getAbsoluteMovePercent(previousPrice: number, nextPrice: number): number {
+  if (!Number.isFinite(previousPrice) || previousPrice <= 0) return 0;
+  return Math.abs((nextPrice - previousPrice) / previousPrice) * 100;
+}
+
+async function assertQuotePriceMoveIsSane(
+  symbol: string,
+  quote: TickerQuote
+): Promise<void> {
+  const threshold = env.QUOTE_PRICE_SANITY_MAX_MOVE_PERCENT;
+  if (!Number.isFinite(threshold) || threshold <= 0) return;
+
+  const existing = await prisma.tickerQuoteCache.findUnique({
+    where: { symbol },
+    select: { price: true },
+  });
+  if (!existing) return;
+
+  const movePercent = getAbsoluteMovePercent(existing.price, quote.price);
+  if (movePercent >= threshold) {
+    throw new SuspiciousQuotePriceMoveError(
+      symbol,
+      existing.price,
+      quote.price,
+      movePercent
+    );
+  }
 }
 
 function rowToQuote(row: {
@@ -102,6 +141,7 @@ export async function upsertCachedQuote(
   const now = new Date();
   const staleAt = new Date(now.getTime() + getTickerCacheTtlMs(normalized));
   const fetchedAt = new Date(quote.fetchedAt);
+  await assertQuotePriceMoveIsSane(normalized, quote);
 
   await prisma.tickerQuoteCache.upsert({
     where: { symbol: normalized },

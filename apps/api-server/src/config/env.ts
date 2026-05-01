@@ -23,6 +23,7 @@ const envSchema = z.object({
   QUOTE_REFRESH_CONCURRENCY: z.string().transform(Number).default("3"),
   QUOTE_REFRESH_FAILURE_COOLDOWN_MS: z.string().transform(Number).default("60000"),
   QUOTE_FETCH_TIMEOUT_MS: z.string().transform(Number).default("5000"),
+  QUOTE_PRICE_SANITY_MAX_MOVE_PERCENT: z.string().transform(Number).default("100"),
   MASSIVE_API_KEY: z.string().default(""),
   MASSIVE_MARKET_STATUS_URL: z
     .string()
