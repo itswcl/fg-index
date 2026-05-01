@@ -97,7 +97,6 @@ function TickerMetricRow({
   const rowData: MetricRowData = {
     id,
     label: id,
-    subLabel: data?.name,
     value: display?.price ?? null,
     valueFormatter: formatPrice,
     changePercent: display?.changePercent ?? null,

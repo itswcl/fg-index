@@ -29,7 +29,7 @@ export function TickerCard({
   const showLoading = isLoading || (isRefreshing && data === undefined);
   const linkProps = buildSourceLinkProps(
     data?.sourceUrl,
-    `${ticker}${data?.name ? ` (${data.name})` : ''} — open source`,
+    `${ticker} — open source`,
   );
 
   // data === null means loaded but ticker not found
@@ -117,11 +117,6 @@ export function TickerCard({
         ) : (
           <>
             <div className="price-container">
-              {data?.name && (
-                <span className="ticker-name" style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.4)' }}>
-                  {data.name}
-                </span>
-              )}
               {hasPrice ? (
                 <AnimatedNumber value={display!.price} formatter={fmtPrice} className={`price ${isDark ? '' : 'price-light'}`} />
               ) : (
