@@ -7,6 +7,7 @@ import {
   normalizeQuoteSymbol,
 } from "./quote-symbols.service.js";
 import { buildGoogleFinanceQuoteUrl } from "./google-finance-url.service.js";
+import { applyGlobalMarketSessionToQuote } from "./market-status.service.js";
 import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
 
@@ -665,7 +666,8 @@ export async function fetchFreshTickerQuote(
   // Defense-in-depth: every exit through the public API runs through the
   // validator so any future scraper regression that lets a non-finite field
   // slip through gets coerced to null here instead of reaching the wire.
-  return validateTickerQuote(await resolveAndFetch(upperTicker));
+  const quote = validateTickerQuote(await resolveAndFetch(upperTicker));
+  return quote ? applyGlobalMarketSessionToQuote(quote) : null;
 }
 
 // ─── Public API ────────────────────────────────────────────────────

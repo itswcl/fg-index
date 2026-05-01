@@ -228,6 +228,9 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | `QUOTE_REFRESH_CONCURRENCY` | `3` | Max concurrent background quote refresh workers |
 | `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Per-symbol refresh cooldown after failure |
 | `QUOTE_FETCH_TIMEOUT_MS` | `5000` | Upstream fetch timeout for quote sources |
+| `MASSIVE_API_KEY` | empty | Optional Massive API key for low-frequency market-session status refreshes |
+| `MASSIVE_MARKET_STATUS_URL` | `https://api.massive.com/v1/marketstatus/now` | Massive market-status endpoint |
+| `MARKET_STATUS_REFRESH_ENABLED` | `true` | Set `false` to disable Massive market-session refreshes |
 | `DATABASE_URL` | required | Supabase pooled Postgres connection |
 | `DIRECT_URL` | required | Direct Postgres connection for migrations |
 | `SUPABASE_URL` | required | Supabase project URL |

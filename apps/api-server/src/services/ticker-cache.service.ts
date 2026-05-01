@@ -1,5 +1,6 @@
 import type { TickerQuote } from "@shared/types";
 import { prisma } from "./db.js";
+import { applyGlobalMarketSessionToQuote } from "./market-status.service.js";
 import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
 import { getTickerCacheTtlMs } from "./ticker.service.js";
 import { validateTickerQuote } from "./validateQuote.js";
@@ -32,7 +33,7 @@ function rowToQuote(row: {
   preMarketChange: number | null;
   preMarketChangePercent: number | null;
 }): TickerQuote | null {
-  return validateTickerQuote({
+  const quote = validateTickerQuote({
     ticker: row.symbol,
     ...(row.name ? { name: row.name } : {}),
     price: row.price,
@@ -53,6 +54,7 @@ function rowToQuote(row: {
       ? { preMarketChangePercent: row.preMarketChangePercent }
       : {}),
   });
+  return quote ? applyGlobalMarketSessionToQuote(quote) : null;
 }
 
 export async function getCachedQuoteSnapshot(symbol: string): Promise<{

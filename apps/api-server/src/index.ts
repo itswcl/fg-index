@@ -17,6 +17,7 @@ import { startVixScheduler } from "./schedulers/vix.scheduler.js";
 import { startBtcScheduler } from "./schedulers/btc.scheduler.js";
 import { startSpxScheduler } from "./schedulers/spx.scheduler.js";
 import { startTickerQuoteScheduler } from "./schedulers/ticker-quote.scheduler.js";
+import { startMarketStatusScheduler } from "./schedulers/market-status.scheduler.js";
 import { startWsServer } from "./ws.js";
 import { getHealth } from "./controllers/health.controller.js";
 import { globalRateLimiter } from "./middlewares/rateLimit.js";
@@ -59,6 +60,7 @@ startVixScheduler();
 startBtcScheduler();
 startSpxScheduler();
 startTickerQuoteScheduler();
+startMarketStatusScheduler();
 
 // Create HTTP server
 const server = http.createServer(app);
