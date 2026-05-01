@@ -6,6 +6,7 @@ export interface ParsedGoogleFinanceQuote {
   previousClose: number;
   change: number;
   changePercent: number;
+  regularSessionOpen?: boolean;
   extendedPrice?: number;
   extendedChange?: number;
   extendedChangePercent?: number;
@@ -26,6 +27,77 @@ function parseNumber(value: string | undefined): number | null {
   if (!value) return null;
   const parsed = Number(value.replace(/,/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseOptionalDatePart(value: string | undefined, fallback = 0): number {
+  if (!value || value === "null") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function localMarketDateToUtcMs(parts: {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  second: string;
+  offsetSeconds: string;
+}): number | null {
+  const year = Number(parts.year);
+  const month = Number(parts.month);
+  const day = Number(parts.day);
+  const hour = parseOptionalDatePart(parts.hour);
+  const minute = parseOptionalDatePart(parts.minute);
+  const second = parseOptionalDatePart(parts.second);
+  const offsetSeconds = Number(parts.offsetSeconds);
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(offsetSeconds)
+  ) {
+    return null;
+  }
+
+  return Date.UTC(year, month - 1, day, hour, minute, second) - offsetSeconds * 1000;
+}
+
+function parseRegularSessionOpen(record: string): boolean | undefined {
+  const part = String.raw`(\d+),\s*(\d+),\s*(\d+),\s*(\d+|null),\s*(\d+|null),\s*(\d+|null),\s*null,\s*\[\s*(-?\d+)\s*\]`;
+  const sessionRe = new RegExp(
+    String.raw`\[\[\s*1\s*,\s*\[` +
+      part +
+      String.raw`\]\s*,\s*\[` +
+      part +
+      String.raw`\]\s*\]\]`
+  );
+  const match = record.match(sessionRe);
+  if (!match) return undefined;
+
+  const startMs = localMarketDateToUtcMs({
+    year: match[1],
+    month: match[2],
+    day: match[3],
+    hour: match[4],
+    minute: match[5],
+    second: match[6],
+    offsetSeconds: match[7],
+  });
+  const endMs = localMarketDateToUtcMs({
+    year: match[8],
+    month: match[9],
+    day: match[10],
+    hour: match[11],
+    minute: match[12],
+    second: match[13],
+    offsetSeconds: match[14],
+  });
+
+  if (startMs === null || endMs === null) return undefined;
+  const now = Date.now();
+  return now >= startMs && now <= endMs;
 }
 
 function parseMoney(value: string | undefined): number | null {
@@ -150,6 +222,13 @@ function parseAfQuote(
       previousClose: parseNumber(match[7]),
     });
     if (!parsed) continue;
+
+    const regularSessionOpen = parseRegularSessionOpen(
+      html.slice(match.index ?? 0, (match.index ?? 0) + 1200)
+    );
+    if (regularSessionOpen !== undefined) {
+      parsed.regularSessionOpen = regularSessionOpen;
+    }
 
     const extPrice = parseNumber(match[8]);
     if (isFiniteNumber(extPrice) && extPrice > 0) {

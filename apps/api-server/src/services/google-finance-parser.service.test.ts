@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseGoogleFinanceQuoteHtml } from "./google-finance-parser.service.js";
 
 function afQuoteRecord(args: {
@@ -187,6 +187,30 @@ describe("parseGoogleFinanceQuoteHtml", () => {
       extendedChange: 11.65,
       extendedChangePercent: 4.2933,
     });
+  });
+
+  it("marks AF data as regular-session open when the embedded schedule contains now", () => {
+    vi.useFakeTimers({ now: new Date("2026-05-01T16:30:00Z") });
+
+    const html =
+      `AF_initDataCallback({key: 'ds:2', data:[[[[` +
+      `"/m/test",["AMD","NASDAQ"],"Advanced Micro Devices Inc",0,"USD",` +
+      `[356.8,2.31,0.6516,2,2,2],null,354.49,` +
+      `"#030303","US","/m/0z64",[1777652966],"America/New_York",-14400,"/m/test",` +
+      `null,[353.35,-3.61,-0.9891,2,2,2],[1777652978],[1777642201],` +
+      `[[1,[2026,5,1,9,30,null,null,[-14400]],[2026,5,1,16,null,null,null,[-14400]]]],` +
+      `null,"AMD:NASDAQ",0,null,null,null,1]]]], sideChannel: {}});`;
+
+    const quote = parseGoogleFinanceQuoteHtml(html, { tickerFormat: "AMD:NASDAQ" });
+
+    expect(quote).toMatchObject({
+      ticker: "AMD",
+      price: 356.8,
+      extendedPrice: 353.35,
+      regularSessionOpen: true,
+    });
+
+    vi.useRealTimers();
   });
 
   it("returns no extended fields when AF data has no extended array", () => {

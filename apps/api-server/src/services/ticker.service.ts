@@ -259,10 +259,22 @@ async function scrapeGoogleFinance(
     });
     if (!parsed) return null;
 
-    // Session fields: prefer structured AF extended-hours data, fall back to
-    // the rendered HTML label ("After Hours:" / "Pre-market:") extraction.
+    // Google keeps an extra extended-hours array in AF data during regular
+    // trading. Only surface it when the embedded regular-session window says
+    // the market is not currently open; otherwise AMD-like regular-session
+    // responses get mislabeled as `post`.
     let sessionFields: SessionFields = {};
-    if (finitePos(parsed.extendedPrice)) {
+    if (parsed.regularSessionOpen) {
+      sessionFields = {};
+    } else {
+      sessionFields = extractGoogleSessionFields(html);
+    }
+
+    if (
+      parsed.regularSessionOpen !== true &&
+      Object.keys(sessionFields).length === 0 &&
+      finitePos(parsed.extendedPrice)
+    ) {
       const change = parsed.extendedChange ?? +(parsed.extendedPrice - parsed.price).toFixed(4);
       const pct = parsed.extendedChangePercent ?? (parsed.price > 0 ? +((change / parsed.price) * 100).toFixed(4) : 0);
       sessionFields = {
@@ -271,8 +283,6 @@ async function scrapeGoogleFinance(
         ...(finite(change) ? { postMarketChange: change } : {}),
         ...(finite(pct) ? { postMarketChangePercent: pct } : {}),
       };
-    } else {
-      sessionFields = extractGoogleSessionFields(html);
     }
 
     return validateTickerQuote({

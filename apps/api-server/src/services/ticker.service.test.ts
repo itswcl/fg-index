@@ -283,14 +283,20 @@ function fakeGoogleAfQuotePage(args: {
   changePercent: number;
   previousClose?: number;
   ext?: string;
-  afExt?: { price: number; change: number; changePercent: number };
+  afExt?: {
+    price: number;
+    change: number;
+    changePercent: number;
+    session?: { year: number; month: number; day: number };
+  };
 }): string {
   const previousClose =
     args.previousClose === undefined ? "" : `,null,${args.previousClose}`;
+  const session = args.afExt?.session ?? { year: 2026, month: 4, day: 30 };
   const afExtBlock = args.afExt
     ? `,"#666666","US","/m/0k8z",[1777585274],"America/New_York",-14400,"/m/test",` +
       `null,[${args.afExt.price},${args.afExt.change},${args.afExt.changePercent},2,2,2],` +
-      `[1777579201],[1777585273],[[1,[2026,4,30,9,30,null,null,[-14400]],[2026,4,30,16,null,null,null,[-14400]]]],` +
+      `[1777579201],[1777585273],[[1,[${session.year},${session.month},${session.day},9,30,null,null,[-14400]],[${session.year},${session.month},${session.day},16,null,null,null,[-14400]]]],` +
       `null,"${args.ticker}:${args.exchange}",0,null,null,null,0`
     : "";
   return (
@@ -386,6 +392,51 @@ describe("ticker service — Google Finance AF_initDataCallback parser", () => {
     expect(quote?.postMarketPrice).toBe(283);
     expect(quote?.postMarketChange).toBe(11.65);
     expect(quote?.postMarketChangePercent).toBe(4.2933);
+  });
+
+  it("does not classify stale AF extended data as post-market during regular session", async () => {
+    vi.useFakeTimers({ now: new Date("2026-05-01T16:30:00Z") });
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("google.com/finance/quote/AMD")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AMD",
+            exchange: "NASDAQ",
+            name: "Advanced Micro Devices Inc",
+            price: 356.8,
+            change: 2.31,
+            changePercent: 0.6516,
+            previousClose: 354.49,
+            afExt: {
+              price: 353.35,
+              change: -3.61,
+              changePercent: -0.9891,
+              session: { year: 2026, month: 5, day: 1 },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AMD");
+
+    expect(quote?.price).toBe(356.8);
+    expect(quote?.marketSession).toBeUndefined();
+    expect(quote?.postMarketPrice).toBeUndefined();
+    expect(quote?.postMarketChange).toBeUndefined();
+    expect(quote?.postMarketChangePercent).toBeUndefined();
+
+    vi.useRealTimers();
   });
 
   it("falls back to HTML label extraction when AF has no extended array", async () => {
