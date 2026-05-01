@@ -31,19 +31,17 @@ describe("vix.service — partial/NaN rejection", () => {
   });
 
   it("returns a complete quote when Google HTML is well-formed", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) => {
-        const url = String(input);
-        if (url.includes("vix-google")) {
-          return new Response(
-            '<html><div data-last-price="18.52"></div><div class="P6K39c">17.80</div></html>',
-            { status: 200, headers: { "Content-Type": "text/html" } }
-          );
-        }
-        throw new Error(`unexpected fetch: ${url}`);
-      })
-    );
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("vix-google")) {
+        return new Response(
+          '<html><div data-last-price="18.52"></div><div class="P6K39c">17.80</div></html>',
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const { fetchVixData } = await import("./vix.service.js");
     const q = await fetchVixData();
@@ -54,6 +52,11 @@ describe("vix.service — partial/NaN rejection", () => {
     });
     expect(Number.isFinite(q?.change)).toBe(true);
     expect(Number.isFinite(q?.changePercent)).toBe(true);
+    expect(q?.sourceUrl).toBe("https://example.com/vix-google?hl=en");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/vix-google?hl=en",
+      expect.any(Object)
+    );
   });
 
   it("parses Google AF_initDataCallback when data-last-price is absent", async () => {

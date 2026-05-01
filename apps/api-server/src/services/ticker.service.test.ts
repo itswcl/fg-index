@@ -348,6 +348,8 @@ describe("ticker service — Google Finance AF_initDataCallback parser", () => {
     });
     expect(Number.isFinite(quote?.changePercent)).toBe(true);
     expect(quote?.sourceUrl).toContain("google.com/finance/quote/AAPL");
+    expect(quote?.sourceUrl).toContain("hl=en");
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("?hl=en"))).toBe(true);
   });
 
   it("extracts postMarketPrice from AF extended-hours data", async () => {

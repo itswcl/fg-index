@@ -97,7 +97,12 @@ describe("spx.service — partial/NaN rejection", () => {
     });
     expect(q?.changePercent).toBeCloseTo(0.264, 3);
     expect(Number.isFinite(q?.changePercent)).toBe(true);
+    expect(q?.sourceUrl).toBe("https://example.com/spx-google?hl=en");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/spx-google?hl=en",
+      expect.any(Object)
+    );
   });
 
   it("falls through to Yahoo or null when Google AF data is malformed", async () => {
