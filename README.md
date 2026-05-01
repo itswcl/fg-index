@@ -1,6 +1,6 @@
 # fg-index
 
-Real-time market dashboard with customisable alerts and webhook notifications. Track the CNN Fear & Greed Index, CBOE VIX, BTC, S&P 500, and any stock or crypto ticker — all in one place, with cross-device sync when signed in.
+Real-time market dashboard for sentiment, volatility, crypto, indices, and custom tickers. The web app tracks the CNN Fear & Greed Index, VIX, BTC, S&P 500, and up to 32 user-defined symbols, with signed-in sync, server-side alerts, and webhook notifications.
 
 ## Live
 
@@ -11,48 +11,52 @@ Real-time market dashboard with customisable alerts and webhook notifications. T
 
 ---
 
-## Features
+## Current Product
 
-### Market data
-- **Four default indicators** — CNN Fear & Greed (30 min), CBOE VIX (10 sec, market hours), BTC (30 sec, 24/7), S&P 500 (10 sec, market hours)
-- **Custom tickers** — Add any stock or crypto symbol (e.g. `AAPL`, `ETH-USD`); backend proxies Google/Yahoo Finance, 15s server cache, 30s client refetch
-- **Real-time streaming** — WebSocket push for all indicators; TanStack Query HTTP polling fallback if WS disconnects
-- **Smooth animations** — Price changes animate between frames instead of snapping
+### Market Data
 
-### Layout
-- **Responsive grid** — 4-column desktop, 2-column tablet
-- **Drag-to-reorder** — `@dnd-kit` grid, order persists per user
-- **Mobile line-item view** — <640px switches to compact rows with opt-in edit mode so native scroll isn't hijacked by drag
+- **Default cards** - CNN Fear & Greed, CBOE VIX, BTC, and S&P 500.
+- **Custom ticker cards** - Up to 32 tickers per user; supports stocks, indices, futures-style Yahoo symbols such as `ES=F`, and the BTC crypto quote `BTC-USD`.
+- **Batch quote loading** - Visible custom tickers are fetched with `GET /api/quote/batch`, capped at 12 symbols per page, instead of one request per card.
+- **Persistent quote cache** - Custom ticker responses are stored in Postgres via `TickerQuoteCache`; request handlers serve the latest known quote while a bounded refresh queue updates stale symbols in the background.
+- **Source links** - Cards and mobile rows can open their source page when the backend provides `sourceUrl`.
+- **After-hours context** - Custom equity quotes can carry `marketSession`, pre-market, and post-market fields; the UI shows a moon badge and paints the extended-hours price when the data is available.
+- **Last-known display** - The frontend hydrates cached quotes from localStorage and keeps good quotes visible through transient scraper misses instead of flashing to empty states.
 
-### Alerts & notifications
-- **Threshold alerts** — Multiple conditions per alert, `AND` / `OR` logic (e.g. `F&G < 10 AND VIX > 30`)
-- **Per-alert cooldown** — Default 5 min, configurable
-- **24/7 server-side worker** — Alerts fire even when the browser is closed; server loads all users' alerts from DB and evaluates on every indicator update
-- **Webhook delivery** — Discord, Slack, or Telegram
+### Dashboard UX
 
-### Accounts & sync
-- **Google sign-in** — Supabase auth, JWT-gated server APIs
-- **Cross-device persistence** — Alerts, webhook config, custom tickers, and card order sync via Postgres (Supabase)
-- **Logged-out fallback** — LocalStorage is used when anonymous; a one-time migration seeds the server on first sign-in
+- **Desktop grid** - Drag-to-reorder card grid with 12 cards per page and up to 3 pages.
+- **Mobile line-item layout** - Phones switch to compact metric rows with swipe pagination and an explicit edit mode for reorder/delete so normal vertical scrolling remains reliable.
+- **Stable loading states** - Initial signed-in hydration pads the grid/list with placeholders so cards and pagination do not jump as preferences and tickers load.
+- **Theme support** - Dark, light, and system theme modes.
+- **Connection status** - WebSocket status is debounced so short reconnects do not flash error states.
 
-### UX polish
-- Dark / light / system theme
-- Buy Me a Coffee support button
-- Graceful error surfacing for save/test failures
-- Fixed-height cards prevent flicker during refreshes
+### Accounts, Alerts, and Notifications
+
+- **Supabase Google sign-in** - Authenticated APIs use Supabase JWTs.
+- **Cross-device sync** - Alerts, webhook destinations, custom ticker list, and card order persist in Supabase Postgres.
+- **Signed-in alerting** - The current web UI gates alert and webhook management behind Google sign-in.
+- **Anonymous fallback** - LocalStorage backs unsigned ticker/order sessions and acts as the migration source for older local alerts after sign-in.
+- **Server-side alerts** - Alerts are stored in Postgres and evaluated by the API server on each default market-data update, so delivery does not depend on the browser staying open.
+- **Multi-webhook delivery** - Each user can save up to 10 webhook destinations. Supported types are Discord, Slack, Telegram, and generic JSON POST.
+- **Fan-out notifications** - Triggered alerts deliver to every enabled webhook for that user and also push `alert_triggered` to any live authenticated WebSocket connections.
 
 ---
 
 ## Monorepo Structure
 
-```
+```text
 apps/
-  api-server/     Node.js/Express — REST + WebSocket + alert worker (Render + Supabase Postgres)
-  web/            React + Vite web app (GitHub Pages)
-  macos-app/      React Native macOS companion (local/legacy)
+  api-server/     Express REST + WebSocket API, schedulers, alert worker, Prisma/Postgres
+  web/            React + Vite dashboard deployed to GitHub Pages
+  macos-app/      React Native macOS legacy companion
 packages/
-  shared-types/   Zod schemas + TypeScript types shared across apps
+  shared-types/   Zod schemas and TypeScript types shared by web and API
+docs/
+  *.md            Product specs and historical design notes
 ```
+
+The active product is the web app plus API server. The macOS app is retained as legacy code; see [`docs/README-macos-legacy.md`](docs/README-macos-legacy.md).
 
 ---
 
@@ -61,60 +65,101 @@ packages/
 ```mermaid
 graph TD
     subgraph Sources["External Sources"]
-        CNN[CNN Fear & Greed]
-        GOOG[Google Finance]
-        YHOO[Yahoo Finance fallback]
+        CNN["CNN Fear & Greed"]
+        GOOG["Google Finance HTML"]
+        YHOO["Yahoo Finance chart / HTML"]
+        CG["CoinGecko crypto fallback"]
     end
 
-    subgraph Backend["API Server — Render"]
-        SCHED[Schedulers<br/>F&G · VIX · BTC · SPX]
-        PROXY[Ticker proxy<br/>/api/quote/:ticker]
-        API[REST API]
-        WS[WebSocket Hub]
-        WORKER[Alert Worker<br/>24/7 DB-backed]
-        WEBHOOK[Webhook Delivery]
+    subgraph Backend["API Server - Render"]
+        API["Express REST API"]
+        WS["WebSocket Hub"]
+        SCHED["Default indicator schedulers"]
+        QAPI["Quote API /api/quote/*"]
+        QQUEUE["Quote refresh queue"]
+        ALERTS["Alert worker"]
+        DELIVERY["Webhook delivery"]
+        HEALTH["Health endpoint"]
     end
 
     subgraph DB["Supabase Postgres"]
-        USERS[(Users)]
-        ALERTS[(Alerts)]
-        WEBHOOKS[(Webhook configs)]
-        TICKERS[(User tickers)]
-        PREFS[(Card order)]
+        USERS[("User")]
+        USER_TICKERS[("UserTicker")]
+        QUOTE_CACHE[("TickerQuoteCache")]
+        ALERT_ROWS[("Alert + Condition")]
+        WEBHOOK_ROWS[("Webhook")]
+        PREFS[("User.cardOrder")]
     end
 
-    subgraph Clients
-        WEB[Web App — GitHub Pages]
-        MACOS[macOS App — local]
+    subgraph Client["Web App - GitHub Pages"]
+        WEB["React dashboard"]
+        RQ["TanStack Query cache"]
+        LS["localStorage fallback"]
     end
 
     subgraph Destinations["Alert Destinations"]
-        DISCORD[Discord]
-        SLACK[Slack]
-        TG[Telegram]
+        DISCORD["Discord"]
+        SLACK["Slack"]
+        TG["Telegram"]
+        GENERIC["Generic webhook"]
     end
 
     CNN --> SCHED
     GOOG --> SCHED
     YHOO --> SCHED
-    GOOG --> PROXY
-    SCHED --> WS
+    GOOG --> QAPI
+    YHOO --> QAPI
+    CG --> QAPI
+
     SCHED --> API
-    SCHED --> WORKER
-    WS -->|"*_UPDATE / alert_triggered"| WEB
-    WS -->|"FEAR_GREED_UPDATE / VIX_UPDATE"| MACOS
-    API -->|HTTP fallback| WEB
-    WEB <-->|CRUD| ALERTS
-    WEB <-->|CRUD| WEBHOOKS
-    WEB <-->|CRUD| TICKERS
-    WEB <-->|CRUD| PREFS
-    WORKER --> ALERTS
-    WORKER --> WEBHOOKS
-    WORKER --> WEBHOOK
-    WEBHOOK --> DISCORD
-    WEBHOOK --> SLACK
-    WEBHOOK --> TG
+    SCHED --> WS
+    SCHED --> ALERTS
+    QAPI --> QUOTE_CACHE
+    QAPI --> QQUEUE
+    QQUEUE --> QAPI
+    HEALTH --> QQUEUE
+
+    WEB --> API
+    WEB <-->|"market updates + alert_triggered"| WS
+    WEB --> RQ
+    WEB --> LS
+
+    API <-->|"JWT CRUD"| USERS
+    API <-->|"ticker CRUD"| USER_TICKERS
+    API <-->|"preferences"| PREFS
+    API <-->|"alerts"| ALERT_ROWS
+    API <-->|"webhooks"| WEBHOOK_ROWS
+    ALERTS --> ALERT_ROWS
+    ALERTS --> WEBHOOK_ROWS
+    ALERTS --> DELIVERY
+    DELIVERY --> DISCORD
+    DELIVERY --> SLACK
+    DELIVERY --> TG
+    DELIVERY --> GENERIC
 ```
+
+### Data Flow
+
+1. Default indicator schedulers keep in-memory caches warm and broadcast `FEAR_GREED_UPDATE`, `VIX_UPDATE`, `BTC_UPDATE`, and `SPX_UPDATE` over WebSocket.
+2. Custom ticker requests read from `TickerQuoteCache` first, enqueue refresh work, and return a quote or `null` without blocking on a slow upstream scrape.
+3. The quote worker periodically syncs all active `UserTicker` symbols and refreshes stale cache rows with bounded concurrency and per-symbol failure cooldown.
+4. Authenticated users persist alerts, webhook destinations, card order, and tickers through REST APIs.
+5. The alert worker evaluates default-market alerts on scheduler updates and fans out delivery to all enabled webhook destinations.
+
+---
+
+## Data Sources and Resilience
+
+| Area | Primary path | Fallback / guard |
+|------|--------------|------------------|
+| Fear & Greed | CNN DataViz JSON | In-memory scheduler cache |
+| VIX | Google Finance with forced English locale | Yahoo Finance HTML fallback |
+| S&P 500 | Google Finance with forced English locale | Yahoo Finance HTML fallback |
+| BTC | Yahoo chart JSON | CoinGecko simple price fallback |
+| Custom stocks/indices | Google Finance parser | Yahoo chart/HTML, exchange suffix resolution, last-known cache |
+| Custom quote serving | Postgres `TickerQuoteCache` | Background refresh queue with cooldown and health stats |
+
+Scraping remains the highest operational risk. Parser tests cover known Google/Yahoo shapes, and `validateTickerQuote` enforces a complete-quote-or-null contract so `NaN` or partial numeric payloads do not reach clients.
 
 ---
 
@@ -122,47 +167,84 @@ graph TD
 
 ### Prerequisites
 
-- Node.js ≥ 20
-- npm ≥ 10
-- A Supabase project (free tier works) if you want auth + persistence; the app runs read-only without it.
+- Node.js 20 recommended. The workspace declares `>=18`, but CI and runtime checks use Node 20.
+- npm 10 recommended.
+- Supabase project for auth and persistence.
+- Postgres connection strings for Prisma migrations.
 
 ### API Server
 
+Create `apps/api-server/.env.local`:
+
 ```bash
-cd apps/api-server
-cp .env.example .env.local   # or create manually — see table below
-npm install
-npx prisma migrate deploy    # apply DB migrations
-npm run dev
-# REST + WebSocket on http://localhost:8080
+CNN_FEAR_GREED_URL=https://production.dataviz.cnn.io/index/fearandgreed/graphdata/
+GOOGLE_FINANCE_VIX_URL=https://www.google.com/finance/quote/VIX:INDEXCBOE
+YAHOO_FINANCE_VIX_URL=https://finance.yahoo.com/quote/%5EVIX/
+GOOGLE_FINANCE_BTC_URL=https://www.google.com/finance/quote/BTC-USD
+YAHOO_FINANCE_BTC_URL=https://finance.yahoo.com/quote/BTC-USD
+GOOGLE_FINANCE_SPX_URL=https://www.google.com/finance/quote/.INX:INDEXSP
+YAHOO_FINANCE_SPX_URL=https://finance.yahoo.com/quote/%5EGSPC/
+SCRAPER_USER_AGENT=Mozilla/5.0 ...
+DATABASE_URL=postgresql://...
+DIRECT_URL=postgresql://...
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_JWKS_URL=https://<project>.supabase.co/auth/v1/.well-known/jwks.json
 ```
 
-**Environment variables** (`apps/api-server/.env.local`):
+Run locally:
+
+```bash
+cd apps/api-server
+npm install
+npm install --prefix ../../packages/shared-types
+npx prisma generate
+npx prisma migrate dev
+npm run dev
+```
+
+The API and WebSocket server run on the same port, defaulting to `http://localhost:8080`.
+
+### API Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | HTTP + WS port |
-| `INTERNAL_API_KEY` | `dev-key-123` | Legacy API key for public read endpoints |
+| `PORT` | `8080` | HTTP + WebSocket port |
+| `INTERNAL_API_KEY` | `dev-key-123` | API key for public read endpoints; the default key disables API-key enforcement in dev |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
-| `CNN_FEAR_GREED_URL` | — | CNN DataViz endpoint |
-| `GOOGLE_FINANCE_VIX_URL` | — | Google Finance VIX page |
-| `YAHOO_FINANCE_VIX_URL` | — | Yahoo Finance VIX fallback |
-| `GOOGLE_FINANCE_BTC_URL` | — | Google Finance BTC page |
-| `YAHOO_FINANCE_BTC_URL` | — | Yahoo Finance BTC fallback |
-| `GOOGLE_FINANCE_SPX_URL` | — | Google Finance S&P 500 page |
-| `YAHOO_FINANCE_SPX_URL` | — | Yahoo Finance S&P 500 fallback |
-| `SCRAPER_USER_AGENT` | — | Browser User-Agent for scraping |
-| `FEAR_GREED_INTERVAL_MS` | `1800000` | F&G polling (30 min) |
-| `VIX_REALTIME_INTERVAL_MS` | `10000` | VIX during market hours (10 sec) |
-| `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX outside market hours (5 min) |
-| `BTC_INTERVAL_MS` | `30000` | BTC polling (30 sec, 24/7) |
-| `SPX_INTERVAL_MS` | `10000` | S&P 500 polling (10 sec, market hours) |
-| `DATABASE_URL` | — | Supabase pooled connection (pgBouncer) |
-| `DIRECT_URL` | — | Supabase direct connection (for migrations) |
-| `SUPABASE_URL` | — | Supabase project URL |
-| `SUPABASE_JWKS_URL` | — | Supabase JWKS endpoint for JWT verification |
+| `CNN_FEAR_GREED_URL` | required | CNN Fear & Greed JSON endpoint |
+| `GOOGLE_FINANCE_VIX_URL` | required | Google Finance VIX page |
+| `YAHOO_FINANCE_VIX_URL` | required | Yahoo VIX fallback |
+| `GOOGLE_FINANCE_BTC_URL` | required | Legacy BTC URL env required by config |
+| `YAHOO_FINANCE_BTC_URL` | required | Legacy BTC URL env required by config |
+| `GOOGLE_FINANCE_SPX_URL` | required | Google Finance S&P 500 page |
+| `YAHOO_FINANCE_SPX_URL` | required | Yahoo S&P 500 fallback |
+| `SCRAPER_USER_AGENT` | required | Browser User-Agent for upstream requests |
+| `FEAR_GREED_INTERVAL_MS` | `1800000` | Fear & Greed scheduler interval |
+| `VIX_REALTIME_INTERVAL_MS` | `10000` | VIX realtime loop interval before adaptive throttling |
+| `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX fallback refresh interval |
+| `BTC_INTERVAL_MS` | `60000` | BTC scheduler interval |
+| `SPX_INTERVAL_MS` | `10000` | S&P 500 realtime loop interval before adaptive throttling |
+| `QUOTE_REFRESH_INTERVAL_MS` | `15000` | Active custom ticker sync interval |
+| `QUOTE_REFRESH_CONCURRENCY` | `3` | Max concurrent background quote refresh workers |
+| `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Per-symbol refresh cooldown after failure |
+| `QUOTE_FETCH_TIMEOUT_MS` | `5000` | Upstream fetch timeout for quote sources |
+| `DATABASE_URL` | required | Supabase pooled Postgres connection |
+| `DIRECT_URL` | required | Direct Postgres connection for migrations |
+| `SUPABASE_URL` | required | Supabase project URL |
+| `SUPABASE_JWKS_URL` | required | Supabase JWKS endpoint for JWT verification |
 
 ### Web App
+
+Create `apps/web/.env.local`:
+
+```bash
+VITE_API_URL=http://localhost:8080
+VITE_API_KEY=dev-key-123
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon-key>
+```
+
+Run locally:
 
 ```bash
 cd apps/web
@@ -170,153 +252,158 @@ npm install
 npm run dev
 ```
 
-Create `apps/web/.env.local`:
-
-```
-VITE_API_URL=http://localhost:8080
-VITE_API_KEY=dev-key-123
-VITE_SUPABASE_URL=https://<project>.supabase.co
-VITE_SUPABASE_ANON_KEY=<anon-key>
-```
-
 | Variable | Description |
 |----------|-------------|
 | `VITE_API_URL` | Backend base URL |
-| `VITE_API_KEY` | Sent as `X-API-KEY` for legacy public endpoints |
-| `VITE_WS_URL` | Optional explicit WS URL (derived from `VITE_API_URL` if omitted) |
-| `VITE_SUPABASE_URL` | Supabase project URL (enables sign-in) |
+| `VITE_API_KEY` | Sent as `X-API-KEY` for public read endpoints |
+| `VITE_WS_URL` | Optional explicit WebSocket URL; derived from `VITE_API_URL` if omitted |
+| `VITE_SUPABASE_URL` | Supabase project URL for sign-in |
 | `VITE_SUPABASE_ANON_KEY` | Supabase public anon key |
 
-Without Supabase env vars, the app runs read-only with localStorage fallback (no cross-device sync).
-
-### macOS App
-
-See [`docs/README-macos-legacy.md`](docs/README-macos-legacy.md) for full setup (requires Xcode + CocoaPods).
-
----
-
-## WebSocket Protocol
-
-| Message | Direction | Description |
-|---------|-----------|-------------|
-| `FEAR_GREED_UPDATE` | Server → Client | New Fear & Greed snapshot |
-| `VIX_UPDATE` | Server → Client | New VIX snapshot (payload may be `null`) |
-| `BTC_UPDATE` | Server → Client | New BTC snapshot |
-| `SPX_UPDATE` | Server → Client | New S&P 500 snapshot |
-| `alert_triggered` | Server → Client | Alert condition matched (delivered regardless of client connection via server worker) |
-| `set_alerts` | Client → Server | Legacy — alerts now persist via REST |
-| `set_webhook` | Client → Server | Legacy — webhook now persists via REST |
-
----
-
-## Alerts & Webhooks
-
-Create alerts in the **Alerts** panel of the web app. Each alert has one or more conditions:
-
-```
-Fear & Greed < 10   AND   VIX > 30
-```
-
-**Operators:** `<` `>` `<=` `>=` `==`
-**Logic:** `AND` (all must match) or `OR` (any triggers)
-**Metrics:** `fearGreed`, `vix`, `btc`, `spx`, or `ticker:<SYMBOL>`
-**Cooldown:** configurable per alert (default 5 min) to avoid notification spam
-
-Alerts are evaluated server-side on every indicator update against all users' alerts — you'll still get notified if your browser is closed.
-
-### Webhook Setup
-
-| Platform | Required | Where to get it |
-|----------|---------|-----------------|
-| **Discord** | Webhook URL | Server Settings → Integrations → Webhooks |
-| **Slack** | Incoming Webhook URL | api.slack.com → Your Apps → Incoming Webhooks |
-| **Telegram** | Bot Token + Chat ID | Token: @BotFather · Chat ID: @userinfobot |
-
-Configure in the web app: **Alerts → ⚡ Webhook**. Use the "Test" button to verify delivery.
+Without Supabase env vars, market data still works, but signed-in persistence and server-side alert/webhook management are unavailable.
 
 ---
 
 ## API Reference
 
-### Public (API-key gated)
+### Public Read APIs
+
+These endpoints are API-key gated in production and skip API-key enforcement when `INTERNAL_API_KEY=dev-key-123`.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/fear-greed` | GET | Fear & Greed snapshot (30 min cache) |
-| `/api/vix` | GET | VIX snapshot (5 min cache outside market hours) |
-| `/api/btc` | GET | BTC snapshot (30 sec cache) |
-| `/api/spx` | GET | S&P 500 snapshot (10 sec cache) |
-| `/api/quote/:ticker` | GET | Arbitrary ticker proxy (15 sec cache, rate-limited 30/min) |
-| `/api/health` · `/health` | GET | Health check |
-| `/api/webhooks/test` | POST | Fire a test webhook (rate-limited) |
+| `/api/fear-greed` | `GET` | Latest Fear & Greed scheduler cache |
+| `/api/vix` | `GET` | Latest VIX scheduler cache |
+| `/api/btc` | `GET` | Latest BTC scheduler cache |
+| `/api/spx` | `GET` | Latest S&P 500 scheduler cache |
+| `/api/quote/:ticker` | `GET` | Cached custom quote snapshot; enqueues refresh |
+| `/api/quote/batch?symbols=AAPL,MSFT` | `GET` | Up to 12 deduped quote snapshots in one response; enqueues refresh for all |
+| `/api/webhooks/test` | `POST` | Legacy ad-hoc webhook test body, API-key gated and rate-limited |
+| `/api/health` | `GET` | Scheduler and quote-refresh health |
+| `/health` | `GET` | Backward-compatible health alias |
 
-All public endpoints require the `X-API-KEY` header in production.
+Batch quote response (quote shape abbreviated here; real quotes include `previousClose`, `change`, `changePercent`, and `fetchedAt`):
 
-### Authenticated (Supabase JWT)
+```json
+{
+  "quotes": {
+    "AAPL": { "ticker": "AAPL", "price": 182.1 },
+    "BAD": null
+  }
+}
+```
+
+### Authenticated APIs
+
+Send `Authorization: Bearer <supabase-access-token>`.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/alerts` | GET · POST | List / create alerts |
-| `/api/alerts/bulk` | POST | Bulk replace alerts |
-| `/api/alerts/:id` | PUT · DELETE | Update / delete alert |
-| `/api/webhooks/me` | GET · PUT · DELETE | Get / upsert / delete webhook config |
-| `/api/webhooks/me/test` | POST | Fire a test with the stored config |
-| `/api/user/preferences` | GET · PUT | Card order (`string[]`) |
-| `/api/user/tickers` | GET · POST · PUT · DELETE `/:symbol` | Custom ticker list (max 8/user) |
+| `/api/alerts` | `GET` / `POST` | List or create alerts |
+| `/api/alerts/bulk` | `POST` | Replace all alerts for migration |
+| `/api/alerts/:id` | `PUT` / `DELETE` | Update or delete an alert |
+| `/api/webhooks` | `GET` / `POST` | List or create webhook destinations |
+| `/api/webhooks/:id` | `PUT` / `DELETE` | Update or delete one webhook destination |
+| `/api/webhooks/:id/test` | `POST` | Test one saved webhook destination |
+| `/api/webhooks/me` | `GET` / `PUT` / `DELETE` | Legacy single-webhook alias mapped to the user's oldest webhook row |
+| `/api/webhooks/me/test` | `POST` | Legacy test endpoint for the oldest webhook row |
+| `/api/user/preferences` | `GET` / `PUT` | Persist `cardOrder` |
+| `/api/user/tickers` | `GET` / `POST` / `PUT` | List, add, or bulk-replace custom tickers |
+| `/api/user/tickers/:symbol` | `DELETE` | Remove a custom ticker |
 
-Send `Authorization: Bearer <supabase-access-token>` from the client.
+### WebSocket Protocol
+
+The WebSocket server runs on the same host/port as HTTP. Browser clients pass auth through query params because custom headers are not available during the WebSocket handshake.
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| `FEAR_GREED_UPDATE` | Server to client | New Fear & Greed snapshot |
+| `VIX_UPDATE` | Server to client | New VIX snapshot |
+| `BTC_UPDATE` | Server to client | New BTC snapshot |
+| `SPX_UPDATE` | Server to client | New S&P 500 snapshot |
+| `alert_triggered` | Server to client | Authenticated user's alert matched |
+
+Client-to-server WebSocket messages are no longer part of the active protocol. Alerts and webhooks persist through REST APIs.
+
+---
+
+## Alerts and Webhooks
+
+Alerts are created in the web app's Alerts panel. Each alert supports:
+
+- 1 to 5 conditions.
+- `AND` or `OR` logic.
+- Operators: `<`, `>`, `<=`, `>=`, `==`.
+- Metrics: `fearGreed`, `vix`, `btc`, and `spx`.
+- Per-alert cooldown from 0 minutes to 7 days, defaulting to 5 minutes.
+
+Example:
+
+```text
+Fear & Greed < 10 AND VIX > 30
+```
+
+Webhook destinations support:
+
+| Type | Required fields |
+|------|-----------------|
+| Discord | Webhook URL |
+| Slack | Incoming webhook URL |
+| Telegram | Bot token and chat ID |
+| Generic | Webhook URL; receives JSON |
 
 ---
 
 ## Database
 
-PostgreSQL (Supabase) via Prisma. Core models:
+PostgreSQL is accessed through Prisma. Core models:
 
 | Model | Purpose |
 |-------|---------|
-| `User` | Mirrors Supabase `auth.users.id`; owns alerts/webhook/tickers/preferences |
-| `Alert` + `Condition` | User-defined threshold alerts with AND/OR logic |
-| `WebhookConfig` | One webhook destination per user (Discord/Slack/Telegram) |
-| `UserTicker` | Custom tickers with position |
-| `cardOrder` (on User) | Array of card IDs in user's drag order |
+| `User` | Supabase user mirror with email and `cardOrder` |
+| `UserTicker` | Per-user custom ticker list and order |
+| `TickerQuoteCache` | Persistent quote snapshots plus refresh metadata |
+| `Alert` / `Condition` | Server-side threshold alerts |
+| `Webhook` | N-per-user webhook destinations |
 
 Run migrations:
 
 ```bash
 cd apps/api-server
-npx prisma migrate dev    # development
-npx prisma migrate deploy # production (Render build step)
+npx prisma migrate dev      # development
+npx prisma migrate deploy   # production
 ```
 
 ---
 
-## Deployment
+## Deployment and CI
 
-| Service | Platform | Trigger |
-|---------|----------|---------|
-| API Server | Render (free tier) | Push to `main` |
-| Web App | GitHub Pages | Push to `main` |
-| Database | Supabase Postgres | — |
-| Keep-alive | GitHub Actions cron (every 14 min) | Pings `/health` to prevent Render sleep |
+| Area | Platform | Trigger / Notes |
+|------|----------|-----------------|
+| API server | Render | Deployed from `main` |
+| Web app | GitHub Pages | `.github/workflows/deploy-frontend.yml` on push to `main` or manual dispatch |
+| Database | Supabase Postgres | Prisma migrations from API workspace |
+| CI | GitHub Actions | Type-checks API/web, runs API tests, builds web |
+| Uptime | External monitor | Render keep-awake is handled outside this repo; the old GitHub cron workflow was removed |
 
-The keep-alive workflow is resilient to GitHub schedule drops — if a tick is missed it catches up on the next run.
-
----
-
-## Contributing
+Useful verification commands:
 
 ```bash
-git fetch origin
-git checkout -b feat/your-change origin/main   # always branch from fresh main
-# make changes, test locally
-cd apps/api-server && npx tsc --noEmit && npx vitest run --exclude 'src/__tests__/integration/**' --exclude 'src/services/cnn.test.ts'
-cd ../web && npx tsc --noEmit && npx vite build
-git push origin feat/your-change
-# open PR → review → squash merge → delete branch
+cd apps/api-server
+npm install --prefix ../../packages/shared-types
+npm install
+npx tsc --noEmit
+npx vitest run
+
+cd ../web
+npm install
+npm run lint
+npm run build
 ```
 
-**Workflow rules**
-- One PR per task — never bundle unrelated changes
-- Always branch from fresh `origin/main` (even for follow-up fixes)
-- Squash commits to 1 before opening the PR
-- CI runs on every PR: lint, type-check, unit tests
+Workflow rules:
+
+- One PR per task; do not bundle unrelated changes.
+- Branch from fresh `origin/main`.
+- Keep review branches to one commit unless the reviewer asks otherwise.
+- Preserve the public response contracts for default cards: VIX returns `ticker: "VIX"`, S&P 500 returns `ticker: "SPX"`, and BTC returns the canonical BTC quote.
