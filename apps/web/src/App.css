@@ -25,6 +25,19 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
+  transition: box-shadow 160ms ease;
+}
+
+.cards-grid-dragging {
+  border-radius: 28px;
+}
+
+.cards-grid-page-turn-prev {
+  box-shadow: inset 72px 0 56px -56px rgba(95, 127, 255, 0.75);
+}
+
+.cards-grid-page-turn-next {
+  box-shadow: inset -72px 0 56px -56px rgba(95, 127, 255, 0.75);
 }
 
 /* Invisible spacer that holds a grid cell open so paginated pages
@@ -635,4 +648,3 @@
   opacity: 0.6;
   transform: scale(0.96);
 }
-

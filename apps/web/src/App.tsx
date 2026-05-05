@@ -249,6 +249,8 @@ function MarketIndicators() {
             onReorder={reorder}
             page={page}
             perPage={CARDS_PER_PAGE}
+            pageCount={pageCount}
+            onPageChange={setPage}
             onRemoveTicker={removeTicker}
             isDark={isDark}
             isInitialLoading={isInitialLoading}

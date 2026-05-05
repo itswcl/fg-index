@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -39,6 +39,8 @@ interface CardGridProps {
   page: number;
   /** Cards per page (typically CARDS_PER_PAGE=12). */
   perPage: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
   isDark: boolean;
   onRemoveTicker: (ticker: string) => void;
   /**
@@ -227,8 +229,11 @@ function LiftedCard({
 }
 
 // ── CardGrid (unified — default + custom in one context) ──
+const PAGE_TURN_EDGE_PX = 72;
+const PAGE_TURN_DELAY_MS = 550;
+
 export function CardGrid(props: CardGridProps) {
-  const { order, onReorder, page, perPage, isDark, isInitialLoading } = props;
+  const { order, onReorder, page, perPage, pageCount, onPageChange, isDark, isInitialLoading } = props;
   // NOTE: every hook must run on every render. An early-return branch for
   // `isInitialLoading` cannot sit above any hook call — the moment the
   // flag flips true→false, the hook count jumps from 1 to 4 and React
@@ -236,6 +241,12 @@ export function CardGrid(props: CardGridProps) {
   // render"), which unmounts the tree and shows a white page. Keep
   // useState + useSensors at the top of the function.
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [pageTurnDirection, setPageTurnDirection] = useState<'prev' | 'next' | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const pageTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragStartPageRef = useRef<number | null>(null);
+  const pageTurnedRef = useRef(false);
+  const lastPageTurnDirectionRef = useRef<'prev' | 'next' | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 5 } }),
@@ -257,28 +268,95 @@ export function CardGrid(props: CardGridProps) {
   );
   usePageTickers(customSymbolsOnPage);
 
+  function clearPageTurn() {
+    if (pageTurnTimerRef.current) {
+      clearTimeout(pageTurnTimerRef.current);
+      pageTurnTimerRef.current = null;
+    }
+    setPageTurnDirection(null);
+  }
+
+  useEffect(() => {
+    if (!activeId) {
+      clearPageTurn();
+      return;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const rect = gridRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const nextDirection =
+        event.clientX <= rect.left + PAGE_TURN_EDGE_PX && page > 1
+          ? 'prev'
+          : event.clientX >= rect.right - PAGE_TURN_EDGE_PX && page < pageCount
+            ? 'next'
+            : null;
+
+      setPageTurnDirection(nextDirection);
+
+      if (!nextDirection) {
+        if (pageTurnTimerRef.current) {
+          clearTimeout(pageTurnTimerRef.current);
+          pageTurnTimerRef.current = null;
+        }
+        return;
+      }
+
+      if (pageTurnTimerRef.current) return;
+      pageTurnTimerRef.current = setTimeout(() => {
+        pageTurnTimerRef.current = null;
+        pageTurnedRef.current = true;
+        lastPageTurnDirectionRef.current = nextDirection;
+        onPageChange(nextDirection === 'next' ? page + 1 : page - 1);
+        setPageTurnDirection(null);
+      }, PAGE_TURN_DELAY_MS);
+    }
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      clearPageTurn();
+    };
+  }, [activeId, onPageChange, page, pageCount]);
+
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as string);
+    dragStartPageRef.current = page;
+    pageTurnedRef.current = false;
+    lastPageTurnDirectionRef.current = null;
   }
 
   function handleDragEnd(event: DragEndEvent) {
+    clearPageTurn();
     const { active, over } = event;
+    const activeId = active.id as string;
+    const oldIndex = order.indexOf(activeId);
+
     if (over && active.id !== over.id) {
-      const activeId = active.id as string;
       const overId = over.id as string;
-      const oldIndexPage = pageItems.indexOf(activeId);
-      const newIndexPage = pageItems.indexOf(overId);
-      // Both ids must live on the current page (cross-page drag is FE-3).
-      if (oldIndexPage >= 0 && newIndexPage >= 0) {
-        const reorderedPage = arrayMove(pageItems, oldIndexPage, newIndexPage);
-        const newFullOrder = [
-          ...order.slice(0, pageStart),
-          ...reorderedPage,
-          ...order.slice(pageEnd),
-        ];
-        onReorder(newFullOrder);
+      const newIndex = order.indexOf(overId);
+      if (oldIndex >= 0 && newIndex >= 0) {
+        onReorder(arrayMove(order, oldIndex, newIndex));
       }
+    } else if (oldIndex >= 0 && pageTurnedRef.current && dragStartPageRef.current !== page) {
+      const targetIndex = lastPageTurnDirectionRef.current === 'prev'
+        ? pageStart
+        : Math.max(pageStart, Math.min(pageEnd, order.length) - 1);
+      onReorder(arrayMove(order, oldIndex, targetIndex));
     }
+
+    dragStartPageRef.current = null;
+    pageTurnedRef.current = false;
+    lastPageTurnDirectionRef.current = null;
+    setActiveId(null);
+  }
+
+  function handleDragCancel() {
+    clearPageTurn();
+    dragStartPageRef.current = null;
+    pageTurnedRef.current = false;
+    lastPageTurnDirectionRef.current = null;
     setActiveId(null);
   }
 
@@ -310,9 +388,17 @@ export function CardGrid(props: CardGridProps) {
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <SortableContext items={pageItems} strategy={rectSortingStrategy}>
-        <div className="cards-grid">
+        <div
+          ref={gridRef}
+          className={[
+            'cards-grid',
+            activeId ? 'cards-grid-dragging' : '',
+            pageTurnDirection ? `cards-grid-page-turn-${pageTurnDirection}` : '',
+          ].filter(Boolean).join(' ')}
+        >
           {pageItems.map((id) => (
             <SortableCardSlot key={id} id={id} isDark={isDark}>
               {renderCardContent(id, isDark, props)}
