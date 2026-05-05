@@ -98,4 +98,12 @@ describe("ticker cache price sanity guard", () => {
     );
     expect(upsertMock).not.toHaveBeenCalled();
   });
+
+  it("uses caller-provided previous price instead of issuing another cache read", async () => {
+    const { upsertCachedQuote } = await import("./ticker-cache.service.js");
+    await upsertCachedQuote("AMD", quote(120), { previousPrice: 100 });
+
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
 });

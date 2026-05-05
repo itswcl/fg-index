@@ -105,7 +105,36 @@ describe("quote refresh queue service", () => {
     expect(upsertCachedQuoteMock).toHaveBeenCalledTimes(1);
     expect(upsertCachedQuoteMock).toHaveBeenCalledWith(
       "AAPL",
-      expect.objectContaining({ ticker: "AAPL", price: 180 })
+      expect.objectContaining({ ticker: "AAPL", price: 180 }),
+      { previousPrice: undefined }
+    );
+  });
+
+  it("passes previous cached price into the sanity guard path", async () => {
+    getCachedQuoteSnapshotMock.mockResolvedValue({
+      quote: { ticker: "AAPL", price: 100 },
+      isFresh: false,
+    });
+    fetchFreshTickerQuoteMock.mockResolvedValue({
+      ticker: "AAPL",
+      name: "Apple",
+      price: 120,
+      previousClose: 119,
+      change: 1,
+      changePercent: 0.84,
+      fetchedAt: new Date().toISOString(),
+    });
+
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+
+    mod.enqueueQuoteRefresh("AAPL");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+
+    expect(upsertCachedQuoteMock).toHaveBeenCalledWith(
+      "AAPL",
+      expect.objectContaining({ ticker: "AAPL", price: 120 }),
+      { previousPrice: 100 }
     );
   });
 
