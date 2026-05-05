@@ -89,9 +89,14 @@ function isInCooldown(row: AlertRow, now: Date): boolean {
 type FetchFn = (metric: MetricKey) => Promise<AlertRow[]>;
 
 let fetchOverride: FetchFn | null = null;
+const inFlightMetrics = new Set<MetricKey>();
 
 export function __setFetchOverrideForTests(fn: FetchFn | null): void {
   fetchOverride = fn;
+}
+
+export function __resetAlertWorkerStateForTests(): void {
+  inFlightMetrics.clear();
 }
 
 async function fetchCandidateAlerts(metric: MetricKey): Promise<AlertRow[]> {
@@ -140,6 +145,21 @@ export async function evaluateForMetric(
   snapshot: MarketSnapshot,
   now: Date = new Date()
 ): Promise<AlertTriggeredMessage[]> {
+  if (!fetchOverride && inFlightMetrics.has(metric)) {
+    process.stderr.write(
+      JSON.stringify({
+        event: "alert_worker_skipped",
+        metric,
+        reason: "evaluation_in_flight",
+      }) + "\n"
+    );
+    return [];
+  }
+
+  if (!fetchOverride) {
+    inFlightMetrics.add(metric);
+  }
+
   let candidates: AlertRow[];
   try {
     candidates = await fetchCandidateAlerts(metric);
@@ -152,6 +172,10 @@ export async function evaluateForMetric(
       }) + "\n"
     );
     return [];
+  } finally {
+    if (!fetchOverride) {
+      inFlightMetrics.delete(metric);
+    }
   }
 
   const fresh = candidates.filter((row) => !isInCooldown(row, now));

@@ -33,22 +33,27 @@ function getAbsoluteMovePercent(previousPrice: number, nextPrice: number): numbe
 
 async function assertQuotePriceMoveIsSane(
   symbol: string,
-  quote: TickerQuote
+  quote: TickerQuote,
+  previousPrice?: number
 ): Promise<void> {
   const threshold = env.QUOTE_PRICE_SANITY_MAX_MOVE_PERCENT;
   if (!Number.isFinite(threshold) || threshold <= 0) return;
 
-  const existing = await prisma.tickerQuoteCache.findUnique({
-    where: { symbol },
-    select: { price: true },
-  });
-  if (!existing) return;
+  const baselinePrice =
+    previousPrice ??
+    (
+      await prisma.tickerQuoteCache.findUnique({
+        where: { symbol },
+        select: { price: true },
+      })
+    )?.price;
+  if (baselinePrice === undefined) return;
 
-  const movePercent = getAbsoluteMovePercent(existing.price, quote.price);
+  const movePercent = getAbsoluteMovePercent(baselinePrice, quote.price);
   if (movePercent >= threshold) {
     throw new SuspiciousQuotePriceMoveError(
       symbol,
-      existing.price,
+      baselinePrice,
       quote.price,
       movePercent
     );
@@ -135,13 +140,14 @@ export async function getCachedQuotesBatch(
 
 export async function upsertCachedQuote(
   symbol: string,
-  quote: TickerQuote
+  quote: TickerQuote,
+  options: { previousPrice?: number } = {}
 ): Promise<void> {
   const normalized = normalizeSymbol(symbol);
   const now = new Date();
   const staleAt = new Date(now.getTime() + getTickerCacheTtlMs(normalized));
   const fetchedAt = new Date(quote.fetchedAt);
-  await assertQuotePriceMoveIsSane(normalized, quote);
+  await assertQuotePriceMoveIsSane(normalized, quote, options.previousPrice);
 
   await prisma.tickerQuoteCache.upsert({
     where: { symbol: normalized },

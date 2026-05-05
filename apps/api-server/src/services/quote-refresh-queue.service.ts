@@ -69,7 +69,9 @@ async function processSymbol(symbol: string): Promise<void> {
       return;
     }
     failedUntil.delete(symbol);
-    await upsertCachedQuote(symbol, quote);
+    await upsertCachedQuote(symbol, quote, {
+      previousPrice: snapshot.quote?.price,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recordWorkerFailure(symbol, message);

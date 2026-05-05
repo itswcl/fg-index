@@ -58,11 +58,26 @@ export async function verifySupabaseJwt(token: string): Promise<JWTPayload> {
 // ─── User upsert ──────────────────────────────────────────────────
 // On first authenticated request, create the User row so FKs in Alert /
 // Webhook are satisfied. Keyed by Supabase `sub` (UUID).
+const userUpsertCache = new Map<string, { email: string; expiresAt: number }>();
+
+export function __clearUserUpsertCacheForTests(): void {
+  userUpsertCache.clear();
+}
+
 async function upsertUser(userId: string, email: string): Promise<void> {
+  const cached = userUpsertCache.get(userId);
+  if (cached?.email === email && cached.expiresAt > Date.now()) {
+    return;
+  }
+
   await prisma.user.upsert({
     where: { id: userId },
     update: { email },
     create: { id: userId, email },
+  });
+  userUpsertCache.set(userId, {
+    email,
+    expiresAt: Date.now() + env.AUTH_USER_UPSERT_TTL_MS,
   });
 }
 

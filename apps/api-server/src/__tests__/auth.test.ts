@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Request, Response, NextFunction } from "express";
 import {
   authMiddleware,
+  __clearUserUpsertCacheForTests,
   __setVerifyOverrideForTests,
 } from "../middlewares/auth.js";
 import { prisma } from "../services/db.js";
@@ -49,6 +50,7 @@ function mockRes(): MockedRes & Response {
 describe("authMiddleware", () => {
   beforeEach(() => {
     upsertSpy.mockClear();
+    __clearUserUpsertCacheForTests();
   });
 
   afterEach(() => {
@@ -158,5 +160,22 @@ describe("authMiddleware", () => {
       update: { email },
       create: { id: sub, email },
     });
+  });
+
+  it("skips repeated user upsert while the same user/email is cached", async () => {
+    const sub = "00000000-0000-0000-0000-000000000042";
+    const email = "alice@example.com";
+    __setVerifyOverrideForTests(async () => ({ sub, email }));
+
+    const firstReq = mockReq({ Authorization: "Bearer good" });
+    const secondReq = mockReq({ Authorization: "Bearer good" });
+    const res = mockRes();
+
+    await authMiddleware(firstReq, res, vi.fn() as unknown as NextFunction);
+    await authMiddleware(secondReq, res, vi.fn() as unknown as NextFunction);
+
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(secondReq.userId).toBe(sub);
+    expect(secondReq.userEmail).toBe(email);
   });
 });

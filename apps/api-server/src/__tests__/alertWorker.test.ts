@@ -11,6 +11,8 @@ import * as registry from "../services/wsRegistry.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const updateManySpy = vi.spyOn(prisma.alert, "updateMany") as unknown as any;
 updateManySpy.mockResolvedValue({ count: 1 });
+const findManySpy = vi.spyOn(prisma.alert, "findMany") as unknown as any;
+findManySpy.mockResolvedValue([]);
 
 const deliverSpy = vi.spyOn(delivery, "deliverWebhook");
 const getSocketsSpy = vi.spyOn(registry, "getSocketsForUser");
@@ -57,6 +59,8 @@ function alertRow(overrides: Partial<{
 }
 
 beforeEach(() => {
+  findManySpy.mockClear();
+  findManySpy.mockResolvedValue([]);
   updateManySpy.mockClear();
   deliverSpy.mockReset();
   deliverSpy.mockResolvedValue(undefined);
@@ -84,6 +88,35 @@ describe("alertWorker.evaluateForMetric", () => {
     expect(updateManySpy).not.toHaveBeenCalled();
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(pushSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips overlapping DB fetches for the same metric", async () => {
+    let releaseFetch!: () => void;
+    findManySpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFetch = () => resolve([]);
+        })
+    );
+
+    const first = evaluateForMetric("spx", {
+      fearGreedScore: null,
+      vixPrice: null,
+      btcPrice: null,
+      spxPrice: 5000,
+    });
+    const second = await evaluateForMetric("spx", {
+      fearGreedScore: null,
+      vixPrice: null,
+      btcPrice: null,
+      spxPrice: 5001,
+    });
+
+    releaseFetch();
+    await first;
+
+    expect(second).toEqual([]);
+    expect(findManySpy).toHaveBeenCalledTimes(1);
   });
 
   it("fires for a simple VIX > 30 alert when vixPrice is 35", async () => {
