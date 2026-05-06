@@ -135,7 +135,6 @@
   overflow: hidden;
 }
 
-.ticker-tabs-scroll-wrap::before,
 .ticker-tabs-scroll-wrap::after {
   content: '';
   position: absolute;
@@ -147,17 +146,12 @@
 }
 
 .ticker-tabs-scroll-wrap::before {
-  left: 0;
-  background: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0) 100%);
+  display: none;
 }
 
 .ticker-tabs-scroll-wrap::after {
   right: 0;
   background: linear-gradient(270deg, #000 0%, rgba(0, 0, 0, 0) 100%);
-}
-
-.ticker-tabs-shell.is-light .ticker-tabs-scroll-wrap::before {
-  background: linear-gradient(90deg, #F2F2F7 0%, rgba(242, 242, 247, 0) 100%);
 }
 
 .ticker-tabs-shell.is-light .ticker-tabs-scroll-wrap::after {
@@ -172,7 +166,7 @@
   overflow-y: hidden;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  padding: 1px 2px;
+  padding: 1px 24px 1px 2px;
 }
 
 .ticker-tabs-scroll::-webkit-scrollbar {
