@@ -29,15 +29,6 @@ function DotsIcon() {
   );
 }
 
-function LockIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="3.5" y="7" width="9" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export function TickerGroupTabs({
   groups,
   activeGroupId,
@@ -108,11 +99,6 @@ export function TickerGroupTabs({
                   onClick={() => onSelectGroup(group.id)}
                 >
                   <span className="ticker-tab-label">{group.name}</span>
-                  {group.isDefault && (
-                    <span className="ticker-tab-lock" aria-label="Default group is locked">
-                      <LockIcon />
-                    </span>
-                  )}
                   {active && !group.isDefault && (
                     <span
                       className="ticker-tab-menu-anchor"
@@ -150,7 +136,7 @@ export function TickerGroupTabs({
           title={atMaxGroups ? 'Maximum 8 groups' : 'Add group'}
           onClick={() => setEditor({ mode: 'create' })}
         >
-          + Group
+          +
         </button>
       )}
 
