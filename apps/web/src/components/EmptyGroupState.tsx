@@ -5,7 +5,7 @@ interface EmptyGroupStateProps {
 }
 
 export function EmptyGroupState({ groupName, isDark, isMobile }: EmptyGroupStateProps) {
-  return (
+  const content = (
     <div
       className={[
         isMobile ? 'empty-group-list' : 'empty-group-card',
@@ -15,5 +15,20 @@ export function EmptyGroupState({ groupName, isDark, isMobile }: EmptyGroupState
       <div className="empty-group-title">No tickers in {groupName}</div>
       <div className="empty-group-body">Add a ticker above or assign one from another group.</div>
     </div>
+  );
+
+  if (!isMobile) {
+    return (
+      <div className="cards-grid empty-group-grid">
+        {content}
+        {Array.from({ length: 8 }, (_, index) => (
+          <div key={index} className="card-filler" aria-hidden="true" />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    content
   );
 }

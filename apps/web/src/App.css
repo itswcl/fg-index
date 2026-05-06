@@ -1027,6 +1027,10 @@
   padding: 16px;
 }
 
+.empty-group-grid .empty-group-card {
+  grid-column: 1 / -1;
+}
+
 .empty-group-list {
   min-height: 116px;
   border-radius: 20px;
