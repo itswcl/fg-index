@@ -157,8 +157,9 @@ function MarketIndicators() {
     reorderGroupTickers,
   } = useTickerGroups();
   const [activeGroupId, setActiveGroupId] = useState(DEFAULT_GROUP_ID);
+  const defaultGroup = groups.find((group) => group.isDefault) ?? groups[0];
   const activeGroupExists = groups.some((group) => group.id === activeGroupId);
-  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? defaultGroup;
   const isDefaultGroup = activeGroup?.isDefault ?? true;
   const groupTickers = activeGroup?.tickers ?? [];
 
@@ -185,9 +186,9 @@ function MarketIndicators() {
 
   useEffect(() => {
     if (groups.length > 0 && !activeGroupExists) {
-      setActiveGroupId(DEFAULT_GROUP_ID);
+      setActiveGroupId(defaultGroup?.id ?? DEFAULT_GROUP_ID);
     }
-  }, [activeGroupExists, groups.length]);
+  }, [activeGroupExists, defaultGroup?.id, groups.length]);
 
   useEffect(() => {
     if (previousGroupIdRef.current === activeGroupId) return;
@@ -235,7 +236,7 @@ function MarketIndicators() {
             tickerCount={groupTickers.length}
             isDark={isDark}
             onAdd={handleAddTicker}
-            placeholder={`Add ticker to ${activeGroup?.name ?? 'Default'}`}
+            placeholder={`Add ticker to ${activeGroup?.name ?? 'Default'} (e.g. AAPL, TSLA)`}
             collapsible={isNarrow}
           />
           <IconBar

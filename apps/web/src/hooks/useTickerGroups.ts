@@ -117,7 +117,7 @@ function normalizeGroups(raw: unknown): TickerGroup[] {
       const name = isDefault ? 'Default' : String(record.name ?? '').trim();
       if (!isDefault && !name) return null;
       return {
-        id: isDefault ? DEFAULT_GROUP_ID : String(record.id ?? `group-${index}`),
+        id: String(record.id ?? (isDefault ? DEFAULT_GROUP_ID : `group-${index}`)),
         name,
         position: Number.isFinite(record.position) ? Number(record.position) : index,
         isDefault,
@@ -145,7 +145,7 @@ function normalizeGroups(raw: unknown): TickerGroup[] {
     .map((group, index) => ({ ...group, position: index + 1 }));
 
   return [
-    { ...defaultGroup, id: DEFAULT_GROUP_ID, name: 'Default', isDefault: true, position: 0 },
+    { ...defaultGroup, name: 'Default', isDefault: true, position: 0 },
     ...customGroups,
   ];
 }

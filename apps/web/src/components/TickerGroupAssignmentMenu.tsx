@@ -30,8 +30,32 @@ export function TickerGroupAssignmentMenu({
 }: TickerGroupAssignmentMenuProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const [draftGroupIds, setDraftGroupIds] = useState<Set<string>>(() => new Set());
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const originalGroupIdsRef = useRef<Set<string>>(new Set());
+
+  function currentGroupIds(): Set<string> {
+    return new Set(groups.filter((group) => group.tickers.includes(ticker)).map((group) => group.id));
+  }
+
+  function commitDraft() {
+    const original = originalGroupIdsRef.current;
+    const next = draftGroupIds;
+    const allIds = new Set([...original, ...next]);
+    for (const groupId of allIds) {
+      const wasChecked = original.has(groupId);
+      const shouldBeChecked = next.has(groupId);
+      if (wasChecked !== shouldBeChecked) {
+        onToggleGroup(ticker, groupId, shouldBeChecked);
+      }
+    }
+  }
+
+  function closeMenu({ commit }: { commit: boolean }) {
+    if (commit) commitDraft();
+    setOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -49,11 +73,11 @@ export function TickerGroupAssignmentMenu({
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node;
       if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setOpen(false);
+      closeMenu({ commit: true });
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') closeMenu({ commit: false });
     }
 
     window.addEventListener('pointerdown', handlePointerDown);
@@ -62,7 +86,7 @@ export function TickerGroupAssignmentMenu({
       window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open]);
+  }, [draftGroupIds, groups, onToggleGroup, open, ticker]);
 
   const buttonClass = variant === 'card' ? 'card-group-btn' : 'metric-row-menu-btn';
   const surface = isDark ? 'is-dark' : 'is-light';
@@ -79,7 +103,14 @@ export function TickerGroupAssignmentMenu({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setOpen((current) => !current);
+          if (open) {
+            closeMenu({ commit: true });
+            return;
+          }
+          const checked = currentGroupIds();
+          originalGroupIdsRef.current = checked;
+          setDraftGroupIds(new Set(checked));
+          setOpen(true);
         }}
       >
         <MenuIcon />
@@ -94,7 +125,7 @@ export function TickerGroupAssignmentMenu({
         >
           <div className="ticker-group-menu-title">Groups</div>
           {groups.map((group) => {
-            const checked = group.tickers.includes(ticker);
+            const checked = draftGroupIds.has(group.id);
             const full = !checked && group.tickers.length >= MAX_CUSTOM_TICKERS;
             return (
               <button
@@ -103,7 +134,12 @@ export function TickerGroupAssignmentMenu({
                 className="ticker-group-menu-row"
                 disabled={full}
                 onClick={() => {
-                  onToggleGroup(ticker, group.id, !checked);
+                  setDraftGroupIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(group.id)) next.delete(group.id);
+                    else next.add(group.id);
+                    return next;
+                  });
                 }}
               >
                 <span className={`ticker-group-checkbox ${checked ? 'checked' : ''}`} aria-hidden="true" />
