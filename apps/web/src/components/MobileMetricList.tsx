@@ -16,6 +16,8 @@ import { FEAR_GREED_COLORS } from '../constants';
 import type { FearGreed, FearGreedClassification, TickerQuote } from '../types';
 import { getDisplayQuote, resolveMarketSession } from '../lib/marketSession';
 import { MetricRow, type MetricRowData } from './MetricRow';
+import { TickerGroupAssignmentMenu } from './TickerGroupAssignmentMenu';
+import type { TickerGroup } from '../hooks/useTickerGroups';
 import './MobileMetricList.css';
 
 interface MobileMetricListProps {
@@ -31,6 +33,8 @@ interface MobileMetricListProps {
   isDark: boolean;
   editMode: boolean;
   onRemoveTicker: (ticker: string) => void;
+  groups?: TickerGroup[];
+  onToggleTickerGroup?: (ticker: string, groupId: string, shouldInclude: boolean) => void;
   /**
    * First-paint loading phase — dnd disabled, `__loading-*` ids render
    * shimmer rows, edit mode is forced off. Mirrors CardGrid's behavior.
@@ -77,12 +81,16 @@ function TickerMetricRow({
   editMode,
   showDivider,
   onRemoveTicker,
+  groups,
+  onToggleTickerGroup,
 }: {
   id: string;
   isDark: boolean;
   editMode: boolean;
   showDivider: boolean;
   onRemoveTicker: (ticker: string) => void;
+  groups?: TickerGroup[];
+  onToggleTickerGroup?: (ticker: string, groupId: string, shouldInclude: boolean) => void;
 }) {
   const { data, isLoading, isFetching } = useTicker(id);
   const showLoading = isLoading || (isFetching && data === undefined);
@@ -118,6 +126,15 @@ function TickerMetricRow({
       isCustom={true}
       onRemove={onRemoveTicker}
       showDivider={showDivider}
+      groupMenu={groups && onToggleTickerGroup ? (
+        <TickerGroupAssignmentMenu
+          ticker={id}
+          groups={groups}
+          isDark={isDark}
+          variant="row"
+          onToggleGroup={onToggleTickerGroup}
+        />
+      ) : undefined}
     />
   );
 }
@@ -368,6 +385,8 @@ export function MobileMetricList(props: MobileMetricListProps) {
           editMode={effectiveEditMode}
           showDivider={showDivider}
           onRemoveTicker={onRemoveTicker}
+          groups={props.groups}
+          onToggleTickerGroup={props.onToggleTickerGroup}
         />
       );
     }

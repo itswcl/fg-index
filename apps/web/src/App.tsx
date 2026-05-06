@@ -7,9 +7,8 @@ import { useVix } from './hooks/useVix';
 import { useBtc } from './hooks/useBtc';
 import { useSpx } from './hooks/useSpx';
 import { useTheme } from './hooks/useTheme';
-import { useUnifiedOrder } from './hooks/useUnifiedOrder';
-import { useTickerSync } from './hooks/useTickerSync';
-import { usePreferencesSync } from './hooks/usePreferencesSync';
+import { DEFAULT_CARD_IDS, PLACEHOLDER_ID_PREFIX } from './hooks/useUnifiedOrder';
+import { DEFAULT_GROUP_ID, useTickerGroups } from './hooks/useTickerGroups';
 import { useAlerts } from './hooks/useAlerts';
 import { CardGrid } from './components/CardGrid';
 import { MobileMetricList } from './components/MobileMetricList';
@@ -17,6 +16,8 @@ import { IconBar } from './components/IconBar';
 import { AlertsPopup } from './components/AlertsPopup';
 import { AddTickerInput } from './components/AddTickerInput';
 import { PageIndicator } from './components/PageIndicator';
+import { TickerGroupTabs } from './components/TickerGroupTabs';
+import { EmptyGroupState } from './components/EmptyGroupState';
 import { usePagination } from './hooks/usePagination';
 import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
@@ -100,15 +101,6 @@ function MarketIndicators() {
   const spxData = currentSpxData ?? (spxFetching ? lastGoodSpxRef.current : null);
 
   const { theme, setTheme, isDark } = useTheme();
-  useTickerSync();
-  usePreferencesSync();
-  const { order, isInitialLoading, reorder, addTicker, removeTicker, tickers } = useUnifiedOrder();
-  // URL-bound pagination. `order` during loading is padded to 36 slots, but
-  // the indicator stays mounted with a single placeholder dot so the page
-  // footer does not jump when hydration completes.
-  const { page, setPage, pageCount } = usePagination(order.length, { perPage: CARDS_PER_PAGE });
-  const indicatorPage = isInitialLoading ? 1 : page;
-  const indicatorPageCount = isInitialLoading ? 1 : pageCount;
   const [alertsOpen, setAlertsOpen] = useState(false);
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrow();
@@ -154,15 +146,96 @@ function MarketIndicators() {
   const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
   const activeAlertCount = alerts.filter(a => a.enabled).length;
+  const {
+    groups,
+    isLoading: isGroupsLoading,
+    createGroup,
+    renameGroup,
+    deleteGroup,
+    addTickerToGroup,
+    setTickerMembership,
+    reorderGroupTickers,
+  } = useTickerGroups();
+  const [activeGroupId, setActiveGroupId] = useState(DEFAULT_GROUP_ID);
+  const activeGroupExists = groups.some((group) => group.id === activeGroupId);
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
+  const isDefaultGroup = activeGroup?.isDefault ?? true;
+  const groupTickers = activeGroup?.tickers ?? [];
+
+  const order = isGroupsLoading
+    ? [
+        ...(isDefaultGroup ? DEFAULT_CARD_IDS : []),
+        ...Array.from(
+          { length: isDefaultGroup ? CARDS_PER_PAGE - DEFAULT_CARD_IDS.length : CARDS_PER_PAGE },
+          (_, index) => `${PLACEHOLDER_ID_PREFIX}${index}`,
+        ),
+      ]
+    : [
+        ...(isDefaultGroup ? DEFAULT_CARD_IDS : []),
+        ...groupTickers,
+      ];
+
+  const isInitialLoading = isGroupsLoading;
+  // URL-bound pagination. During group hydration the indicator stays mounted
+  // with a single placeholder dot so the footer does not jump.
+  const { page, setPage, pageCount } = usePagination(order.length, { perPage: CARDS_PER_PAGE });
+  const indicatorPage = isInitialLoading ? 1 : page;
+  const indicatorPageCount = isInitialLoading ? 1 : pageCount;
+  const previousGroupIdRef = useRef(activeGroupId);
+
+  useEffect(() => {
+    if (groups.length > 0 && !activeGroupExists) {
+      setActiveGroupId(DEFAULT_GROUP_ID);
+    }
+  }, [activeGroupExists, groups.length]);
+
+  useEffect(() => {
+    if (previousGroupIdRef.current === activeGroupId) return;
+    previousGroupIdRef.current = activeGroupId;
+    setPage(1);
+    setEditMode(false);
+  }, [activeGroupId, setPage]);
+
+  const handleAddTicker = useCallback(
+    (ticker: string) => {
+      if (!activeGroup) return { ok: false, error: 'Enter a ticker' };
+      return addTickerToGroup(activeGroup.id, ticker);
+    },
+    [activeGroup, addTickerToGroup],
+  );
+
+  const handleReorder = useCallback(
+    (newOrder: string[]) => {
+      if (!activeGroup) return;
+      reorderGroupTickers(activeGroup.id, newOrder);
+    },
+    [activeGroup, reorderGroupTickers],
+  );
+
+  const handleRemoveTicker = useCallback(
+    (ticker: string) => {
+      if (!activeGroup) return;
+      setTickerMembership(ticker, activeGroup.id, false);
+    },
+    [activeGroup, setTickerMembership],
+  );
+
+  const handleToggleTickerGroup = useCallback(
+    (ticker: string, groupId: string, shouldInclude: boolean) => {
+      setTickerMembership(ticker, groupId, shouldInclude);
+    },
+    [setTickerMembership],
+  );
 
   return (
     <div className={`app-container ${isMobile ? 'app-container-mobile' : ''} ${isDark ? 'app-dark' : 'app-light'}`}>
       <div className="widget">
         <div className="top-bar">
           <AddTickerInput
-            tickerCount={tickers.length}
+            tickerCount={groupTickers.length}
             isDark={isDark}
-            onAdd={addTicker}
+            onAdd={handleAddTicker}
+            placeholder={`Add ticker to ${activeGroup?.name ?? 'Default'}`}
             collapsible={isNarrow}
           />
           <IconBar
@@ -203,6 +276,21 @@ function MarketIndicators() {
             )
           )}
         </div>
+        <TickerGroupTabs
+          groups={groups}
+          activeGroupId={activeGroup?.id ?? DEFAULT_GROUP_ID}
+          isLoading={isGroupsLoading}
+          isDark={isDark}
+          isMobile={isMobile}
+          onSelectGroup={setActiveGroupId}
+          onCreateGroup={createGroup}
+          onRenameGroup={renameGroup}
+          onDeleteGroup={async (groupId) => {
+            const result = await deleteGroup(groupId);
+            if (result.ok) setActiveGroupId(DEFAULT_GROUP_ID);
+            return result;
+          }}
+        />
         {alertsOpen && (
           <AlertsPopup
             isDark={isDark}
@@ -218,15 +306,23 @@ function MarketIndicators() {
             onDismissMigration={dismissAlertsMigration}
           />
         )}
-        {isMobile ? (
+        {!isInitialLoading && !isDefaultGroup && order.length === 0 ? (
+          <EmptyGroupState
+            groupName={activeGroup?.name ?? 'Group'}
+            isDark={isDark}
+            isMobile={isMobile}
+          />
+        ) : isMobile ? (
           <MobileMetricList
             order={order}
-            onReorder={reorder}
+            onReorder={handleReorder}
             page={page}
             perPage={CARDS_PER_PAGE}
             onPageChange={setPage}
             pageCount={pageCount}
-            onRemoveTicker={removeTicker}
+            onRemoveTicker={handleRemoveTicker}
+            groups={groups}
+            onToggleTickerGroup={handleToggleTickerGroup}
             isDark={isDark}
             editMode={editMode}
             isInitialLoading={isInitialLoading}
@@ -246,12 +342,14 @@ function MarketIndicators() {
         ) : (
           <CardGrid
             order={order}
-            onReorder={reorder}
+            onReorder={handleReorder}
             page={page}
             perPage={CARDS_PER_PAGE}
             pageCount={pageCount}
             onPageChange={setPage}
-            onRemoveTicker={removeTicker}
+            onRemoveTicker={handleRemoveTicker}
+            groups={groups}
+            onToggleTickerGroup={handleToggleTickerGroup}
             isDark={isDark}
             isInitialLoading={isInitialLoading}
             fearGreedData={fearGreedData}

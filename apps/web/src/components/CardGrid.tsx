@@ -28,6 +28,7 @@ import { Shimmer } from './Shimmer';
 import { DEFAULT_CARD_IDS, isPlaceholderId } from '../hooks/useUnifiedOrder';
 import { usePageTickers } from '../hooks/usePageTickers';
 import type { FearGreed, TickerQuote } from '../types';
+import type { TickerGroup } from '../hooks/useTickerGroups';
 // Note: 'CardId' type no longer needed — order is string[] now
 
 interface CardGridProps {
@@ -43,6 +44,8 @@ interface CardGridProps {
   onPageChange: (page: number) => void;
   isDark: boolean;
   onRemoveTicker: (ticker: string) => void;
+  groups?: TickerGroup[];
+  onToggleTickerGroup?: (ticker: string, groupId: string, shouldInclude: boolean) => void;
   /**
    * When true, the grid is in its first-paint placeholder phase: dnd is
    * disabled and `__loading-*` ids render shimmer slots. Flips to false
@@ -180,6 +183,8 @@ function renderCardContent(id: string, isDark: boolean, p: CardGridProps) {
           ticker={id}
           isDark={isDark}
           onRemove={p.onRemoveTicker}
+          groups={p.groups}
+          onToggleTickerGroup={p.onToggleTickerGroup}
         />
       );
   }

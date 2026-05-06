@@ -5,6 +5,7 @@ interface AddTickerInputProps {
   tickerCount: number;
   isDark: boolean;
   onAdd: (ticker: string) => { ok: boolean; error?: string };
+  placeholder?: string;
   /**
    * When true, renders collapsed to a magnifier icon; tap expands the
    * input full-width (per mobile layout spec Q5 for viewports < 420px).
@@ -12,7 +13,13 @@ interface AddTickerInputProps {
   collapsible?: boolean;
 }
 
-export function AddTickerInput({ tickerCount, isDark, onAdd, collapsible = false }: AddTickerInputProps) {
+export function AddTickerInput({
+  tickerCount,
+  isDark,
+  onAdd,
+  placeholder = 'Add ticker (e.g. AAPL, BTC)',
+  collapsible = false,
+}: AddTickerInputProps) {
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(!collapsible);
@@ -81,7 +88,7 @@ export function AddTickerInput({ tickerCount, isDark, onAdd, collapsible = false
             if (error) setError('');
           }}
           onBlur={handleBlur}
-          placeholder={atMax ? `Maximum ${MAX_CUSTOM_TICKERS} tickers` : 'Add ticker (e.g. AAPL, BTC)'}
+          placeholder={atMax ? `Maximum ${MAX_CUSTOM_TICKERS} tickers` : placeholder}
           disabled={atMax}
           maxLength={20}
           spellCheck={false}
