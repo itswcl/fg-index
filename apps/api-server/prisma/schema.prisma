@@ -12,13 +12,14 @@ datasource db {
 }
 
 model User {
-  id        String   @id // Supabase auth.users.id (UUID)
-  email     String   @unique
-  createdAt DateTime @default(now())
-  cardOrder String[] @default([])
-  alerts    Alert[]
-  webhooks  Webhook[]
-  tickers   UserTicker[]
+  id           String            @id // Supabase auth.users.id (UUID)
+  email        String            @unique
+  createdAt    DateTime          @default(now())
+  cardOrder    String[]          @default([])
+  alerts       Alert[]
+  webhooks     Webhook[]
+  tickers      UserTicker[]
+  tickerGroups UserTickerGroup[]
 }
 
 model UserTicker {
@@ -33,8 +34,37 @@ model UserTicker {
   @@index([userId])
 }
 
+model UserTickerGroup {
+  id        String                @id @default(uuid())
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  position  Int                   @default(0)
+  isDefault Boolean               @default(false)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+  items     UserTickerGroupItem[]
+
+  @@unique([userId, name])
+  @@index([userId, position])
+}
+
+model UserTickerGroupItem {
+  id        String          @id @default(uuid())
+  groupId   String
+  group     UserTickerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId    String
+  symbol    String
+  position  Int             @default(0)
+  createdAt DateTime        @default(now())
+
+  @@unique([groupId, symbol])
+  @@index([userId])
+  @@index([groupId, position])
+}
+
 model TickerQuoteCache {
-  symbol                  String   @id
+  symbol                  String    @id
   name                    String?
   price                   Float
   previousClose           Float
@@ -53,8 +83,8 @@ model TickerQuoteCache {
   lastRefreshAttemptAt    DateTime?
   lastRefreshSuccessAt    DateTime?
   lastRefreshError        String?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   @@index([staleAt])
   @@index([lastRefreshAttemptAt])
@@ -65,7 +95,7 @@ model Alert {
   userId          String
   user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   name            String
-  logic           String      // "AND" | "OR"
+  logic           String // "AND" | "OR"
   enabled         Boolean     @default(true)
   cooldownMinutes Int         @default(5)
   conditions      Condition[]
@@ -88,8 +118,8 @@ model Webhook {
   id        String   @id @default(uuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name      String   // user label, e.g. "My Discord"
-  type      String   // "discord" | "slack" | "telegram" | "generic"
+  name      String // user label, e.g. "My Discord"
+  type      String // "discord" | "slack" | "telegram" | "generic"
   url       String?
   botToken  String?
   chatId    String?
