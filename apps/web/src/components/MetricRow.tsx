@@ -60,6 +60,7 @@ interface MetricRowProps extends MetricRowData {
   onRemove?: (id: string) => void;
   /** Hairline divider below this row (false on the last row). */
   showDivider: boolean;
+  groupMenu?: React.ReactNode;
 }
 
 function defaultFormat(n: number): string {
@@ -102,6 +103,7 @@ export function MetricRow(props: MetricRowProps) {
     isCustom,
     onRemove,
     showDivider,
+    groupMenu,
   } = props;
 
   // Row is clickable only when we have a URL, we're not in edit mode, and the
@@ -182,7 +184,6 @@ export function MetricRow(props: MetricRowProps) {
           <DragHandle isDark={isDark} />
         </button>
       )}
-
       <div className="metric-row-label-zone">
         {isLoading ? (
           <>
@@ -283,6 +284,8 @@ export function MetricRow(props: MetricRowProps) {
           )}
         </div>
       )}
+
+      {!editMode && isCustom && groupMenu}
     </li>
   );
 }

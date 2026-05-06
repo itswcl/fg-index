@@ -193,6 +193,37 @@
   transform: translateY(-50%) scale(0.92);
 }
 
+.metric-row-menu-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.metric-row-light .metric-row-menu-btn {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.metric-row-menu-btn:active,
+.metric-row-menu-btn[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.metric-row-light .metric-row-menu-btn:active,
+.metric-row-light .metric-row-menu-btn[aria-expanded='true'] {
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.72);
+}
+
 /* ── Inline delete confirm ──────────────────────────── */
 .metric-row-confirm {
   flex: 0 0 auto;

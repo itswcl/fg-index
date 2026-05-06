@@ -15,6 +15,7 @@ interface TickerCardProps {
   isRefreshing?: boolean;
   isDark: boolean;
   onRemove: () => void;
+  groupMenu?: React.ReactNode;
 }
 
 export function TickerCard({
@@ -25,6 +26,7 @@ export function TickerCard({
   isRefreshing,
   isDark,
   onRemove,
+  groupMenu,
 }: TickerCardProps) {
   const showLoading = isLoading || (isRefreshing && data === undefined);
   const linkProps = buildSourceLinkProps(
@@ -36,6 +38,7 @@ export function TickerCard({
   if (!isLoading && data === null) {
     return (
       <div className={`card card-custom ${isDark ? 'card-dark' : 'card-light'}`}>
+        {groupMenu}
         <button
           className="card-remove-btn"
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -95,8 +98,10 @@ export function TickerCard({
         isDark={isDark}
         placement="corner"
         withRemoveButton
+        withGroupButton={!!groupMenu}
         fetchedAt={data?.fetchedAt}
       />
+      {groupMenu}
       <button
         className="card-remove-btn"
         onClick={(e) => { e.stopPropagation(); onRemove(); }}

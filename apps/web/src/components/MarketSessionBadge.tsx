@@ -41,6 +41,8 @@ interface MarketSessionBadgeProps {
    * left to make room for the `.card-remove-btn` at right:8px on hover.
    */
   withRemoveButton?: boolean;
+  /** Shift farther left when another utility button sits before remove. */
+  withGroupButton?: boolean;
   /**
    * ISO timestamp of the print, used to populate the tooltip's "last trade"
    * suffix in ET. Optional; without it we drop the timestamp clause.
@@ -78,6 +80,7 @@ export function MarketSessionBadge({
   isDark,
   placement = 'corner',
   withRemoveButton = false,
+  withGroupButton = false,
   fetchedAt,
 }: MarketSessionBadgeProps) {
   // Only render for the two extended-hours sessions. `'regular'` and
@@ -103,7 +106,7 @@ export function MarketSessionBadge({
     top: 10,
     // `.card-custom` reveals a red × at right:8px on hover. Shift the moon
     // 22px left so both glyphs are visible and non-overlapping.
-    right: withRemoveButton ? 32 : 10,
+    right: withGroupButton ? 56 : withRemoveButton ? 32 : 10,
     width: size,
     height: size,
     color: baseColor,
