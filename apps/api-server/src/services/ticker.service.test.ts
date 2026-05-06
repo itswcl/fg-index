@@ -30,25 +30,14 @@ describe("ticker service — BTC-USD / crypto path", () => {
     applyEnv();
   });
 
-  it("prefers Yahoo chart JSON for BTC-USD over Google HTML", async () => {
+  it("uses CoinGecko directly for BTC-USD", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
 
-      if (url.includes("query1.finance.yahoo.com")) {
+      if (url.includes("api.coingecko.com")) {
         return new Response(
           JSON.stringify({
-            chart: {
-              result: [
-                {
-                  meta: {
-                    symbol: "BTC-USD",
-                    longName: "Bitcoin USD",
-                    regularMarketPrice: 79033.46,
-                    chartPreviousClose: 78000,
-                  },
-                },
-              ],
-            },
+            bitcoin: { usd: 79033.46, usd_24h_change: 1.325 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
@@ -67,22 +56,16 @@ describe("ticker service — BTC-USD / crypto path", () => {
       ticker: "BTC-USD",
       name: "Bitcoin USD",
       price: 79033.46,
-      previousClose: 78000,
+      marketSession: "regular",
     });
-    expect(quote?.sourceUrl).toContain("query1.finance.yahoo.com/v8/finance/chart/BTC-USD");
-    expect(quote?.sourceUrl).toContain("range=1d");
+    expect(quote?.sourceUrl).toContain("api.coingecko.com");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("query1.finance.yahoo.com");
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("range=1d");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("api.coingecko.com");
   });
 
-  it("falls back to CoinGecko (not Google) when the Yahoo chart request fails", async () => {
+  it("normalizes BTC to BTC-USD without calling Yahoo or Google", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-
-      if (url.includes("query1.finance.yahoo.com")) {
-        return new Response("upstream unavailable", { status: 503 });
-      }
 
       if (url.includes("api.coingecko.com")) {
         return new Response(
@@ -100,7 +83,7 @@ describe("ticker service — BTC-USD / crypto path", () => {
 
     const mod = await import("./ticker.service.js");
     mod._resetTickerServiceState();
-    const quote = await mod.fetchTickerQuote("BTC-USD");
+    const quote = await mod.fetchTickerQuote("BTC");
 
     expect(quote).toMatchObject({
       ticker: "BTC-USD",
@@ -109,63 +92,9 @@ describe("ticker service — BTC-USD / crypto path", () => {
     });
     expect(quote?.changePercent).toBeCloseTo(-0.65, 2);
     expect(quote?.sourceUrl).toContain("api.coingecko.com");
-    // Yahoo (503) + CoinGecko — Google must NOT be called for crypto.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
-  });
-
-  it("trips a Yahoo cooldown on 429 and routes subsequent BTC requests straight to CoinGecko", async () => {
-    vi.useFakeTimers({ now: new Date("2026-04-24T12:00:00Z") });
-
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-
-      if (url.includes("query1.finance.yahoo.com")) {
-        return new Response("too many requests", { status: 429 });
-      }
-
-      if (url.includes("api.coingecko.com")) {
-        return new Response(
-          JSON.stringify({ bitcoin: { usd: 77900, usd_24h_change: 1.2 } }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const mod = await import("./ticker.service.js");
-    mod._resetTickerServiceState();
-
-    // First crypto request: Yahoo 429s (trips cooldown), CoinGecko serves BTC.
-    const first = await mod.fetchTickerQuote("BTC-USD");
-    expect(first?.ticker).toBe("BTC-USD");
-    expect(first?.price).toBe(77900);
-
-    // Advance past the 60s crypto cache so the second call re-fetches.
-    // With the cooldown active, it should go straight to CoinGecko — Yahoo
-    // is still within the 5-minute cooldown window and must be skipped.
-    await vi.advanceTimersByTimeAsync(61_000);
-
-    const second = await mod.fetchTickerQuote("BTC-USD");
-    expect(second?.ticker).toBe("BTC-USD");
-    expect(second?.price).toBe(77900);
-
-    const yahooCalls = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes("query1.finance.yahoo.com")
-    ).length;
-    const coinGeckoCalls = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes("api.coingecko.com")
-    ).length;
-
-    expect(yahooCalls).toBe(1); // only the first attempt — cooldown skipped the second
-    expect(coinGeckoCalls).toBe(2);
-    // Google must never be called in the crypto path.
-    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
-
-    vi.useRealTimers();
   });
 
   it("never resolves a stock like AMD to the -USD crypto URL, even if :NASDAQ flakes", async () => {
@@ -251,12 +180,9 @@ describe("ticker service — BTC-USD / crypto path", () => {
     }
   });
 
-  it("returns null instead of falling through to Google when both Yahoo and CoinGecko fail", async () => {
+  it("returns null instead of falling through to Yahoo or Google when CoinGecko fails", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.includes("query1.finance.yahoo.com")) {
-        return new Response("bad gateway", { status: 502 });
-      }
       if (url.includes("api.coingecko.com")) {
         return new Response("service unavailable", { status: 503 });
       }
@@ -270,6 +196,8 @@ describe("ticker service — BTC-USD / crypto path", () => {
     const quote = await mod.fetchTickerQuote("BTC-USD");
 
     expect(quote).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("google.com/finance"))).toBe(false);
   });
 });
@@ -834,24 +762,9 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
   it("pins BTC to marketSession='regular' (crypto trades 24/7)", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/BTC-USD")) {
-        // BTC still goes through the chart endpoint as its primary source —
-        // the chart endpoint still returns regularMarketPrice for crypto.
+      if (url.includes("api.coingecko.com")) {
         return new Response(
-          JSON.stringify({
-            chart: {
-              result: [
-                {
-                  meta: {
-                    symbol: "BTC-USD",
-                    longName: "Bitcoin USD",
-                    regularMarketPrice: 79000,
-                    chartPreviousClose: 78500,
-                  },
-                },
-              ],
-            },
-          }),
+          JSON.stringify({ bitcoin: { usd: 79000, usd_24h_change: 0.64 } }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
@@ -987,6 +900,6 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     const quote = await mod.fetchFreshTickerQuote("BTC-USD");
 
     expect(quote).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2); // Yahoo chart, then CoinGecko fallback
+    expect(fetchMock).toHaveBeenCalledTimes(1); // CoinGecko only
   });
 });

@@ -33,9 +33,9 @@ const lastKnownCache = new Map<string, TickerQuote>();
 const LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h hard ceiling
 const lastKnownStoredAt = new Map<string, number>();
 
-const CACHE_TTL_MS = 15_000; // 15s for stocks/indices
-// Crypto gets a longer TTL because upstreams (Yahoo, CoinGecko) rate-limit
-// hard and the fear-and-greed UI doesn't need sub-minute crypto precision.
+const CACHE_TTL_MS = env.QUOTE_STOCK_CACHE_TTL_MS; // stocks/indices
+// Crypto keeps a longer TTL because upstreams rate-limit hard and the
+// fear-and-greed UI doesn't need sub-minute crypto precision.
 const CRYPTO_CACHE_TTL_MS = 60_000; // 60s for BTC-USD
 // Product scope: the only supported crypto is Bitcoin. Every other input is a
 // stock or index. Keeping the set this narrow prevents a stock request from
@@ -45,26 +45,11 @@ const CRYPTO_CACHE_TTL_MS = 60_000; // 60s for BTC-USD
 // the resolved-format cache with a crypto URL for a semiconductor stock.
 const CRYPTO_TICKERS = new Set(["BTC", "BTC-USD"]);
 
-// Yahoo's `query1.finance.yahoo.com` chart endpoint aggressively throttles
-// anonymous IPs (observed 429s at ~60–120 req/hr). When we see a 429 we pause
-// all Yahoo calls for this long before trying again, to avoid hammering the
-// endpoint deeper into a block while we fall through to CoinGecko.
-const YAHOO_COOLDOWN_MS = 5 * 60_000; // 5 min
-let yahooCooldownUntil = 0;
-
 function buildYahooChartUrl(ticker: string): string {
   return (
     `https://query1.finance.yahoo.com/v8/finance/chart/` +
     `${encodeURIComponent(ticker)}?interval=1d&range=1d`
   );
-}
-
-function isYahooInCooldown(): boolean {
-  return Date.now() < yahooCooldownUntil;
-}
-
-function tripYahooCooldown(): void {
-  yahooCooldownUntil = Date.now() + YAHOO_COOLDOWN_MS;
 }
 
 async function fetchWithTimeout(
@@ -89,7 +74,6 @@ export function _resetTickerServiceState(): void {
   quoteCache.clear();
   lastKnownCache.clear();
   lastKnownStoredAt.clear();
-  yahooCooldownUntil = 0;
 }
 
 // Write-through: called alongside every `setCache` success so we always have
@@ -311,9 +295,9 @@ async function enrichWithGoogleSessionFields(
   return Object.keys(fields).length > 0 ? { ...quote, ...fields } : quote;
 }
 
-// Yahoo's chart endpoint is the primary quote source for crypto BTC. It still
-// exposes regularMarketPrice + previousClose for crypto; stocks prefer Google
-// first (price + after-market in one request), then Yahoo chart as fallback.
+// Yahoo's chart endpoint is a fallback source for stocks and mapped indices.
+// Stocks prefer Google first (price + after-market in one request), then Yahoo
+// chart as fallback.
 interface YahooChartMeta {
   regularMarketPrice?: number;
   chartPreviousClose?: number;
@@ -333,12 +317,7 @@ async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | nul
       },
     });
 
-    // Rate-limited → trip cooldown so we stop hammering Yahoo and route crypto
-    // through CoinGecko for the next few minutes.
-    if (response.status === 429) {
-      tripYahooCooldown();
-      return null;
-    }
+    if (response.status === 429) return null;
     if (!response.ok) return null;
 
     const json = (await response.json()) as {
@@ -385,10 +364,9 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
   };
 }
 
-// ─── CoinGecko fallback for crypto ─────────────────────────────────
-// When Yahoo is rate-limited we need a crypto-native source that won't serve
-// stale data the way Google Finance has been. CoinGecko's /simple/price is
-// free, keyless, returns fresh spot + 24h change, and tolerates ~30 req/min.
+// ─── CoinGecko for crypto ──────────────────────────────────────────
+// BTC uses CoinGecko directly so the Yahoo chart quota is reserved for stocks,
+// ETFs, indices, and futures-style symbols that need Yahoo as fallback.
 const COINGECKO_SYMBOL_TO_ID: Record<string, { id: string; name: string }> = {
   "BTC-USD": { id: "bitcoin", name: "Bitcoin USD" },
   "ETH-USD": { id: "ethereum", name: "Ethereum USD" },
@@ -460,21 +438,16 @@ async function fetchCoinGeckoQuote(ticker: string): Promise<TickerQuote | null> 
   }
 }
 
-// Crypto-only fetch path: Yahoo first (unless cooling down), then CoinGecko.
-// Google is deliberately excluded — observed to serve stale crypto snapshots,
-// which is the bug this fallback chain exists to avoid.
+// Crypto-only fetch path: CoinGecko only. Google is deliberately excluded
+// because it served stale crypto snapshots, and Yahoo is reserved for tickers.
 async function fetchCryptoQuote(ticker: string): Promise<TickerQuote | null> {
-  if (!isYahooInCooldown()) {
-    const yahoo = await fetchYahooChartQuote(ticker);
-    if (yahoo) return yahoo;
-  }
   return fetchCoinGeckoQuote(ticker);
 }
 
 // ─── Yahoo Finance fallback ────────────────────────────────────────
 async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
   try {
-    // Yahoo uses plain tickers (BTC-USD for crypto, ^GSPC for indices, AAPL for stocks)
+    // Yahoo uses plain tickers (^GSPC for indices, AAPL for stocks).
     const yahooTicker = ticker.includes(":") ? ticker.split(":")[0] : ticker;
     const url = `https://finance.yahoo.com/quote/${encodeURIComponent(yahooTicker)}`;
     const response = await fetchWithTimeout(url, {
@@ -516,7 +489,7 @@ const EXCHANGE_SUFFIXES = [":NASDAQ", ":NYSE", ":NYSEARCA", ":MUTF", ":CME_EMINI
 async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
   const mapping = getQuoteSymbolMapping(rawTicker);
 
-  // ─── Crypto: Yahoo → CoinGecko. Never Google. ────────────────────
+  // ─── Crypto: CoinGecko only. Never Google/Yahoo. ─────────────────
   if (isCryptoTicker(mapping.canonicalSymbol)) {
     const canonical = canonicalCryptoTicker(mapping.canonicalSymbol);
     const cached = getCached(canonical);
@@ -525,8 +498,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     const crypto = await fetchCryptoQuote(canonical);
     if (crypto) {
       // Crypto markets run 24/7 — there's no pre / post / closed session.
-      // Pin to `regular` so the FE's session-based UI (moon indicator) stays
-      // off for BTC regardless of which upstream (Yahoo vs CoinGecko) won.
+      // Pin to `regular` so the FE's session-based UI stays off for BTC.
       const withSession: TickerQuote = { ...crypto, marketSession: "regular" };
       resolvedFormatCache.set(mapping.canonicalSymbol, canonical);
       setCache(canonical, withSession, CRYPTO_CACHE_TTL_MS);
