@@ -44,6 +44,12 @@ const DEFAULT_MARKET_SYMBOLS: Record<string, QuoteSymbolMapping> = {
     displayTicker: "SPX",
     displayName: "S&P 500",
   },
+  IGV: {
+    canonicalSymbol: "IGV",
+    providerSymbol: "IGV:BATS",
+    displayTicker: "IGV",
+    displayName: "iShares Expanded Tech-Software Sector ETF",
+  },
 };
 
 export function normalizeQuoteSymbol(symbol: string): string {

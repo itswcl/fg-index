@@ -467,6 +467,42 @@ describe("ticker service — default market index aliases", () => {
     expect(quote?.sourceUrl).toContain("%5EGSPC");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("maps IGV to Google Finance IGV:BATS without depending on Yahoo", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/IGV%3ABATS")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "IGV",
+            exchange: "BATS",
+            name: "iShares Expanded Tech-Software Sector ETF",
+            price: 115.34,
+            change: 1.2,
+            changePercent: 1.0513,
+            previousClose: 114.14,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("IGV");
+
+    expect(quote).toMatchObject({
+      ticker: "IGV",
+      name: "iShares Expanded Tech-Software Sector ETF",
+      price: 115.34,
+      previousClose: 114.14,
+    });
+    expect(quote?.sourceUrl).toContain("IGV%3ABATS");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
+  });
 });
 
 describe("ticker service — stale-on-error fallback", () => {

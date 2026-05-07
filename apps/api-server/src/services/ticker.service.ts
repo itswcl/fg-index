@@ -513,13 +513,20 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     const cached = getCached(mapping.canonicalSymbol);
     if (cached) return cached;
 
-    const yahooChart = await fetchYahooChartQuote(mapping.providerSymbol);
-    if (yahooChart) {
-      const normalized = applyQuoteSymbolMapping(yahooChart, mapping);
-      resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
-      setCache(mapping.canonicalSymbol, normalized);
-      rememberLastKnown(mapping.providerSymbol, normalized);
-      return normalized;
+    const providerIsGoogleQualified = mapping.providerSymbol.includes(":");
+    const yahooProviderSymbol = providerIsGoogleQualified
+      ? mapping.canonicalSymbol
+      : mapping.providerSymbol;
+
+    if (!providerIsGoogleQualified) {
+      const yahooChart = await fetchYahooChartQuote(yahooProviderSymbol);
+      if (yahooChart) {
+        const normalized = applyQuoteSymbolMapping(yahooChart, mapping);
+        resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
+        setCache(mapping.canonicalSymbol, normalized);
+        rememberLastKnown(yahooProviderSymbol, normalized);
+        return normalized;
+      }
     }
 
     const google = await scrapeGoogleFinance(mapping.providerSymbol);
@@ -531,12 +538,21 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
       return normalized;
     }
 
-    const yahooHtml = await scrapeYahooFinance(mapping.providerSymbol);
+    const yahooChart = await fetchYahooChartQuote(yahooProviderSymbol);
+    if (yahooChart) {
+      const normalized = applyQuoteSymbolMapping(yahooChart, mapping);
+      resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
+      setCache(mapping.canonicalSymbol, normalized);
+      rememberLastKnown(yahooProviderSymbol, normalized);
+      return normalized;
+    }
+
+    const yahooHtml = await scrapeYahooFinance(yahooProviderSymbol);
     if (yahooHtml) {
       const normalized = applyQuoteSymbolMapping(yahooHtml, mapping);
       resolvedFormatCache.set(rawTicker, mapping.canonicalSymbol);
       setCache(mapping.canonicalSymbol, normalized);
-      rememberLastKnown(mapping.providerSymbol, normalized);
+      rememberLastKnown(yahooProviderSymbol, normalized);
       return normalized;
     }
 

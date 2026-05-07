@@ -1,9 +1,12 @@
 import rateLimit from "express-rate-limit";
 
-// Fear & Greed: data updates every 30 min; generous limit
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const DASHBOARD_READ_MAX_PER_15_MIN = 120;
+
+// Cached dashboard reads: allow 10s frontend polling plus reload/headroom.
 export const fearGreedRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: DASHBOARD_READ_MAX_PER_15_MIN,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -13,10 +16,10 @@ export const fearGreedRateLimiter = rateLimit({
   },
 });
 
-// VIX: real-time polling backup; moderate limit
+// VIX: cached real-time polling backup.
 export const vixRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: DASHBOARD_READ_MAX_PER_15_MIN,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -26,10 +29,10 @@ export const vixRateLimiter = rateLimit({
   },
 });
 
-// BTC: crypto trades 24/7; 30s poll — moderate limit
+// BTC: crypto trades 24/7; cached read endpoint.
 export const btcRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: DASHBOARD_READ_MAX_PER_15_MIN,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -39,10 +42,10 @@ export const btcRateLimiter = rateLimit({
   },
 });
 
-// SPX: real-time poll like VIX — moderate limit
+// SPX: cached real-time read endpoint.
 export const spxRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: DASHBOARD_READ_MAX_PER_15_MIN,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -52,7 +55,7 @@ export const spxRateLimiter = rateLimit({
   },
 });
 
-// Custom ticker: on-demand fetch with 15s cache — tighter limit
+// Custom ticker: cached read endpoint with background refresh.
 export const tickerRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -66,14 +69,13 @@ export const tickerRateLimiter = rateLimit({
 });
 
 // General API limiter (health check etc).
-// Budget: ~40 req/min per IP. Signed-in sessions hit /api/alerts and
-// /api/webhooks/me on mount + every save/edit, so 100/15min was far too
-// tight and produced spurious 429s during normal use. Per-endpoint
-// limiters (ticker, webhook/test) still enforce stricter caps where the
-// abuse surface is real.
+// Budget: ~80 req/min per IP. This leaves headroom for the web app to poll
+// cached dashboard reads every 10s while signed-in sessions also hit user,
+// alert, and webhook endpoints. Per-endpoint limiters still enforce stricter
+// caps where the abuse surface is real.
 export const globalRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 600,
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: 1200,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
