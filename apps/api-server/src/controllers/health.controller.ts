@@ -5,6 +5,7 @@ import { getCachedBtc } from "../schedulers/btc.scheduler.js";
 import { getCachedSpx } from "../schedulers/spx.scheduler.js";
 import { getQuoteRefreshQueueStats } from "../services/quote-refresh-queue.service.js";
 import { getMarketStatusStats } from "../services/market-status.service.js";
+import { getBackgroundDbCircuitStats } from "../services/background-db-circuit.service.js";
 
 let lastFearGreedFetchTime: Date | null = null;
 let lastVixFetchTime: Date | null = null;
@@ -45,6 +46,7 @@ export const getHealth = (req: Request, res: Response) => {
   const hasSpxData = getCachedSpx() !== null;
   const quoteRefresh = getQuoteRefreshQueueStats();
   const marketStatus = getMarketStatusStats();
+  const backgroundDb = getBackgroundDbCircuitStats();
 
   const healthy = fgHealthy && vixHealthy && btcHealthy && hasFgData;
   const status = healthy ? 200 : 503;
@@ -82,6 +84,7 @@ export const getHealth = (req: Request, res: Response) => {
       lastRefreshFailure: quoteRefresh.lastRefreshFailure,
     },
     marketStatus,
+    backgroundDb,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });

@@ -7,6 +7,9 @@ import {
 import { prisma } from "../services/db.js";
 import * as delivery from "../services/webhookDelivery.js";
 import * as registry from "../services/wsRegistry.js";
+import {
+  __resetBackgroundDbCircuitForTests,
+} from "../services/background-db-circuit.service.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const updateManySpy = vi.spyOn(prisma.alert, "updateMany") as unknown as any;
@@ -59,6 +62,7 @@ function alertRow(overrides: Partial<{
 }
 
 beforeEach(() => {
+  __resetBackgroundDbCircuitForTests();
   findManySpy.mockClear();
   findManySpy.mockResolvedValue([]);
   updateManySpy.mockClear();
@@ -73,6 +77,7 @@ beforeEach(() => {
 afterEach(() => {
   __setFetchOverrideForTests(null);
   __setPushOverrideForTests(null);
+  __resetBackgroundDbCircuitForTests();
 });
 
 describe("alertWorker.evaluateForMetric", () => {
@@ -115,6 +120,29 @@ describe("alertWorker.evaluateForMetric", () => {
     releaseFetch();
     await first;
 
+    expect(second).toEqual([]);
+    expect(findManySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off background DB fetches after a Prisma connectivity failure", async () => {
+    findManySpy.mockRejectedValueOnce(
+      new Error("Can't reach database server at `aws-1-us-east-2.pooler.supabase.com:6543`")
+    );
+
+    const first = await evaluateForMetric("vix", {
+      fearGreedScore: null,
+      vixPrice: 30,
+      btcPrice: null,
+      spxPrice: null,
+    });
+    const second = await evaluateForMetric("spx", {
+      fearGreedScore: null,
+      vixPrice: null,
+      btcPrice: null,
+      spxPrice: 5000,
+    });
+
+    expect(first).toEqual([]);
     expect(second).toEqual([]);
     expect(findManySpy).toHaveBeenCalledTimes(1);
   });

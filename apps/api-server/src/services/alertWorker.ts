@@ -3,6 +3,11 @@ import { prisma } from "./db.js";
 import { evaluateAlerts } from "./alertEvaluator.js";
 import { deliverWebhook } from "./webhookDelivery.js";
 import { getSocketsForUser } from "./wsRegistry.js";
+import {
+  getBackgroundDbCooldownRemainingMs,
+  recordBackgroundDbFailure,
+  recordBackgroundDbSuccess,
+} from "./background-db-circuit.service.js";
 import type {
   Alert as SharedAlert,
   WebhookConfig,
@@ -145,6 +150,10 @@ export async function evaluateForMetric(
   snapshot: MarketSnapshot,
   now: Date = new Date()
 ): Promise<AlertTriggeredMessage[]> {
+  if (!fetchOverride && getBackgroundDbCooldownRemainingMs() > 0) {
+    return [];
+  }
+
   if (!fetchOverride && inFlightMetrics.has(metric)) {
     process.stderr.write(
       JSON.stringify({
@@ -163,7 +172,13 @@ export async function evaluateForMetric(
   let candidates: AlertRow[];
   try {
     candidates = await fetchCandidateAlerts(metric);
+    if (!fetchOverride) {
+      recordBackgroundDbSuccess();
+    }
   } catch (err) {
+    if (!fetchOverride) {
+      recordBackgroundDbFailure("alert_worker", err);
+    }
     process.stderr.write(
       JSON.stringify({
         event: "alert_worker_fetch_error",
