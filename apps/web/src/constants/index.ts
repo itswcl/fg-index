@@ -34,8 +34,8 @@ export const SPX_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
 /** Consider data stale after 10 min */
 export const STALENESS_THRESHOLD_MS = 10 * 60 * 1000;
 
-/** Custom ticker poll every 15s */
-export const TICKER_REFETCH_INTERVAL_MS = 15 * 1000;
+/** Custom ticker poll every 10s */
+export const TICKER_REFETCH_INTERVAL_MS = 10 * 1000;
 
 /** Max number of custom ticker cards (matches BE MAX_TICKERS_PER_USER = 32). */
 export const MAX_CUSTOM_TICKERS = 32;
