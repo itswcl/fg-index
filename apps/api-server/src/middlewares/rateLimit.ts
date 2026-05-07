@@ -1,9 +1,9 @@
 import rateLimit from "express-rate-limit";
 
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-const DASHBOARD_READ_MAX_PER_15_MIN = 120;
+const DASHBOARD_READ_MAX_PER_15_MIN = 240;
 
-// Cached dashboard reads: allow 10s frontend polling plus reload/headroom.
+// Cached dashboard reads: allow 5s frontend polling plus reload/headroom.
 export const fearGreedRateLimiter = rateLimit({
   windowMs: FIFTEEN_MINUTES_MS,
   max: DASHBOARD_READ_MAX_PER_15_MIN,
@@ -58,7 +58,7 @@ export const spxRateLimiter = rateLimit({
 // Custom ticker: cached read endpoint with background refresh.
 export const tickerRateLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -69,13 +69,13 @@ export const tickerRateLimiter = rateLimit({
 });
 
 // General API limiter (health check etc).
-// Budget: ~80 req/min per IP. This leaves headroom for the web app to poll
-// cached dashboard reads every 10s while signed-in sessions also hit user,
+// Budget: ~160 req/min per IP. This leaves headroom for the web app to poll
+// cached dashboard reads every 5s while signed-in sessions also hit user,
 // alert, and webhook endpoints. Per-endpoint limiters still enforce stricter
 // caps where the abuse surface is real.
 export const globalRateLimiter = rateLimit({
   windowMs: FIFTEEN_MINUTES_MS,
-  max: 1200,
+  max: 2400,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
