@@ -771,6 +771,108 @@ describe("ticker service — marketSession + after-hours enrichment", () => {
     });
   });
 
+  it("uses Yahoo quote JSON fallback to return post-market fields when Google misses", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/INTC")) {
+        return new Response("", { status: 404 });
+      }
+      if (url.includes("query1.finance.yahoo.com/v7/finance/quote")) {
+        return new Response(
+          JSON.stringify({
+            quoteResponse: {
+              result: [
+                {
+                  symbol: "INTC",
+                  longName: "Intel Corporation",
+                  regularMarketPrice: 33.2,
+                  regularMarketChange: 0.5,
+                  regularMarketChangePercent: 1.5291,
+                  postMarketPrice: 33.45,
+                  postMarketChange: 0.25,
+                  postMarketChangePercent: 0.753,
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("INTC");
+
+    expect(quote).toMatchObject({
+      ticker: "INTC",
+      name: "Intel Corporation",
+      price: 33.2,
+      previousClose: 32.7,
+      change: 0.5,
+      changePercent: 1.5291,
+      marketSession: "post",
+      postMarketPrice: 33.45,
+      postMarketChange: 0.25,
+      postMarketChangePercent: 0.753,
+    });
+    expect(quote?.sourceUrl).toContain("/v7/finance/quote");
+    expect(quote?.sourceUrl).toContain("postMarketPrice");
+    expect(fetchMock.mock.calls.some(([u]) =>
+      String(u).includes("/v8/finance/chart/INTC")
+    )).toBe(false);
+  });
+
+  it("falls back to Yahoo chart JSON when Yahoo quote JSON is rate-limited", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/INTC")) {
+        return new Response("", { status: 404 });
+      }
+      if (url.includes("query1.finance.yahoo.com/v7/finance/quote")) {
+        return new Response("too many requests", { status: 429 });
+      }
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/INTC")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "INTC",
+                    longName: "Intel Corporation",
+                    regularMarketPrice: 33.2,
+                    chartPreviousClose: 32.7,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("INTC");
+
+    expect(quote).toMatchObject({
+      ticker: "INTC",
+      name: "Intel Corporation",
+      price: 33.2,
+      previousClose: 32.7,
+    });
+    expect(quote?.sourceUrl).toContain("/v8/finance/chart/INTC");
+    expect(fetchMock.mock.calls.some(([u]) =>
+      String(u).includes("/v7/finance/quote")
+    )).toBe(true);
+  });
+
   it("ships a plain quote (no session fields) when Google's page has no extended-hours block", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(

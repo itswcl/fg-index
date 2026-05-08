@@ -52,6 +52,47 @@ function buildYahooChartUrl(ticker: string): string {
   );
 }
 
+const YAHOO_QUOTE_FIELDS = [
+  "currency",
+  "exchangeTimezoneName",
+  "exchangeTimezoneShortName",
+  "gmtOffSetMilliseconds",
+  "longName",
+  "shortName",
+  "symbol",
+  "regularMarketChange",
+  "regularMarketChangePercent",
+  "regularMarketPrice",
+  "regularMarketPreviousClose",
+  "regularMarketTime",
+  "preMarketChange",
+  "preMarketChangePercent",
+  "preMarketPrice",
+  "preMarketTime",
+  "postMarketChange",
+  "postMarketChangePercent",
+  "postMarketPrice",
+  "postMarketTime",
+  "extendedMarketChange",
+  "extendedMarketChangePercent",
+  "extendedMarketPrice",
+  "extendedMarketTime",
+].join(",");
+
+function yahooQuoteTicker(ticker: string): string {
+  return ticker.includes(":") ? ticker.split(":")[0] : ticker;
+}
+
+function buildYahooQuoteUrl(ticker: string): string {
+  const yahooTicker = yahooQuoteTicker(ticker);
+  return (
+    `https://query1.finance.yahoo.com/v7/finance/quote` +
+    `?symbols=${encodeURIComponent(yahooTicker)}` +
+    `&fields=${encodeURIComponent(YAHOO_QUOTE_FIELDS)}` +
+    `&formatted=false&region=US&lang=en-US`
+  );
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit = {}
@@ -295,9 +336,9 @@ async function enrichWithGoogleSessionFields(
   return Object.keys(fields).length > 0 ? { ...quote, ...fields } : quote;
 }
 
-// Yahoo's chart endpoint is a fallback source for stocks and mapped indices.
-// Stocks prefer Google first (price + after-market in one request), then Yahoo
-// chart as fallback.
+// Yahoo's JSON endpoints are fallback sources for stocks and mapped indices.
+// Stocks prefer Google first, then Yahoo quote JSON (extended hours), then
+// Yahoo chart JSON (basic price) if quote JSON is rate-limited or unavailable.
 interface YahooChartMeta {
   regularMarketPrice?: number;
   chartPreviousClose?: number;
@@ -305,6 +346,25 @@ interface YahooChartMeta {
   longName?: string;
   shortName?: string;
   symbol?: string;
+}
+
+interface YahooQuoteResult {
+  symbol?: string;
+  longName?: string;
+  shortName?: string;
+  regularMarketPrice?: number;
+  regularMarketPreviousClose?: number;
+  regularMarketChange?: number;
+  regularMarketChangePercent?: number;
+  preMarketPrice?: number;
+  preMarketChange?: number;
+  preMarketChangePercent?: number;
+  postMarketPrice?: number;
+  postMarketChange?: number;
+  postMarketChangePercent?: number;
+  extendedMarketPrice?: number;
+  extendedMarketChange?: number;
+  extendedMarketChangePercent?: number;
 }
 
 async function fetchYahooChartMeta(ticker: string): Promise<YahooChartMeta | null> {
@@ -362,6 +422,135 @@ async function fetchYahooChartQuote(ticker: string): Promise<TickerQuote | null>
     fetchedAt: new Date().toISOString(),
     sourceUrl: url,
   };
+}
+
+function yahooExtendedSessionFields(row: YahooQuoteResult, price: number): SessionFields {
+  if (finitePos(row.postMarketPrice)) {
+    const change = finite(row.postMarketChange)
+      ? +row.postMarketChange.toFixed(4)
+      : +(row.postMarketPrice - price).toFixed(4);
+    const pct = finite(row.postMarketChangePercent)
+      ? +row.postMarketChangePercent.toFixed(4)
+      : price > 0
+        ? +((change / price) * 100).toFixed(4)
+        : undefined;
+
+    return {
+      marketSession: "post",
+      postMarketPrice: row.postMarketPrice,
+      ...(finite(change) ? { postMarketChange: change } : {}),
+      ...(finite(pct) ? { postMarketChangePercent: pct } : {}),
+    };
+  }
+
+  if (finitePos(row.preMarketPrice)) {
+    const change = finite(row.preMarketChange)
+      ? +row.preMarketChange.toFixed(4)
+      : +(row.preMarketPrice - price).toFixed(4);
+    const pct = finite(row.preMarketChangePercent)
+      ? +row.preMarketChangePercent.toFixed(4)
+      : price > 0
+        ? +((change / price) * 100).toFixed(4)
+        : undefined;
+
+    return {
+      marketSession: "pre",
+      preMarketPrice: row.preMarketPrice,
+      ...(finite(change) ? { preMarketChange: change } : {}),
+      ...(finite(pct) ? { preMarketChangePercent: pct } : {}),
+    };
+  }
+
+  if (finitePos(row.extendedMarketPrice)) {
+    const change = finite(row.extendedMarketChange)
+      ? +row.extendedMarketChange.toFixed(4)
+      : +(row.extendedMarketPrice - price).toFixed(4);
+    const pct = finite(row.extendedMarketChangePercent)
+      ? +row.extendedMarketChangePercent.toFixed(4)
+      : price > 0
+        ? +((change / price) * 100).toFixed(4)
+        : undefined;
+
+    return {
+      marketSession: "post",
+      postMarketPrice: row.extendedMarketPrice,
+      ...(finite(change) ? { postMarketChange: change } : {}),
+      ...(finite(pct) ? { postMarketChangePercent: pct } : {}),
+    };
+  }
+
+  return {};
+}
+
+async function fetchYahooQuote(ticker: string): Promise<TickerQuote | null> {
+  try {
+    const url = buildYahooQuoteUrl(ticker);
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        "User-Agent": env.SCRAPER_USER_AGENT,
+        Accept: "application/json",
+      },
+    });
+
+    if (response.status === 429) return null;
+    if (!response.ok) return null;
+
+    const json = (await response.json()) as {
+      quoteResponse?: { result?: YahooQuoteResult[] };
+    };
+    const row = json.quoteResponse?.result?.[0];
+    if (!row) return null;
+
+    const price = row.regularMarketPrice;
+    if (!finitePos(price)) return null;
+
+    const previousClose =
+      finitePos(row.regularMarketPreviousClose)
+        ? row.regularMarketPreviousClose
+        : finite(row.regularMarketChange) && price - row.regularMarketChange > 0
+          ? +(price - row.regularMarketChange).toFixed(4)
+          : price;
+    const change = finite(row.regularMarketChange)
+      ? +row.regularMarketChange.toFixed(4)
+      : +(price - previousClose).toFixed(4);
+    const changePercent = finite(row.regularMarketChangePercent)
+      ? +row.regularMarketChangePercent.toFixed(4)
+      : previousClose > 0
+        ? +((change / previousClose) * 100).toFixed(4)
+        : 0;
+
+    return validateTickerQuote({
+      ticker: row.symbol ?? yahooQuoteTicker(ticker),
+      name: row.longName ?? row.shortName,
+      price,
+      previousClose,
+      change,
+      changePercent,
+      fetchedAt: new Date().toISOString(),
+      sourceUrl: url,
+      ...yahooExtendedSessionFields(row, price),
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function fetchYahooFallbackQuote(ticker: string): Promise<TickerQuote | null> {
+  return (await fetchYahooQuote(ticker)) ?? fetchYahooChartQuote(ticker);
+}
+
+async function enrichWithGoogleSessionFieldsIfMissing(
+  quote: TickerQuote,
+  tickerFormat: string
+): Promise<TickerQuote> {
+  if (
+    quote.marketSession ||
+    finitePos(quote.postMarketPrice) ||
+    finitePos(quote.preMarketPrice)
+  ) {
+    return quote;
+  }
+  return enrichWithGoogleSessionFields(quote, tickerFormat);
 }
 
 // ─── CoinGecko for crypto ──────────────────────────────────────────
@@ -448,7 +637,7 @@ async function fetchCryptoQuote(ticker: string): Promise<TickerQuote | null> {
 async function scrapeYahooFinance(ticker: string): Promise<TickerQuote | null> {
   try {
     // Yahoo uses plain tickers (^GSPC for indices, AAPL for stocks).
-    const yahooTicker = ticker.includes(":") ? ticker.split(":")[0] : ticker;
+    const yahooTicker = yahooQuoteTicker(ticker);
     const url = `https://finance.yahoo.com/quote/${encodeURIComponent(yahooTicker)}`;
     const response = await fetchWithTimeout(url, {
       headers: { "User-Agent": env.SCRAPER_USER_AGENT },
@@ -570,9 +759,9 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
       setCache(knownFormat, result);
       return result;
     }
-    const yahooChart = await fetchYahooChartQuote(knownFormat);
+    const yahooChart = await fetchYahooFallbackQuote(knownFormat);
     if (yahooChart) {
-      const enriched = await enrichWithGoogleSessionFields(yahooChart, knownFormat);
+      const enriched = await enrichWithGoogleSessionFieldsIfMissing(yahooChart, knownFormat);
       setCache(knownFormat, enriched);
       return enriched;
     }
@@ -588,10 +777,10 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     return direct;
   }
 
-  // 3. Yahoo chart JSON as fallback
-  const yahooChart = await fetchYahooChartQuote(rawTicker);
+  // 3. Yahoo quote JSON as fallback, then Yahoo chart JSON
+  const yahooChart = await fetchYahooFallbackQuote(rawTicker);
   if (yahooChart) {
-    const enriched = await enrichWithGoogleSessionFields(yahooChart, rawTicker);
+    const enriched = await enrichWithGoogleSessionFieldsIfMissing(yahooChart, rawTicker);
     resolvedFormatCache.set(rawTicker, rawTicker);
     setCache(rawTicker, enriched);
     return enriched;
@@ -623,7 +812,7 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
 
   // 6. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
   if (!rawTicker.includes("=") && !rawTicker.includes(":")) {
-    const yahooChartFutures = await fetchYahooChartQuote(`${rawTicker}=F`);
+    const yahooChartFutures = await fetchYahooFallbackQuote(`${rawTicker}=F`);
     if (yahooChartFutures) {
       resolvedFormatCache.set(rawTicker, `${rawTicker}=F`);
       setCache(`${rawTicker}=F`, yahooChartFutures);
