@@ -118,6 +118,78 @@ describe("market status service", () => {
     expect(quote.postMarketChangePercent).toBeUndefined();
   });
 
+  it("preserves post-market quote data while global market status is closed", async () => {
+    const mod = await import("./market-status.service.js");
+    mod.__setMarketSessionForTests("closed");
+
+    const quote = mod.applyGlobalMarketSessionToQuote({
+      ticker: "AMD",
+      price: 356.8,
+      previousClose: 354.49,
+      change: 2.31,
+      changePercent: 0.6516,
+      fetchedAt: "2026-05-01T20:30:00.000Z",
+      marketSession: "closed",
+      postMarketPrice: 353.35,
+      postMarketChange: -3.61,
+      postMarketChangePercent: -0.9891,
+    });
+
+    expect(quote).toMatchObject({
+      ticker: "AMD",
+      marketSession: "post",
+      postMarketPrice: 353.35,
+      postMarketChange: -3.61,
+      postMarketChangePercent: -0.9891,
+    });
+  });
+
+  it("marks quotes closed when global market status is closed and no post-market data exists", async () => {
+    const mod = await import("./market-status.service.js");
+    mod.__setMarketSessionForTests("closed");
+
+    const quote = mod.applyGlobalMarketSessionToQuote({
+      ticker: "AMD",
+      price: 356.8,
+      previousClose: 354.49,
+      change: 2.31,
+      changePercent: 0.6516,
+      fetchedAt: "2026-05-01T20:30:00.000Z",
+      marketSession: "regular",
+    });
+
+    expect(quote).toMatchObject({ ticker: "AMD", marketSession: "closed" });
+  });
+
+  it("does not wipe post-market cache fields when persisting closed status", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          market: "closed",
+          earlyHours: false,
+          afterHours: false,
+          serverTime: "2026-05-01T22:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./market-status.service.js");
+    const session = await mod.refreshMarketStatus();
+
+    expect(session).toBe("closed");
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { symbol: { notIn: ["BTC", "BTC-USD"] } },
+      data: {
+        marketSession: "closed",
+        preMarketPrice: null,
+        preMarketChange: null,
+        preMarketChangePercent: null,
+      },
+    });
+  });
+
   it("does not override BTC session because crypto trades continuously", async () => {
     const mod = await import("./market-status.service.js");
     mod.__setMarketSessionForTests("closed");
