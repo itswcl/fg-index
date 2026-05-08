@@ -35,6 +35,10 @@ function isOpenStatus(status: string | undefined): boolean {
   return status?.toLowerCase() === "open";
 }
 
+function isFinitePositiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 function normalizeMassiveSession(status: MassiveMarketStatus): MarketSession {
   if (status.earlyHours) return "pre";
   if (status.afterHours) return "post";
@@ -105,7 +109,14 @@ export function applyGlobalMarketSessionToQuote(quote: TickerQuote): TickerQuote
     return quote;
   }
 
-  if (session === "regular" || session === "closed") {
+  if (session === "regular") {
+    return { ...clearExtendedFields(quote), marketSession: session };
+  }
+
+  if (session === "closed") {
+    if (isFinitePositiveNumber(quote.postMarketPrice)) {
+      return { ...clearPreFields(quote), marketSession: "post" };
+    }
     return { ...clearExtendedFields(quote), marketSession: session };
   }
 
@@ -114,16 +125,27 @@ export function applyGlobalMarketSessionToQuote(quote: TickerQuote): TickerQuote
 }
 
 async function persistMarketSession(session: MarketSession): Promise<void> {
+  const extendedFields =
+    session === "closed"
+      ? {
+          preMarketPrice: null,
+          preMarketChange: null,
+          preMarketChangePercent: null,
+        }
+      : {
+          postMarketPrice: null,
+          postMarketChange: null,
+          postMarketChangePercent: null,
+          preMarketPrice: null,
+          preMarketChange: null,
+          preMarketChangePercent: null,
+        };
+
   await prisma.tickerQuoteCache.updateMany({
     where: { symbol: { notIn: Array.from(CRYPTO_SYMBOLS) } },
     data: {
       marketSession: session,
-      postMarketPrice: null,
-      postMarketChange: null,
-      postMarketChangePercent: null,
-      preMarketPrice: null,
-      preMarketChange: null,
-      preMarketChangePercent: null,
+      ...extendedFields,
     },
   });
 }
