@@ -503,6 +503,90 @@ describe("ticker service — default market index aliases", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
   });
+
+  it("maps BRK.B directly to Google Finance BRK.B:NYSE", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/BRK.B%3ANYSE")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "BRK.B",
+            exchange: "NYSE",
+            name: "Berkshire Hathaway Inc Class B",
+            price: 487.45,
+            change: 7.9,
+            changePercent: 1.6474,
+            previousClose: 479.55,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("BRK.B");
+
+    expect(quote).toMatchObject({
+      ticker: "BRK.B",
+      name: "Berkshire Hathaway Inc Class B",
+      price: 487.45,
+      previousClose: 479.55,
+    });
+    expect(quote?.sourceUrl).toContain("BRK.B%3ANYSE");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
+  });
+
+  it("uses Yahoo's dash class-share symbol when BRK.B falls back to Yahoo", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/BRK.B%3ANYSE")) {
+        return new Response("", { status: 404 });
+      }
+      if (url.includes("query1.finance.yahoo.com/v7/finance/quote")) {
+        return new Response("", { status: 404 });
+      }
+      if (url.includes("query1.finance.yahoo.com/v8/finance/chart/BRK-B")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "BRK-B",
+                    longName: "Berkshire Hathaway Inc Class B",
+                    regularMarketPrice: 487.45,
+                    chartPreviousClose: 479.55,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("BRK.B");
+
+    expect(quote).toMatchObject({
+      ticker: "BRK.B",
+      name: "Berkshire Hathaway Inc Class B",
+      price: 487.45,
+      previousClose: 479.55,
+    });
+    expect(quote?.sourceUrl).toContain("/v8/finance/chart/BRK-B");
+    expect(fetchMock.mock.calls.some(([u]) =>
+      String(u).includes("/v8/finance/chart/BRK.B")
+    )).toBe(false);
+  });
 });
 
 describe("ticker service — stale-on-error fallback", () => {
