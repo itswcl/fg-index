@@ -48,7 +48,7 @@ const CRYPTO_TICKERS = new Set(["BTC", "BTC-USD"]);
 function buildYahooChartUrl(ticker: string): string {
   return (
     `https://query1.finance.yahoo.com/v8/finance/chart/` +
-    `${encodeURIComponent(ticker)}?interval=1d&range=1d`
+    `${encodeURIComponent(yahooQuoteTicker(ticker))}?interval=1d&range=1d`
   );
 }
 
@@ -80,7 +80,8 @@ const YAHOO_QUOTE_FIELDS = [
 ].join(",");
 
 function yahooQuoteTicker(ticker: string): string {
-  return ticker.includes(":") ? ticker.split(":")[0] : ticker;
+  const base = ticker.includes(":") ? ticker.split(":")[0] : ticker;
+  return base.replace(/\./g, "-");
 }
 
 function buildYahooQuoteUrl(ticker: string): string {

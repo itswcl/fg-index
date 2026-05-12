@@ -50,6 +50,18 @@ const DEFAULT_MARKET_SYMBOLS: Record<string, QuoteSymbolMapping> = {
     displayTicker: "IGV",
     displayName: "iShares Expanded Tech-Software Sector ETF",
   },
+  "BRK.B": {
+    canonicalSymbol: "BRK.B",
+    providerSymbol: "BRK.B:NYSE",
+    displayTicker: "BRK.B",
+    displayName: "Berkshire Hathaway Inc Class B",
+  },
+  "BRK-B": {
+    canonicalSymbol: "BRK.B",
+    providerSymbol: "BRK.B:NYSE",
+    displayTicker: "BRK.B",
+    displayName: "Berkshire Hathaway Inc Class B",
+  },
 };
 
 export function normalizeQuoteSymbol(symbol: string): string {
