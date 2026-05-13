@@ -504,6 +504,42 @@ describe("ticker service — default market index aliases", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
   });
 
+  it("maps DRAM to Google Finance DRAM:BATS without depending on Yahoo", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/DRAM%3ABATS")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "DRAM",
+            exchange: "BATS",
+            name: "Roundhill Memory ETF",
+            price: 54.2,
+            change: 2.9,
+            changePercent: 5.653,
+            previousClose: 51.3,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("DRAM");
+
+    expect(quote).toMatchObject({
+      ticker: "DRAM",
+      name: "Roundhill Memory ETF",
+      price: 54.2,
+      previousClose: 51.3,
+    });
+    expect(quote?.sourceUrl).toContain("DRAM%3ABATS");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
+  });
+
   it("maps BRK.B directly to Google Finance BRK.B:NYSE", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
