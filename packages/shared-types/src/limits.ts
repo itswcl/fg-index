@@ -1,0 +1,1 @@
+export const MAX_CUSTOM_TICKER_GROUPS = 12;

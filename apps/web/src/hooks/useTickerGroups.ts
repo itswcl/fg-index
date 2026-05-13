@@ -4,9 +4,10 @@ import { API_BASE_URL, MAX_CUSTOM_TICKERS, TICKER_STORAGE_KEY } from '../constan
 import { authFetch } from '../lib/authFetch';
 import { useAuth } from './useAuth';
 import { DEFAULT_CARD_IDS } from './useUnifiedOrder';
+import { MAX_CUSTOM_TICKER_GROUPS } from '../../../../packages/shared-types/src/limits';
 
 export const DEFAULT_GROUP_ID = 'default';
-export const MAX_CUSTOM_GROUPS = 8;
+export const MAX_CUSTOM_GROUPS = MAX_CUSTOM_TICKER_GROUPS;
 export const TICKER_GROUPS_STORAGE_KEY = 'fg-ticker-groups';
 
 const OLD_ORDER_KEY = 'fg-unified-order';
@@ -276,7 +277,7 @@ export function useTickerGroups() {
       const error = validateGroupName(name, groups);
       if (error) return { ok: false, error };
       const customCount = groups.filter((group) => !group.isDefault).length;
-      if (customCount >= MAX_CUSTOM_GROUPS) return { ok: false, error: 'Maximum 8 groups reached' };
+      if (customCount >= MAX_CUSTOM_GROUPS) return { ok: false, error: `Maximum ${MAX_CUSTOM_GROUPS} groups reached` };
 
       const trimmed = name.trim();
       const createdAt = nowIso();

@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
+import { MAX_CUSTOM_TICKER_GROUPS } from "@shared/types";
 import { HttpError } from "../errors/httpError.js";
 import { prisma } from "./db.js";
 import { enqueueQuoteRefresh } from "./quote-refresh-queue.service.js";
 
 const DEFAULT_GROUP_NAME = "Default";
-const MAX_CUSTOM_GROUPS = 8;
+const MAX_CUSTOM_GROUPS = MAX_CUSTOM_TICKER_GROUPS;
 const MAX_TICKERS_PER_GROUP = 32;
 
 type Tx = Prisma.TransactionClient;

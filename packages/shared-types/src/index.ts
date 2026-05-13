@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { MAX_CUSTOM_TICKER_GROUPS } from "./limits.js";
+
 // ─── Fear & Greed ─────────────────────────────────────────────────
 export const FearGreedClassificationSchema = z.enum([
   "Extreme Fear",
