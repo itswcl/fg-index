@@ -10,8 +10,6 @@ export interface DashboardUiState {
   alertsOpen: boolean;
   editMode: boolean;
   activeGroupId: string;
-  manualFgUpdateMs: number;
-  manualVixUpdateMs: number;
   themePreference: ThemePreference;
 }
 
@@ -20,8 +18,6 @@ export interface DashboardUiActions {
   toggleAlertsOpen: () => void;
   setEditMode: (enabled: boolean) => void;
   setActiveGroupId: (groupId: string) => void;
-  markManualFgUpdate: () => void;
-  markManualVixUpdate: () => void;
   setThemePreference: (preference: ThemePreference) => void;
 }
 
@@ -78,15 +74,11 @@ export const useDashboardUiStore = create<DashboardUiStore>()(
         alertsOpen: false,
         editMode: false,
         activeGroupId: 'default',
-        manualFgUpdateMs: 0,
-        manualVixUpdateMs: 0,
         themePreference: 'system',
         setAlertsOpen: (alertsOpen) => set({ alertsOpen }),
         toggleAlertsOpen: () => set((state) => ({ alertsOpen: !state.alertsOpen })),
         setEditMode: (editMode) => set({ editMode }),
         setActiveGroupId: (activeGroupId) => set({ activeGroupId }),
-        markManualFgUpdate: () => set({ manualFgUpdateMs: Date.now() }),
-        markManualVixUpdate: () => set({ manualVixUpdateMs: Date.now() }),
         setThemePreference: (themePreference) => set({ themePreference }),
       }),
       {
