@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { hydrateQuoteCacheIntoQueryClient } from './lib/quoteCache';
 import { useMarketIndicators } from './hooks/useMarketIndicators';
@@ -21,6 +21,7 @@ import { EmptyGroupState } from './components/EmptyGroupState';
 import { usePagination } from './hooks/usePagination';
 import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
+import { useDashboardUiStore } from './stores/useDashboardUiStore';
 import type { AlertTriggeredMessage } from './types/alerts';
 import type { FearGreed, TickerQuote } from './types';
 import './App.css';
@@ -101,18 +102,23 @@ function MarketIndicators() {
   const spxData = currentSpxData ?? (spxFetching ? lastGoodSpxRef.current : null);
 
   const { theme, setTheme, isDark } = useTheme();
-  const [alertsOpen, setAlertsOpen] = useState(false);
+  const alertsOpen = useDashboardUiStore((state) => state.alertsOpen);
+  const setAlertsOpen = useDashboardUiStore((state) => state.setAlertsOpen);
+  const toggleAlertsOpen = useDashboardUiStore((state) => state.toggleAlertsOpen);
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrow();
-  const [editMode, setEditMode] = useState(false);
+  const editMode = useDashboardUiStore((state) => state.editMode);
+  const setEditMode = useDashboardUiStore((state) => state.setEditMode);
 
   // Exiting mobile viewport should always leave edit mode; desktop uses native drag.
   useEffect(() => {
     if (!isMobile && editMode) setEditMode(false);
-  }, [isMobile, editMode]);
+  }, [editMode, isMobile, setEditMode]);
 
-  const [manualFgUpdateMs, setManualFgUpdateMs] = useState(0);
-  const [manualVixUpdateMs, setManualVixUpdateMs] = useState(0);
+  const manualFgUpdateMs = useDashboardUiStore((state) => state.manualFgUpdateMs);
+  const manualVixUpdateMs = useDashboardUiStore((state) => state.manualVixUpdateMs);
+  const markManualFgUpdate = useDashboardUiStore((state) => state.markManualFgUpdate);
+  const markManualVixUpdate = useDashboardUiStore((state) => state.markManualVixUpdate);
 
   // Update browser tab title with live data
   useEffect(() => {
@@ -129,10 +135,10 @@ function MarketIndicators() {
 
   const handleRefreshAll = useCallback(() => {
     Promise.all([
-      refetchFg().then(() => setManualFgUpdateMs(Date.now())),
-      refetchVix().then(() => setManualVixUpdateMs(Date.now())),
+      refetchFg().then(markManualFgUpdate),
+      refetchVix().then(markManualVixUpdate),
     ]);
-  }, [refetchFg, refetchVix]);
+  }, [markManualFgUpdate, markManualVixUpdate, refetchFg, refetchVix]);
 
   const fgDisplayUpdate = manualFgUpdateMs > (lastFearGreedUpdate?.getTime() ?? 0)
     ? new Date(manualFgUpdateMs)
@@ -156,7 +162,8 @@ function MarketIndicators() {
     setTickerMembership,
     reorderGroupTickers,
   } = useTickerGroups();
-  const [activeGroupId, setActiveGroupId] = useState(DEFAULT_GROUP_ID);
+  const activeGroupId = useDashboardUiStore((state) => state.activeGroupId);
+  const setActiveGroupId = useDashboardUiStore((state) => state.setActiveGroupId);
   const defaultGroup = groups.find((group) => group.isDefault) ?? groups[0];
   const activeGroupExists = groups.some((group) => group.id === activeGroupId);
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? defaultGroup;
@@ -188,14 +195,14 @@ function MarketIndicators() {
     if (groups.length > 0 && !activeGroupExists) {
       setActiveGroupId(defaultGroup?.id ?? DEFAULT_GROUP_ID);
     }
-  }, [activeGroupExists, defaultGroup?.id, groups.length]);
+  }, [activeGroupExists, defaultGroup?.id, groups.length, setActiveGroupId]);
 
   useEffect(() => {
     if (previousGroupIdRef.current === activeGroupId) return;
     previousGroupIdRef.current = activeGroupId;
     setPage(1);
     setEditMode(false);
-  }, [activeGroupId, setPage]);
+  }, [activeGroupId, setEditMode, setPage]);
 
   const handleAddTicker = useCallback(
     (ticker: string) => {
@@ -244,7 +251,7 @@ function MarketIndicators() {
             wsStatus={wsStatus}
             onStatusClick={handleRefreshAll}
             activeAlertCount={activeAlertCount}
-            onAlertsClick={() => setAlertsOpen(v => !v)}
+            onAlertsClick={toggleAlertsOpen}
             theme={theme}
             onThemeSelect={setTheme}
           />

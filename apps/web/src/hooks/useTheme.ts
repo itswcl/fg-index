@@ -1,26 +1,17 @@
-import { useState, useEffect } from 'react';
-
-export type ThemePreference = 'light' | 'dark' | 'system';
-
-const STORAGE_KEY = 'fg-theme';
+import { useCallback, useEffect, useState } from 'react';
+import { useDashboardUiStore } from '../stores/useDashboardUiStore';
+import type { ThemePreference } from '../stores/useDashboardUiStore';
 
 function getSystemScheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'dark';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function loadPreference(): ThemePreference {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
-  } catch {
-    // ignore
-  }
-  return 'system';
-}
+export type { ThemePreference };
 
 export function useTheme() {
-  const [preference, setPreferenceState] = useState<ThemePreference>(loadPreference);
+  const preference = useDashboardUiStore((state) => state.themePreference);
+  const setPreferenceState = useDashboardUiStore((state) => state.setThemePreference);
   const [systemScheme, setSystemScheme] = useState<'light' | 'dark'>(getSystemScheme);
 
   useEffect(() => {
@@ -31,14 +22,9 @@ export function useTheme() {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  const setTheme = (pref: ThemePreference) => {
+  const setTheme = useCallback((pref: ThemePreference) => {
     setPreferenceState(pref);
-    try {
-      localStorage.setItem(STORAGE_KEY, pref);
-    } catch {
-      // ignore
-    }
-  };
+  }, [setPreferenceState]);
 
   const isDark =
     preference === 'system' ? systemScheme === 'dark' : preference === 'dark';
