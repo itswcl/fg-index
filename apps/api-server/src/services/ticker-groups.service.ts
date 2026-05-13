@@ -7,6 +7,7 @@ import { enqueueQuoteRefresh } from "./quote-refresh-queue.service.js";
 const DEFAULT_GROUP_NAME = "Default";
 const MAX_CUSTOM_GROUPS = MAX_CUSTOM_TICKER_GROUPS;
 const MAX_TICKERS_PER_GROUP = 32;
+const RESERVED_DEFAULT_CARD_SYMBOLS = new Set(["FEARGREED", "VIX", "BTC", "SPX"]);
 
 type Tx = Prisma.TransactionClient;
 
@@ -41,10 +42,12 @@ function formatGroup(group: GroupWithItems): TickerGroupResponse {
     isDefault: group.isDefault,
     createdAt: group.createdAt,
     updatedAt: group.updatedAt,
-    tickers: [...group.items].sort((a, b) => {
-      if (a.position !== b.position) return a.position - b.position;
-      return a.createdAt.getTime() - b.createdAt.getTime();
-    }),
+    tickers: [...group.items]
+      .filter((item) => !isReservedDefaultCardSymbol(item.symbol))
+      .sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      }),
   };
 }
 
@@ -54,11 +57,16 @@ function assertCustomGroupNameAvailable(name: string): void {
   }
 }
 
+function isReservedDefaultCardSymbol(symbol: string): boolean {
+  return RESERVED_DEFAULT_CARD_SYMBOLS.has(symbol.trim().toUpperCase());
+}
+
 function uniqueSymbols(symbols: string[]): string[] {
   const seen = new Set<string>();
   const unique: string[] = [];
-  for (const symbol of symbols) {
-    if (seen.has(symbol)) continue;
+  for (const value of symbols) {
+    const symbol = value.trim().toUpperCase();
+    if (!symbol || isReservedDefaultCardSymbol(symbol) || seen.has(symbol)) continue;
     seen.add(symbol);
     unique.push(symbol);
   }

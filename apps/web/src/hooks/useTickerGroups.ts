@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { API_BASE_URL, MAX_CUSTOM_TICKERS, TICKER_STORAGE_KEY } from '../constants';
 import { authFetch } from '../lib/authFetch';
 import { useAuth } from './useAuth';
-import { DEFAULT_CARD_IDS } from './useUnifiedOrder';
+import { isDefaultCardId, isPlaceholderId } from './useUnifiedOrder';
 import { MAX_CUSTOM_TICKER_GROUPS } from '../../../../packages/shared-types/src/limits';
 
 export const DEFAULT_GROUP_ID = 'default';
@@ -48,7 +48,6 @@ function createDefaultGroup(tickers: string[] = []): TickerGroup {
 function uniqueSymbols(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
-  const defaults = new Set<string>(DEFAULT_CARD_IDS);
   const symbols: string[] = [];
 
   for (const value of raw) {
@@ -58,8 +57,9 @@ function uniqueSymbols(raw: unknown): string[] {
         ? (value as { symbol?: unknown }).symbol
         : null;
     if (typeof rawSymbol !== 'string') continue;
-    const symbol = rawSymbol.trim().toUpperCase();
-    if (!symbol || defaults.has(symbol) || symbol.startsWith('__loading-')) continue;
+    const trimmed = rawSymbol.trim();
+    if (!trimmed || isDefaultCardId(trimmed) || isPlaceholderId(trimmed)) continue;
+    const symbol = trimmed.toUpperCase();
     if (seen.has(symbol)) continue;
     seen.add(symbol);
     symbols.push(symbol);

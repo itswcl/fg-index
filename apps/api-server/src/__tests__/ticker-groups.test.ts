@@ -323,6 +323,20 @@ describe("ticker groups", () => {
     expect(result[1].tickers.map((ticker) => ticker.symbol)).toEqual(["AMD", "NVDA"]);
   });
 
+  it("filters persisted default card symbols from group responses", async () => {
+    const defaultGroup = makeGroup({ userId: USER, name: "Default", isDefault: true });
+    groups = [defaultGroup];
+    items = [
+      makeItem({ groupId: defaultGroup.id, userId: USER, symbol: "FEARGREED", position: 0 }),
+      makeItem({ groupId: defaultGroup.id, userId: USER, symbol: "AAPL", position: 1 }),
+      makeItem({ groupId: defaultGroup.id, userId: USER, symbol: "SPX", position: 2 }),
+    ];
+
+    const result = await listTickerGroups(USER);
+
+    expect(result[0].tickers.map((ticker) => ticker.symbol)).toEqual(["AAPL"]);
+  });
+
   it("creates, renames, and deletes a custom group", async () => {
     const created = await createTickerGroup(USER, "AI");
     const group = created.find((entry) => entry.name === "AI");
@@ -419,6 +433,26 @@ describe("ticker groups", () => {
 
     expect(updated?.tickers.map((ticker) => ticker.symbol)).toEqual(["MSFT", "AAPL"]);
     expect(userTickers.map((ticker) => ticker.symbol)).toEqual(["AAPL", "MSFT"]);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["MSFT", "AAPL"]);
+  });
+
+  it("filters default card symbols from group ticker replacement", async () => {
+    const group = makeGroup({ userId: USER, name: "AI", position: 1 });
+    groups = [makeGroup({ userId: USER, name: "Default", isDefault: true }), group];
+
+    const result = await replaceGroupTickers(USER, group.id, [
+      "feargreed",
+      "VIX",
+      "MSFT",
+      "btc",
+      "AAPL",
+      "SPX",
+      "MSFT",
+    ]);
+    const updated = result.find((entry) => entry.id === group.id);
+
+    expect(updated?.tickers.map((ticker) => ticker.symbol)).toEqual(["MSFT", "AAPL"]);
+    expect(userTickers.map((ticker) => ticker.symbol)).toEqual(["MSFT", "AAPL"]);
     expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["MSFT", "AAPL"]);
   });
 

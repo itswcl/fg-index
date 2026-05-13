@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { hydrateQuoteCacheIntoQueryClient } from './lib/quoteCache';
 import { useTheme } from './hooks/useTheme';
-import { DEFAULT_CARD_IDS, PLACEHOLDER_ID_PREFIX } from './hooks/useUnifiedOrder';
+import {
+  DEFAULT_CARD_IDS,
+  PLACEHOLDER_ID_PREFIX,
+  isDefaultCardId,
+  isPlaceholderId,
+} from './hooks/useUnifiedOrder';
 import { DEFAULT_GROUP_ID, useTickerGroups } from './hooks/useTickerGroups';
 import { useAlerts } from './hooks/useAlerts';
 import { useDefaultMarketPresentation } from './hooks/useDefaultMarketPresentation';
@@ -147,7 +152,8 @@ function MarketIndicators() {
   const handleReorder = useCallback(
     (newOrder: string[]) => {
       if (!activeGroup) return;
-      reorderGroupTickers(activeGroup.id, newOrder);
+      const tickerOrder = newOrder.filter((id) => !isDefaultCardId(id) && !isPlaceholderId(id));
+      reorderGroupTickers(activeGroup.id, tickerOrder);
     },
     [activeGroup, reorderGroupTickers],
   );
