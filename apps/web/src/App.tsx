@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { hydrateQuoteCacheIntoQueryClient } from './lib/quoteCache';
-import { useMarketIndicators } from './hooks/useMarketIndicators';
-import { useFearGreed } from './hooks/useFearGreed';
-import { useVix } from './hooks/useVix';
-import { useBtc } from './hooks/useBtc';
-import { useSpx } from './hooks/useSpx';
 import { useTheme } from './hooks/useTheme';
 import { DEFAULT_CARD_IDS, PLACEHOLDER_ID_PREFIX } from './hooks/useUnifiedOrder';
 import { DEFAULT_GROUP_ID, useTickerGroups } from './hooks/useTickerGroups';
 import { useAlerts } from './hooks/useAlerts';
+import { useDefaultMarketPresentation } from './hooks/useDefaultMarketPresentation';
 import { CardGrid } from './components/CardGrid';
 import { MobileMetricList } from './components/MobileMetricList';
 import { IconBar } from './components/IconBar';
@@ -23,7 +19,6 @@ import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
 import { useDashboardUiStore } from './stores/useDashboardUiStore';
 import type { AlertTriggeredMessage } from './types/alerts';
-import type { FearGreed, TickerQuote } from './types';
 import './App.css';
 
 const queryClient = new QueryClient();
@@ -54,52 +49,25 @@ function MarketIndicators() {
   );
 
   const {
-    fearGreed: wsFearGreed,
-    vix: wsVix,
-    btc: wsBtc,
-    spx: wsSpx,
     wsStatus,
-    lastFearGreedUpdate,
-    lastVixUpdate,
-    lastBtcUpdate,
-    lastSpxUpdate,
-  } = useMarketIndicators({ alerts, onAlertTriggered: handleAlertTriggered });
-
-  const { data: httpFearGreed, isLoading: fgLoading, isFetching: fgFetching, refetch: refetchFg } = useFearGreed();
-  const { data: httpVix, isLoading: vixLoading, isFetching: vixFetching, refetch: refetchVix } = useVix();
-  const { data: httpBtc, isLoading: btcLoading, isFetching: btcFetching } = useBtc();
-  const { data: httpSpx, isLoading: spxLoading, isFetching: spxFetching } = useSpx();
-
-  const lastGoodFearGreedRef = useRef<FearGreed | null>(null);
-  const lastGoodVixRef = useRef<TickerQuote | null>(null);
-  const lastGoodBtcRef = useRef<TickerQuote | null>(null);
-  const lastGoodSpxRef = useRef<TickerQuote | null>(null);
-
-  const currentFearGreedData = wsFearGreed ?? httpFearGreed ?? null;
-  const currentVixData = wsVix ?? httpVix ?? null;
-  const currentBtcData = wsBtc ?? httpBtc ?? null;
-  const currentSpxData = wsSpx ?? httpSpx ?? null;
-
-  useEffect(() => {
-    if (currentFearGreedData) lastGoodFearGreedRef.current = currentFearGreedData;
-  }, [currentFearGreedData]);
-
-  useEffect(() => {
-    if (currentVixData) lastGoodVixRef.current = currentVixData;
-  }, [currentVixData]);
-
-  useEffect(() => {
-    if (currentBtcData) lastGoodBtcRef.current = currentBtcData;
-  }, [currentBtcData]);
-
-  useEffect(() => {
-    if (currentSpxData) lastGoodSpxRef.current = currentSpxData;
-  }, [currentSpxData]);
-
-  const fearGreedData = currentFearGreedData ?? (fgFetching ? lastGoodFearGreedRef.current : null);
-  const vixData = currentVixData ?? (vixFetching ? lastGoodVixRef.current : null);
-  const btcData = currentBtcData ?? (btcFetching ? lastGoodBtcRef.current : null);
-  const spxData = currentSpxData ?? (spxFetching ? lastGoodSpxRef.current : null);
+    fearGreedData,
+    vixData,
+    btcData,
+    spxData,
+    fgLastUpdate,
+    vixLastUpdate,
+    btcLastUpdate,
+    spxLastUpdate,
+    fgIsLoading,
+    fgIsRefreshing,
+    vixIsLoading,
+    vixIsRefreshing,
+    btcIsLoading,
+    btcIsRefreshing,
+    spxIsLoading,
+    spxIsRefreshing,
+    refreshDefaultIndicators,
+  } = useDefaultMarketPresentation({ alerts, onAlertTriggered: handleAlertTriggered });
 
   const { theme, setTheme, isDark } = useTheme();
   const alertsOpen = useDashboardUiStore((state) => state.alertsOpen);
@@ -114,42 +82,6 @@ function MarketIndicators() {
   useEffect(() => {
     if (!isMobile && editMode) setEditMode(false);
   }, [editMode, isMobile, setEditMode]);
-
-  const manualFgUpdateMs = useDashboardUiStore((state) => state.manualFgUpdateMs);
-  const manualVixUpdateMs = useDashboardUiStore((state) => state.manualVixUpdateMs);
-  const markManualFgUpdate = useDashboardUiStore((state) => state.markManualFgUpdate);
-  const markManualVixUpdate = useDashboardUiStore((state) => state.markManualVixUpdate);
-
-  // Update browser tab title with live data
-  useEffect(() => {
-    const fg = fearGreedData?.score;
-    const vix = vixData?.price;
-    if (fg != null && vix != null) {
-      document.title = `F&G: ${fg} | VIX: ${vix.toFixed(1)}`;
-    } else if (fg != null) {
-      document.title = `F&G: ${fg} | VIX: –`;
-    } else {
-      document.title = 'Fear & Greed / VIX';
-    }
-  }, [fearGreedData, vixData]);
-
-  const handleRefreshAll = useCallback(() => {
-    Promise.all([
-      refetchFg().then(markManualFgUpdate),
-      refetchVix().then(markManualVixUpdate),
-    ]);
-  }, [markManualFgUpdate, markManualVixUpdate, refetchFg, refetchVix]);
-
-  const fgDisplayUpdate = manualFgUpdateMs > (lastFearGreedUpdate?.getTime() ?? 0)
-    ? new Date(manualFgUpdateMs)
-    : lastFearGreedUpdate;
-
-  const vixDisplayUpdate = manualVixUpdateMs > (lastVixUpdate?.getTime() ?? 0)
-    ? new Date(manualVixUpdateMs)
-    : lastVixUpdate;
-
-  const btcDisplayUpdate = lastBtcUpdate ?? (btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null);
-  const spxDisplayUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);
 
   const activeAlertCount = alerts.filter(a => a.enabled).length;
   const {
@@ -249,7 +181,7 @@ function MarketIndicators() {
           <IconBar
             isDark={isDark}
             wsStatus={wsStatus}
-            onStatusClick={handleRefreshAll}
+            onStatusClick={refreshDefaultIndicators}
             activeAlertCount={activeAlertCount}
             onAlertsClick={toggleAlertsOpen}
             theme={theme}
@@ -335,17 +267,17 @@ function MarketIndicators() {
             editMode={editMode}
             isInitialLoading={isInitialLoading}
             fearGreedData={fearGreedData}
-            fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
-            fgIsRefreshing={fgFetching}
+            fgIsLoading={fgIsLoading}
+            fgIsRefreshing={fgIsRefreshing}
             vixData={vixData}
-            vixIsLoading={vixLoading && !wsVix && !httpVix}
-            vixIsRefreshing={vixFetching}
+            vixIsLoading={vixIsLoading}
+            vixIsRefreshing={vixIsRefreshing}
             btcData={btcData}
-            btcIsLoading={btcLoading && !wsBtc && !httpBtc}
-            btcIsRefreshing={btcFetching}
+            btcIsLoading={btcIsLoading}
+            btcIsRefreshing={btcIsRefreshing}
             spxData={spxData}
-            spxIsLoading={spxLoading && !wsSpx && !httpSpx}
-            spxIsRefreshing={spxFetching}
+            spxIsLoading={spxIsLoading}
+            spxIsRefreshing={spxIsRefreshing}
           />
         ) : (
           <CardGrid
@@ -361,21 +293,21 @@ function MarketIndicators() {
             isDark={isDark}
             isInitialLoading={isInitialLoading}
             fearGreedData={fearGreedData}
-            fgLastUpdate={fgDisplayUpdate}
-            fgIsLoading={fgLoading && !wsFearGreed && !httpFearGreed}
-            fgIsRefreshing={fgFetching}
+            fgLastUpdate={fgLastUpdate}
+            fgIsLoading={fgIsLoading}
+            fgIsRefreshing={fgIsRefreshing}
             vixData={vixData}
-            vixLastUpdate={vixDisplayUpdate}
-            vixIsLoading={vixLoading && !wsVix && !httpVix}
-            vixIsRefreshing={vixFetching}
+            vixLastUpdate={vixLastUpdate}
+            vixIsLoading={vixIsLoading}
+            vixIsRefreshing={vixIsRefreshing}
             btcData={btcData}
-            btcLastUpdate={btcDisplayUpdate}
-            btcIsLoading={btcLoading && !wsBtc && !httpBtc}
-            btcIsRefreshing={btcFetching}
+            btcLastUpdate={btcLastUpdate}
+            btcIsLoading={btcIsLoading}
+            btcIsRefreshing={btcIsRefreshing}
             spxData={spxData}
-            spxLastUpdate={spxDisplayUpdate}
-            spxIsLoading={spxLoading && !wsSpx && !httpSpx}
-            spxIsRefreshing={spxFetching}
+            spxLastUpdate={spxLastUpdate}
+            spxIsLoading={spxIsLoading}
+            spxIsRefreshing={spxIsRefreshing}
           />
         )}
         {indicatorPageCount >= 1 && (
