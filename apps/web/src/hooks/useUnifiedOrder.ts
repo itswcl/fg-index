@@ -27,8 +27,9 @@ export function isPlaceholderId(id: string): boolean {
   return id.startsWith(PLACEHOLDER_ID_PREFIX);
 }
 
-function isDefaultId(id: string): id is DefaultId {
-  return (DEFAULT_CARD_IDS as readonly string[]).includes(id);
+export function isDefaultCardId(id: string): id is DefaultId {
+  const normalized = id.trim().toLowerCase();
+  return (DEFAULT_CARD_IDS as readonly string[]).includes(normalized);
 }
 
 /**
@@ -55,7 +56,7 @@ function loadLocalOrder(): string[] {
         if (
           Array.isArray(parsed) &&
           parsed.length === 4 &&
-          parsed.every((id) => isDefaultId(id))
+          parsed.every((id) => isDefaultCardId(id))
         ) {
           defaults = parsed;
         }
@@ -74,11 +75,11 @@ function saveLocalOrder(order: string[]) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
     localStorage.setItem(
       OLD_CARD_KEY,
-      JSON.stringify(order.filter((id) => isDefaultId(id))),
+      JSON.stringify(order.filter((id) => isDefaultCardId(id))),
     );
     localStorage.setItem(
       OLD_TICKER_KEY,
-      JSON.stringify(order.filter((id) => !isDefaultId(id))),
+      JSON.stringify(order.filter((id) => !isDefaultCardId(id))),
     );
   } catch {
     // ignore
@@ -156,7 +157,7 @@ export function useUnifiedOrder() {
   // appends new ones, guarantees all defaults are present.
   const order = useMemo(() => {
     const tickerSet = new Set(tickers);
-    const kept = baseOrder.filter((id) => isDefaultId(id) || tickerSet.has(id));
+    const kept = baseOrder.filter((id) => isDefaultCardId(id) || tickerSet.has(id));
     for (const id of DEFAULT_CARD_IDS) {
       if (!kept.includes(id)) kept.unshift(id);
     }
@@ -236,7 +237,7 @@ export function useUnifiedOrder() {
       setBaseOrder(newOrder);
       if (user) scheduleServerSave(newOrder);
 
-      const newTickerOrder = newOrder.filter((id) => !isDefaultId(id));
+      const newTickerOrder = newOrder.filter((id) => !isDefaultCardId(id));
       const prevTickerOrder = tickers;
       const changed =
         newTickerOrder.length !== prevTickerOrder.length ||
