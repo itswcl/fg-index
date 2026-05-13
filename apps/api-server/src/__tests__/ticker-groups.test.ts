@@ -347,9 +347,9 @@ describe("ticker groups", () => {
     });
   });
 
-  it("enforces the max 8 custom groups limit", async () => {
+  it("enforces the max 12 custom groups limit", async () => {
     groups = [makeGroup({ userId: USER, name: "Default", isDefault: true })];
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 12; i++) {
       groups.push(makeGroup({ userId: USER, name: `G${i}`, position: i + 1 }));
     }
 

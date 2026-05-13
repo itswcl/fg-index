@@ -119,7 +119,7 @@ export function TickerGroupTabs({
               type="button"
               className="ticker-tab ticker-tab-add-mobile"
               disabled={atMaxGroups}
-              title={atMaxGroups ? 'Maximum 8 groups' : 'Add group'}
+              title={atMaxGroups ? `Maximum ${MAX_CUSTOM_GROUPS} groups` : 'Add group'}
               onClick={() => setEditor({ mode: 'create' })}
             >
               +
@@ -133,7 +133,7 @@ export function TickerGroupTabs({
           type="button"
           className="ticker-tab-add-desktop"
           disabled={atMaxGroups}
-          title={atMaxGroups ? 'Maximum 8 groups' : 'Add group'}
+          title={atMaxGroups ? `Maximum ${MAX_CUSTOM_GROUPS} groups` : 'Add group'}
           onClick={() => setEditor({ mode: 'create' })}
         >
           +
@@ -216,14 +216,16 @@ function GroupNameEditor({
   onSelectGroup: (groupId: string) => void;
 }) {
   const [value, setValue] = useState(editor.mode === 'rename' ? editor.group.name : '');
-  const [error, setError] = useState(editor.mode === 'create' && atMaxGroups ? 'Maximum 8 groups reached' : '');
+  const [error, setError] = useState(
+    editor.mode === 'create' && atMaxGroups ? `Maximum ${MAX_CUSTOM_GROUPS} groups reached` : '',
+  );
   const isRename = editor.mode === 'rename';
   const surface = isDark ? 'is-dark' : 'is-light';
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (editor.mode === 'create' && atMaxGroups) {
-      setError('Maximum 8 groups reached');
+      setError(`Maximum ${MAX_CUSTOM_GROUPS} groups reached`);
       return;
     }
     if (isRename) {
