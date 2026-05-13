@@ -50,6 +50,12 @@ const DEFAULT_MARKET_SYMBOLS: Record<string, QuoteSymbolMapping> = {
     displayTicker: "IGV",
     displayName: "iShares Expanded Tech-Software Sector ETF",
   },
+  DRAM: {
+    canonicalSymbol: "DRAM",
+    providerSymbol: "DRAM:BATS",
+    displayTicker: "DRAM",
+    displayName: "Roundhill Memory ETF",
+  },
   "BRK.B": {
     canonicalSymbol: "BRK.B",
     providerSymbol: "BRK.B:NYSE",
