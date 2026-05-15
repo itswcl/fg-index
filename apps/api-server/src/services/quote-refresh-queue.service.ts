@@ -1,6 +1,11 @@
 import { env } from "../config/env.js";
 import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
-import { getCachedQuoteSnapshot, recordQuoteRefreshFailure, upsertCachedQuote } from "./ticker-cache.service.js";
+import {
+  getCachedQuoteSnapshot,
+  getFreshQuoteMemorySnapshot,
+  recordQuoteRefreshFailure,
+  upsertCachedQuote,
+} from "./ticker-cache.service.js";
 import { fetchFreshTickerQuote } from "./ticker.service.js";
 
 const queue: string[] = [];
@@ -55,7 +60,8 @@ function drainQueue(): void {
 
 async function processSymbol(symbol: string): Promise<void> {
   try {
-    const snapshot = await getCachedQuoteSnapshot(symbol);
+    const snapshot =
+      getFreshQuoteMemorySnapshot(symbol) ?? (await getCachedQuoteSnapshot(symbol));
     if (snapshot.isFresh) {
       failedUntil.delete(symbol);
       return;

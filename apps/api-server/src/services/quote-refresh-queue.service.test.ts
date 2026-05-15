@@ -28,6 +28,7 @@ function applyEnv() {
 
 vi.mock("./ticker-cache.service.js", () => ({
   getCachedQuoteSnapshot: vi.fn(),
+  getFreshQuoteMemorySnapshot: vi.fn(),
   recordQuoteRefreshFailure: vi.fn(),
   upsertCachedQuote: vi.fn(),
 }));
@@ -38,6 +39,7 @@ vi.mock("./ticker.service.js", () => ({
 
 import {
   getCachedQuoteSnapshot,
+  getFreshQuoteMemorySnapshot,
   recordQuoteRefreshFailure,
   upsertCachedQuote,
 } from "./ticker-cache.service.js";
@@ -45,6 +47,8 @@ import { fetchFreshTickerQuote } from "./ticker.service.js";
 
 const getCachedQuoteSnapshotMock =
   getCachedQuoteSnapshot as unknown as ReturnType<typeof vi.fn>;
+const getFreshQuoteMemorySnapshotMock =
+  getFreshQuoteMemorySnapshot as unknown as ReturnType<typeof vi.fn>;
 const recordQuoteRefreshFailureMock =
   recordQuoteRefreshFailure as unknown as ReturnType<typeof vi.fn>;
 const upsertCachedQuoteMock =
@@ -57,6 +61,8 @@ describe("quote refresh queue service", () => {
     vi.restoreAllMocks();
     vi.resetModules();
     applyEnv();
+    getFreshQuoteMemorySnapshotMock.mockReset();
+    getFreshQuoteMemorySnapshotMock.mockReturnValue(null);
     getCachedQuoteSnapshotMock.mockReset();
     recordQuoteRefreshFailureMock.mockReset();
     upsertCachedQuoteMock.mockReset();
@@ -64,7 +70,7 @@ describe("quote refresh queue service", () => {
   });
 
   it("skips upstream work when the cache is already fresh", async () => {
-    getCachedQuoteSnapshotMock.mockResolvedValue({
+    getFreshQuoteMemorySnapshotMock.mockReturnValue({
       quote: { ticker: "AAPL", price: 100 },
       isFresh: true,
     });
@@ -75,6 +81,7 @@ describe("quote refresh queue service", () => {
     mod.enqueueQuoteRefresh("AAPL");
     await mod.__waitForQuoteRefreshQueueToIdle();
 
+    expect(getCachedQuoteSnapshotMock).not.toHaveBeenCalled();
     expect(fetchFreshTickerQuoteMock).not.toHaveBeenCalled();
     expect(upsertCachedQuoteMock).not.toHaveBeenCalled();
   });

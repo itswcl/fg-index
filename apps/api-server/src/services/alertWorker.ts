@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { env } from "../config/env.js";
 import { prisma } from "./db.js";
 import { evaluateAlerts } from "./alertEvaluator.js";
 import { deliverWebhook } from "./webhookDelivery.js";
@@ -95,6 +96,14 @@ type FetchFn = (metric: MetricKey) => Promise<AlertRow[]>;
 
 let fetchOverride: FetchFn | null = null;
 const inFlightMetrics = new Set<MetricKey>();
+const candidateCache = new Map<MetricKey, { rows: AlertRow[]; expiresAtMs: number }>();
+
+const stats = {
+  candidateCacheHits: 0,
+  candidateCacheMisses: 0,
+  candidateDbReads: 0,
+  candidateCacheInvalidations: 0,
+};
 
 export function __setFetchOverrideForTests(fn: FetchFn | null): void {
   fetchOverride = fn;
@@ -102,10 +111,35 @@ export function __setFetchOverrideForTests(fn: FetchFn | null): void {
 
 export function __resetAlertWorkerStateForTests(): void {
   inFlightMetrics.clear();
+  candidateCache.clear();
+  stats.candidateCacheHits = 0;
+  stats.candidateCacheMisses = 0;
+  stats.candidateDbReads = 0;
+  stats.candidateCacheInvalidations = 0;
+}
+
+export function invalidateAlertCandidateCache(): void {
+  candidateCache.clear();
+  stats.candidateCacheInvalidations += 1;
+}
+
+export function getAlertWorkerStats() {
+  return {
+    ...stats,
+    candidateCacheEntries: candidateCache.size,
+  };
 }
 
 async function fetchCandidateAlerts(metric: MetricKey): Promise<AlertRow[]> {
   if (fetchOverride) return fetchOverride(metric);
+  const cached = candidateCache.get(metric);
+  if (cached && cached.expiresAtMs > Date.now()) {
+    stats.candidateCacheHits += 1;
+    return cached.rows;
+  }
+
+  stats.candidateCacheMisses += 1;
+  stats.candidateDbReads += 1;
   const rows = await prisma.alert.findMany({
     where: {
       enabled: true,
@@ -120,7 +154,12 @@ async function fetchCandidateAlerts(metric: MetricKey): Promise<AlertRow[]> {
       },
     },
   });
-  return rows as unknown as AlertRow[];
+  const alertRows = rows as unknown as AlertRow[];
+  candidateCache.set(metric, {
+    rows: alertRows,
+    expiresAtMs: Date.now() + env.ALERT_CANDIDATE_CACHE_TTL_MS,
+  });
+  return alertRows;
 }
 
 // Test seam for delivery side-effects
@@ -222,6 +261,7 @@ export async function evaluateForMetric(
           where: { id: row.id },
           data: { lastTriggeredAt: now },
         });
+        row.lastTriggeredAt = now;
       } catch (err) {
         process.stderr.write(
           JSON.stringify({

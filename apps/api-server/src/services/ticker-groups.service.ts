@@ -3,6 +3,7 @@ import { MAX_CUSTOM_TICKER_GROUPS } from "@shared/types";
 import { HttpError } from "../errors/httpError.js";
 import { prisma } from "./db.js";
 import { enqueueQuoteRefresh } from "./quote-refresh-queue.service.js";
+import { invalidateActiveTrackedSymbolsCache } from "./ticker-cache.service.js";
 
 const DEFAULT_GROUP_NAME = "Default";
 const MAX_CUSTOM_GROUPS = MAX_CUSTOM_TICKER_GROUPS;
@@ -338,6 +339,7 @@ export async function addTickerToGroup(
 
     return listGroupsFromDb(tx, userId);
   }).then((groups) => {
+    invalidateActiveTrackedSymbolsCache();
     enqueueQuoteRefresh(symbol);
     return groups;
   });
@@ -379,6 +381,7 @@ export async function replaceGroupTickers(
     await replaceGroupItems(tx, userId, groupId, unique);
     return listGroupsFromDb(tx, userId);
   }).then((groups) => {
+    invalidateActiveTrackedSymbolsCache();
     enqueueQuoteRefresh(unique);
     return groups;
   });
@@ -480,6 +483,7 @@ export async function migrateTickerGroups(
 
     return listGroupsFromDb(tx, userId);
   }).then((groups) => {
+    invalidateActiveTrackedSymbolsCache();
     enqueueQuoteRefresh(uniqueRefreshSymbols);
     return groups;
   });

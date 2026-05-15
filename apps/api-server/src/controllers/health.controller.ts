@@ -4,8 +4,10 @@ import { getCachedVix } from "../schedulers/vix.scheduler.js";
 import { getCachedBtc } from "../schedulers/btc.scheduler.js";
 import { getCachedSpx } from "../schedulers/spx.scheduler.js";
 import { getQuoteRefreshQueueStats } from "../services/quote-refresh-queue.service.js";
+import { getTickerCacheStats } from "../services/ticker-cache.service.js";
 import { getMarketStatusStats } from "../services/market-status.service.js";
 import { getBackgroundDbCircuitStats } from "../services/background-db-circuit.service.js";
+import { getAlertWorkerStats } from "../services/alertWorker.js";
 
 let lastFearGreedFetchTime: Date | null = null;
 let lastVixFetchTime: Date | null = null;
@@ -45,8 +47,10 @@ export const getHealth = (req: Request, res: Response) => {
   const hasBtcData = getCachedBtc() !== null;
   const hasSpxData = getCachedSpx() !== null;
   const quoteRefresh = getQuoteRefreshQueueStats();
+  const quoteCache = getTickerCacheStats();
   const marketStatus = getMarketStatusStats();
   const backgroundDb = getBackgroundDbCircuitStats();
+  const alertWorker = getAlertWorkerStats();
 
   const healthy = fgHealthy && vixHealthy && btcHealthy && hasFgData;
   const status = healthy ? 200 : 503;
@@ -82,8 +86,10 @@ export const getHealth = (req: Request, res: Response) => {
       lastActiveSyncAt: quoteRefresh.lastActiveSyncAt,
       lastActiveSyncError: quoteRefresh.lastActiveSyncError,
       lastRefreshFailure: quoteRefresh.lastRefreshFailure,
+      cache: quoteCache,
     },
     marketStatus,
+    alertWorker,
     backgroundDb,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),

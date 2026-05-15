@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
+import { invalidateAlertCandidateCache } from "../services/alertWorker.js";
 
 // ─── Validation ───────────────────────────────────────────────────
 const ConditionSchema = z.object({
@@ -70,6 +71,7 @@ export async function createAlert(req: Request, res: Response): Promise<void> {
       },
       include: { conditions: true },
     });
+    invalidateAlertCandidateCache();
     res.status(201).json({ alert });
   } catch (err) {
     handleError(res, err);
@@ -112,6 +114,7 @@ export async function updateAlert(req: Request, res: Response): Promise<void> {
       });
     });
 
+    invalidateAlertCandidateCache();
     res.json({ alert });
   } catch (err) {
     handleError(res, err);
@@ -130,6 +133,7 @@ export async function deleteAlert(req: Request, res: Response): Promise<void> {
     }
 
     await prisma.alert.delete({ where: { id } });
+    invalidateAlertCandidateCache();
     res.status(204).end();
   } catch (err) {
     handleError(res, err);
@@ -172,6 +176,7 @@ export async function bulkReplaceAlerts(
       });
     });
 
+    invalidateAlertCandidateCache();
     res.json({ alerts });
   } catch (err) {
     // Prisma validation errors surface as generic 500 unless we narrow

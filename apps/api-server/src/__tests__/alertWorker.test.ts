@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   evaluateForMetric,
+  getAlertWorkerStats,
+  invalidateAlertCandidateCache,
+  __resetAlertWorkerStateForTests,
   __setFetchOverrideForTests,
   __setPushOverrideForTests,
 } from "../services/alertWorker.js";
@@ -63,6 +66,7 @@ function alertRow(overrides: Partial<{
 
 beforeEach(() => {
   __resetBackgroundDbCircuitForTests();
+  __resetAlertWorkerStateForTests();
   findManySpy.mockClear();
   findManySpy.mockResolvedValue([]);
   updateManySpy.mockClear();
@@ -77,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   __setFetchOverrideForTests(null);
   __setPushOverrideForTests(null);
+  __resetAlertWorkerStateForTests();
   __resetBackgroundDbCircuitForTests();
 });
 
@@ -145,6 +150,37 @@ describe("alertWorker.evaluateForMetric", () => {
     expect(first).toEqual([]);
     expect(second).toEqual([]);
     expect(findManySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches DB alert candidates per metric until invalidated", async () => {
+    findManySpy.mockResolvedValue([alertRow()]);
+
+    await evaluateForMetric("vix", {
+      fearGreedScore: null,
+      vixPrice: 20,
+      btcPrice: null,
+      spxPrice: null,
+    });
+    await evaluateForMetric("vix", {
+      fearGreedScore: null,
+      vixPrice: 20,
+      btcPrice: null,
+      spxPrice: null,
+    });
+    invalidateAlertCandidateCache();
+    await evaluateForMetric("vix", {
+      fearGreedScore: null,
+      vixPrice: 20,
+      btcPrice: null,
+      spxPrice: null,
+    });
+
+    expect(findManySpy).toHaveBeenCalledTimes(2);
+    expect(getAlertWorkerStats()).toMatchObject({
+      candidateCacheHits: 1,
+      candidateDbReads: 2,
+      candidateCacheInvalidations: 1,
+    });
   });
 
   it("fires for a simple VIX > 30 alert when vixPrice is 35", async () => {
