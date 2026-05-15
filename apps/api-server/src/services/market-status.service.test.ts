@@ -190,6 +190,31 @@ describe("market status service", () => {
     });
   });
 
+  it("skips DB persistence when the fetched session has not changed", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          market: "open",
+          earlyHours: false,
+          afterHours: false,
+          serverTime: "2026-05-01T16:30:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./market-status.service.js");
+    await mod.refreshMarketStatus();
+    await mod.refreshMarketStatus();
+
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(mod.getMarketStatusStats()).toMatchObject({
+      persistedSessionUpdates: 1,
+      skippedSessionPersists: 1,
+    });
+  });
+
   it("does not override BTC session because crypto trades continuously", async () => {
     const mod = await import("./market-status.service.js");
     mod.__setMarketSessionForTests("closed");

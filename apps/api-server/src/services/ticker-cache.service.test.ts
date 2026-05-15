@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findUniqueMock, upsertMock } = vi.hoisted(() => ({
+const { findUniqueMock, findManyMock, upsertMock } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
+  findManyMock: vi.fn(),
   upsertMock: vi.fn(),
 }));
 
@@ -9,7 +10,11 @@ vi.mock("./db.js", () => ({
   prisma: {
     tickerQuoteCache: {
       findUnique: findUniqueMock,
+      findMany: findManyMock,
       upsert: upsertMock,
+    },
+    userTicker: {
+      findMany: findManyMock,
     },
   },
 }));
@@ -64,6 +69,7 @@ describe("ticker cache price sanity guard", () => {
     vi.resetModules();
     applyEnv();
     findUniqueMock.mockReset();
+    findManyMock.mockReset();
     upsertMock.mockReset();
     upsertMock.mockResolvedValue({});
   });
@@ -105,5 +111,101 @@ describe("ticker cache price sanity guard", () => {
 
     expect(findUniqueMock).not.toHaveBeenCalled();
     expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ticker cache memory layer", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    applyEnv();
+    findUniqueMock.mockReset();
+    findManyMock.mockReset();
+    upsertMock.mockReset();
+    upsertMock.mockResolvedValue({});
+  });
+
+  function dbRow(symbol = "AMD", price = 100) {
+    return {
+      symbol,
+      name: "Advanced Micro Devices Inc",
+      price,
+      previousClose: price,
+      change: 0,
+      changePercent: 0,
+      fetchedAt: new Date(),
+      sourceUrl: "https://example.com/quote",
+      marketSession: "regular",
+      postMarketPrice: null,
+      postMarketChange: null,
+      postMarketChangePercent: null,
+      preMarketPrice: null,
+      preMarketChange: null,
+      preMarketChangePercent: null,
+      staleAt: new Date(Date.now() + 15_000),
+    };
+  }
+
+  it("serves repeated single quote reads from memory after the first DB read", async () => {
+    findUniqueMock.mockResolvedValue(dbRow());
+
+    const {
+      getCachedQuoteSnapshot,
+      __resetTickerCacheMemoryForTests,
+      getTickerCacheStats,
+    } = await import("./ticker-cache.service.js");
+    __resetTickerCacheMemoryForTests();
+
+    await getCachedQuoteSnapshot("AMD");
+    const second = await getCachedQuoteSnapshot("AMD");
+
+    expect(second.quote).toMatchObject({ ticker: "AMD", price: 100 });
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    expect(getTickerCacheStats()).toMatchObject({
+      quoteMemoryHits: 1,
+      quoteDbReads: 1,
+    });
+  });
+
+  it("caches batch misses so repeated null reads avoid DB", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const {
+      getCachedQuotesBatch,
+      __resetTickerCacheMemoryForTests,
+    } = await import("./ticker-cache.service.js");
+    __resetTickerCacheMemoryForTests();
+
+    await getCachedQuotesBatch(["TQQQ"]);
+    const second = await getCachedQuotesBatch(["TQQQ"]);
+
+    expect(second).toEqual({ TQQQ: null });
+    expect(findManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches active symbols for repeated scheduler syncs and supports invalidation", async () => {
+    findManyMock
+      .mockResolvedValueOnce([{ symbol: "aapl" }, { symbol: "AAPL" }])
+      .mockResolvedValueOnce([{ symbol: "MSFT" }]);
+
+    const {
+      listActiveTrackedSymbols,
+      invalidateActiveTrackedSymbolsCache,
+      __resetTickerCacheMemoryForTests,
+      getTickerCacheStats,
+    } = await import("./ticker-cache.service.js");
+    __resetTickerCacheMemoryForTests();
+
+    await expect(listActiveTrackedSymbols()).resolves.toEqual(["AAPL"]);
+    await expect(listActiveTrackedSymbols()).resolves.toEqual(["AAPL"]);
+    invalidateActiveTrackedSymbolsCache();
+    await expect(listActiveTrackedSymbols()).resolves.toEqual(["MSFT"]);
+
+    expect(findManyMock).toHaveBeenCalledTimes(2);
+    expect(getTickerCacheStats()).toMatchObject({
+      activeSymbolCacheHits: 1,
+      activeSymbolDbSyncs: 2,
+      activeSymbolInvalidations: 1,
+    });
   });
 });

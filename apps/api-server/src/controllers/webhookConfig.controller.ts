@@ -3,6 +3,7 @@ import { WebhookConfigSchema, type WebhookConfig } from "@shared/types";
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
 import { deliverWebhook } from "../services/webhookDelivery.js";
+import { invalidateAlertCandidateCache } from "../services/alertWorker.js";
 import { rowToWebhookConfig } from "./webhooks.controller.js";
 
 // ─── Legacy alias controller ─────────────────────────────────────
@@ -97,6 +98,7 @@ export async function upsertMyWebhook(
         data: { userId, name: "Default", enabled: true, ...data },
       })) as WebhookRow;
     }
+    invalidateAlertCandidateCache();
     res.json({ webhook: rowToWebhookConfig(saved) });
   } catch (err) {
     handleError(res, err);
@@ -114,6 +116,7 @@ export async function deleteMyWebhook(
   try {
     const userId = requireUserId(req);
     await prisma.webhook.deleteMany({ where: { userId } });
+    invalidateAlertCandidateCache();
     res.status(204).end();
   } catch (err) {
     handleError(res, err);

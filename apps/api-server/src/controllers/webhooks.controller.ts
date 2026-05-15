@@ -8,6 +8,7 @@ import {
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
 import { deliverWebhook } from "../services/webhookDelivery.js";
+import { invalidateAlertCandidateCache } from "../services/alertWorker.js";
 
 // Per-user cap. Keep in sync with any UI-level hint.
 export const MAX_WEBHOOKS_PER_USER = 10;
@@ -136,6 +137,7 @@ export async function createWebhook(
     const row = await prisma.webhook.create({
       data: { userId, ...inputToRowWrite(input) },
     });
+    invalidateAlertCandidateCache();
     res.status(201).json({ webhook: rowToWebhook(row as WebhookRow) });
   } catch (err) {
     handleError(res, err);
@@ -165,6 +167,7 @@ export async function updateWebhook(
     if (!row) {
       throw new HttpError(404, "Webhook not found", "NOT_FOUND");
     }
+    invalidateAlertCandidateCache();
     res.json({ webhook: rowToWebhook(row as WebhookRow) });
   } catch (err) {
     handleError(res, err);
@@ -186,6 +189,7 @@ export async function deleteWebhook(
     if (result.count === 0) {
       throw new HttpError(404, "Webhook not found", "NOT_FOUND");
     }
+    invalidateAlertCandidateCache();
     res.status(204).end();
   } catch (err) {
     handleError(res, err);

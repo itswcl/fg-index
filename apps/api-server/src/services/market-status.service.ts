@@ -30,6 +30,8 @@ const cache: MarketSessionCache = {
   lastError: null,
   lastStatus: null,
 };
+let persistedSessionUpdates = 0;
+let skippedSessionPersists = 0;
 
 function isOpenStatus(status: string | undefined): boolean {
   return status?.toLowerCase() === "open";
@@ -100,6 +102,8 @@ export function getMarketStatusStats() {
     serverTime: cache.serverTime,
     lastError: cache.lastError,
     configured: env.MASSIVE_API_KEY.length > 0,
+    persistedSessionUpdates,
+    skippedSessionPersists,
   };
 }
 
@@ -170,12 +174,18 @@ export async function refreshMarketStatus(): Promise<MarketSession | null> {
 
     const body = (await response.json()) as MassiveMarketStatus;
     const session = normalizeMassiveSession(body);
+    const previousSession = cache.session;
     cache.session = session;
     cache.updatedAt = new Date();
     cache.serverTime = body.serverTime ?? null;
     cache.lastStatus = body;
     cache.lastError = null;
-    await persistMarketSession(session);
+    if (previousSession !== session) {
+      await persistMarketSession(session);
+      persistedSessionUpdates += 1;
+    } else {
+      skippedSessionPersists += 1;
+    }
     return session;
   } catch (error) {
     cache.lastError = error instanceof Error ? error.message : String(error);
@@ -189,6 +199,8 @@ export function __setMarketSessionForTests(session: MarketSession | null): void 
   cache.serverTime = null;
   cache.lastStatus = null;
   cache.lastError = null;
+  persistedSessionUpdates = 0;
+  skippedSessionPersists = 0;
 }
 
 export function __normalizeMassiveSessionForTests(
