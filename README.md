@@ -224,11 +224,15 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX fallback refresh interval |
 | `BTC_INTERVAL_MS` | `60000` | BTC scheduler interval |
 | `SPX_INTERVAL_MS` | `10000` | S&P 500 realtime loop interval before adaptive throttling |
-| `QUOTE_REFRESH_INTERVAL_MS` | `10000` | Active custom ticker sync interval |
-| `QUOTE_REFRESH_CONCURRENCY` | `4` | Max concurrent background quote refresh workers |
+| `QUOTE_REFRESH_INTERVAL_MS` | `30000` | Active custom ticker sync interval |
+| `QUOTE_REFRESH_CONCURRENCY` | `2` | Max concurrent background quote refresh workers |
 | `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Per-symbol refresh cooldown after failure |
 | `BACKGROUND_DB_FAILURE_COOLDOWN_MS` | `60000` | Shared cooldown for background DB jobs after Supabase/Prisma connectivity failures |
-| `QUOTE_STOCK_CACHE_TTL_MS` | `10000` | Freshness TTL for stock/index quote cache rows before background refresh refetches upstream |
+| `QUOTE_STOCK_CACHE_TTL_MS` | `60000` | Freshness TTL for stock/index quote cache rows before background refresh refetches upstream |
+| `QUOTE_MEMORY_CACHE_TTL_MS` | `120000` | In-process quote read cache TTL to reduce database egress |
+| `QUOTE_NULL_CACHE_TTL_MS` | `120000` | In-process null quote cache TTL to avoid repeated database misses |
+| `ACTIVE_SYMBOL_CACHE_TTL_MS` | `300000` | In-process active ticker symbol cache TTL for background scheduler scans |
+| `ALERT_CANDIDATE_CACHE_TTL_MS` | `300000` | In-process enabled alert candidate cache TTL for alert worker DB reads |
 | `QUOTE_FETCH_TIMEOUT_MS` | `5000` | Upstream fetch timeout for quote sources |
 | `QUOTE_PRICE_SANITY_MAX_MOVE_PERCENT` | `100` | Reject quote refreshes whose price moves by this percent or more from the previous cached price; set `0` to disable |
 | `AUTH_USER_UPSERT_TTL_MS` | `300000` | In-memory TTL for skipping repeated authenticated user upserts |
