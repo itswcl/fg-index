@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { PopupBackdrop } from './PopupBackdrop';
 import { useAuth } from '../hooks/useAuth';
 import { hasSupabaseConfig } from '../lib/supabase';
 
@@ -17,18 +18,6 @@ interface SignInButtonProps {
 export function SignInButton({ isDark }: SignInButtonProps) {
   const { user, signIn, signOut, loading } = useAuth();
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
 
   if (!hasSupabaseConfig) return null;
   if (loading) return null;
@@ -61,7 +50,7 @@ export function SignInButton({ isDark }: SignInButtonProps) {
   const initial = (email[0] ?? user.id[0] ?? '?').toUpperCase();
 
   return (
-    <div ref={rootRef} style={{ position: 'relative' }}>
+    <div style={{ position: 'relative' }}>
       <button
         className={`icon-btn ${isDark ? 'icon-btn-dark' : 'icon-btn-light'}`}
         onClick={() => setOpen(v => !v)}
@@ -101,65 +90,68 @@ export function SignInButton({ isDark }: SignInButtonProps) {
       </button>
 
       {open && (
-        <div
-          role="menu"
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            right: 0,
-            minWidth: 200,
-            padding: 8,
-            borderRadius: 12,
-            background: isDark ? 'rgba(28,28,30,0.98)' : 'rgba(255,255,255,0.98)',
-            border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
-            boxShadow: isDark
-              ? '0 12px 28px rgba(0,0,0,0.5)'
-              : '0 12px 28px rgba(0,0,0,0.15)',
-            zIndex: 100,
-          }}
-        >
-          {email && (
-            <div
-              style={{
-                padding: '6px 10px',
-                fontSize: 12,
-                color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.55)',
-                borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
-                marginBottom: 4,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={email}
-            >
-              {email}
-            </div>
-          )}
-          <button
-            role="menuitem"
-            onClick={() => { setOpen(false); void signOut(); }}
+        <>
+          <PopupBackdrop isDark={isDark} onDismiss={() => setOpen(false)} className="popup-backdrop-top-menu" />
+          <div
+            role="menu"
             style={{
-              width: '100%',
-              textAlign: 'left',
-              padding: '8px 10px',
-              border: 'none',
-              background: 'transparent',
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 500,
-              color: isDark ? '#FFFFFF' : '#000000',
-              cursor: 'pointer',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              minWidth: 200,
+              padding: 8,
+              borderRadius: 12,
+              background: isDark ? 'rgba(28,28,30,0.98)' : 'rgba(255,255,255,0.98)',
+              border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+              boxShadow: isDark
+                ? '0 12px 28px rgba(0,0,0,0.5)'
+                : '0 12px 28px rgba(0,0,0,0.15)',
+              zIndex: 100,
             }}
           >
-            Sign out
-          </button>
-        </div>
+            {email && (
+              <div
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.55)',
+                  borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+                  marginBottom: 4,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={email}
+              >
+                {email}
+              </div>
+            )}
+            <button
+              role="menuitem"
+              onClick={() => { setOpen(false); void signOut(); }}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 10px',
+                border: 'none',
+                background: 'transparent',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 500,
+                color: isDark ? '#FFFFFF' : '#000000',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

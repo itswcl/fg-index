@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { PopupBackdrop } from './PopupBackdrop';
 import type { ThemePreference } from '../hooks/useTheme';
 
 interface Props {
@@ -56,20 +57,9 @@ function getCurrentIcon(theme: ThemePreference) {
 
 export function ThemeSwitcher({ theme, onSelect, isDark }: Props) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
 
   return (
-    <div className="theme-switcher" ref={ref}>
+    <div className="theme-switcher">
       <button
         className={`theme-btn ${isDark ? 'theme-btn-dark' : 'theme-btn-light'}`}
         onClick={() => setOpen(v => !v)}
@@ -86,18 +76,21 @@ export function ThemeSwitcher({ theme, onSelect, isDark }: Props) {
       </button>
 
       {open && (
-        <div className={`theme-dropdown ${isDark ? 'theme-dropdown-dark' : 'theme-dropdown-light'}`}>
-          {OPTIONS.map(opt => (
-            <button
-              key={opt.value}
-              className={`theme-option ${isDark ? 'theme-option-dark' : 'theme-option-light'} ${theme === opt.value ? 'theme-option-active' : ''}`}
-              onClick={() => { onSelect(opt.value); setOpen(false); }}
-            >
-              {opt.icon}
-              <span>{opt.label}</span>
-            </button>
-          ))}
-        </div>
+        <>
+          <PopupBackdrop isDark={isDark} onDismiss={() => setOpen(false)} className="popup-backdrop-top-menu" />
+          <div className={`theme-dropdown ${isDark ? 'theme-dropdown-dark' : 'theme-dropdown-light'}`}>
+            {OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                className={`theme-option ${isDark ? 'theme-option-dark' : 'theme-option-light'} ${theme === opt.value ? 'theme-option-active' : ''}`}
+                onClick={() => { onSelect(opt.value); setOpen(false); }}
+              >
+                {opt.icon}
+                <span>{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
