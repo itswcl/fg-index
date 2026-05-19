@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Shimmer } from './Shimmer';
+import { PopupBackdrop } from './PopupBackdrop';
 import { MAX_CUSTOM_GROUPS, type TickerGroup } from '../hooks/useTickerGroups';
 
 interface TickerGroupTabsProps {
@@ -55,15 +56,6 @@ export function TickerGroupTabs({
       block: 'nearest',
     });
   }, [activeGroupId, groups.length]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    function close() {
-      setMenuOpen(false);
-    }
-    window.addEventListener('click', close);
-    return () => window.removeEventListener('click', close);
-  }, [menuOpen]);
 
   const surface = isDark ? 'is-dark' : 'is-light';
 
@@ -141,30 +133,33 @@ export function TickerGroupTabs({
       )}
 
       {menuOpen && activeGroup && !activeGroup.isDefault && (
-        <div
-          className={`group-action-menu ${surface}`}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              setMenuOpen(false);
-              setEditor({ mode: 'rename', group: activeGroup });
-            }}
+        <>
+          <PopupBackdrop isDark={isDark} onDismiss={() => setMenuOpen(false)} />
+          <div
+            className={`group-action-menu ${surface}`}
+            onClick={(event) => event.stopPropagation()}
           >
-            Rename group
-          </button>
-          <button
-            type="button"
-            className="danger"
-            onClick={() => {
-              setMenuOpen(false);
-              setDeleteTarget(activeGroup);
-            }}
-          >
-            Delete group
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                setEditor({ mode: 'rename', group: activeGroup });
+              }}
+            >
+              Rename group
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => {
+                setMenuOpen(false);
+                setDeleteTarget(activeGroup);
+              }}
+            >
+              Delete group
+            </button>
+          </div>
+        </>
       )}
 
       {editor && (
@@ -248,31 +243,46 @@ function GroupNameEditor({
     onClose();
   }
 
+  const editorSurface = (
+    <form
+      className={`${isMobile ? 'group-name-sheet' : 'group-name-popover'} ${surface}`}
+      onSubmit={submit}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <label className="group-name-label" htmlFor="group-name-input">New group name</label>
+      <input
+        id="group-name-input"
+        value={value}
+        onChange={(event) => {
+          setValue(event.target.value);
+          if (error) setError('');
+        }}
+        maxLength={20}
+        autoFocus
+      />
+      {error && <div className="group-name-error">{error}</div>}
+      <div className="group-name-actions">
+        <button type="button" className="group-secondary-btn" onClick={onClose}>Cancel</button>
+        <button type="submit" className="group-primary-btn">{isRename ? 'Rename' : 'Create'}</button>
+      </div>
+    </form>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="group-sheet-backdrop" onClick={onClose}>
+        {editorSurface}
+      </div>
+    );
+  }
+
   return (
-    <div className={isMobile ? 'group-sheet-backdrop' : 'group-popover-anchor'} onClick={isMobile ? onClose : undefined}>
-      <form
-        className={`${isMobile ? 'group-name-sheet' : 'group-name-popover'} ${surface}`}
-        onSubmit={submit}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <label className="group-name-label" htmlFor="group-name-input">New group name</label>
-        <input
-          id="group-name-input"
-          value={value}
-          onChange={(event) => {
-            setValue(event.target.value);
-            if (error) setError('');
-          }}
-          maxLength={20}
-          autoFocus
-        />
-        {error && <div className="group-name-error">{error}</div>}
-        <div className="group-name-actions">
-          <button type="button" className="group-secondary-btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="group-primary-btn">{isRename ? 'Rename' : 'Create'}</button>
-        </div>
-      </form>
-    </div>
+    <>
+      <PopupBackdrop isDark={isDark} onDismiss={onClose} />
+      <div className="group-popover-anchor">
+        {editorSurface}
+      </div>
+    </>
   );
 }
 
@@ -290,18 +300,33 @@ function DeleteGroupConfirm({
   onDelete: () => Promise<void>;
 }) {
   const surface = isDark ? 'is-dark' : 'is-light';
-  return (
-    <div className={isMobile ? 'group-sheet-backdrop' : 'group-popover-anchor'} onClick={isMobile ? onClose : undefined}>
-      <div
-        className={`${isMobile ? 'group-name-sheet' : 'group-name-popover'} ${surface}`}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="group-delete-copy">Delete group “{group.name}”? Tickers will remain in other groups.</div>
-        <div className="group-name-actions">
-          <button type="button" className="group-secondary-btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="group-danger-btn" onClick={() => { void onDelete(); }}>Delete</button>
-        </div>
+  const confirmSurface = (
+    <div
+      className={`${isMobile ? 'group-name-sheet' : 'group-name-popover'} ${surface}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="group-delete-copy">Delete group “{group.name}”? Tickers will remain in other groups.</div>
+      <div className="group-name-actions">
+        <button type="button" className="group-secondary-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="group-danger-btn" onClick={() => { void onDelete(); }}>Delete</button>
       </div>
     </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="group-sheet-backdrop" onClick={onClose}>
+        {confirmSurface}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PopupBackdrop isDark={isDark} onDismiss={onClose} />
+      <div className="group-popover-anchor">
+        {confirmSurface}
+      </div>
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { PopupBackdrop } from './PopupBackdrop';
 import { MAX_CUSTOM_TICKERS } from '../constants';
 import type { TickerGroup } from '../hooks/useTickerGroups';
 
@@ -70,20 +71,12 @@ export function TickerGroupAssignmentMenu({
   useEffect(() => {
     if (!open) return;
 
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target as Node;
-      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      closeMenu({ commit: true });
-    }
-
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') closeMenu({ commit: false });
     }
 
-    window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [draftGroupIds, groups, onToggleGroup, open, ticker]);
@@ -115,42 +108,51 @@ export function TickerGroupAssignmentMenu({
       >
         <MenuIcon />
       </button>
-      {open && position && createPortal(
-        <div
-          ref={menuRef}
-          className={`ticker-group-menu ${surface}`}
-          style={{ top: position.top, left: position.left }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="ticker-group-menu-title">Groups</div>
-          {groups.map((group) => {
-            const checked = draftGroupIds.has(group.id);
-            const full = !checked && group.tickers.length >= MAX_CUSTOM_TICKERS;
-            return (
-              <button
-                key={group.id}
-                type="button"
-                className="ticker-group-menu-row"
-                disabled={full}
-                onClick={() => {
-                  setDraftGroupIds((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(group.id)) next.delete(group.id);
-                    else next.add(group.id);
-                    return next;
-                  });
-                }}
-              >
-                <span className={`ticker-group-checkbox ${checked ? 'checked' : ''}`} aria-hidden="true" />
-                <span className="ticker-group-row-name" title={group.name}>{group.name}</span>
-                <span className="ticker-group-row-count">
-                  {full ? 'Full' : `${group.tickers.length}/${MAX_CUSTOM_TICKERS}`}
-                </span>
-              </button>
-            );
-          })}
-        </div>,
+      {open && createPortal(
+        <>
+          <PopupBackdrop
+            isDark={isDark}
+            onDismiss={() => closeMenu({ commit: true })}
+            className="popup-backdrop-ticker-groups"
+          />
+          {position && (
+            <div
+              ref={menuRef}
+              className={`ticker-group-menu ${surface}`}
+              style={{ top: position.top, left: position.left }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="ticker-group-menu-title">Groups</div>
+              {groups.map((group) => {
+                const checked = draftGroupIds.has(group.id);
+                const full = !checked && group.tickers.length >= MAX_CUSTOM_TICKERS;
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    className="ticker-group-menu-row"
+                    disabled={full}
+                    onClick={() => {
+                      setDraftGroupIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(group.id)) next.delete(group.id);
+                        else next.add(group.id);
+                        return next;
+                      });
+                    }}
+                  >
+                    <span className={`ticker-group-checkbox ${checked ? 'checked' : ''}`} aria-hidden="true" />
+                    <span className="ticker-group-row-name" title={group.name}>{group.name}</span>
+                    <span className="ticker-group-row-count">
+                      {full ? 'Full' : `${group.tickers.length}/${MAX_CUSTOM_TICKERS}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>,
         document.body,
       )}
     </>
