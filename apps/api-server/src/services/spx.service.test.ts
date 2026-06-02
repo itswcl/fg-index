@@ -116,6 +116,12 @@ describe("spx.service — partial/NaN rejection", () => {
             { status: 200, headers: { "Content-Type": "text/html" } }
           );
         }
+        if (url.includes("query1.finance.yahoo.com/v8/finance/chart")) {
+          return new Response(JSON.stringify({ chart: { result: [{ meta: {} }] } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
         if (url.includes("spx-yahoo")) {
           return new Response("<html>offline</html>", {
             status: 200,
@@ -131,6 +137,51 @@ describe("spx.service — partial/NaN rejection", () => {
     expect(q).toBeNull();
   });
 
+  it("falls back to Yahoo chart JSON when Google does not parse", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("spx-google")) {
+          return new Response("<html>no Google quote payload</html>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          });
+        }
+        if (url.includes("query1.finance.yahoo.com/v8/finance/chart")) {
+          return new Response(
+            JSON.stringify({
+              chart: {
+                result: [
+                  {
+                    meta: {
+                      regularMarketPrice: 7604.21,
+                      chartPreviousClose: 7599.96,
+                    },
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const { fetchSpxData } = await import("./spx.service.js");
+    const q = await fetchSpxData();
+    expect(q).toMatchObject({
+      ticker: "SPX",
+      name: "S&P 500",
+      price: 7604.21,
+      previousClose: 7599.96,
+      change: 4.25,
+    });
+    expect(q?.changePercent).toBeCloseTo(0.0559, 4);
+    expect(q?.sourceUrl).toContain("/v8/finance/chart/%5EGSPC");
+  });
+
   it("returns null instead of a NaN-change payload when prev-close is garbage", async () => {
     vi.stubGlobal(
       "fetch",
@@ -143,6 +194,12 @@ describe("spx.service — partial/NaN rejection", () => {
             '<html><div data-last-price="5250.33"></div><div class="P6K39c">.</div></html>',
             { status: 200, headers: { "Content-Type": "text/html" } }
           );
+        }
+        if (url.includes("query1.finance.yahoo.com/v8/finance/chart")) {
+          return new Response(JSON.stringify({ chart: { result: [{ meta: {} }] } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
         }
         if (url.includes("spx-yahoo")) {
           return new Response("<html>offline</html>", {
@@ -168,6 +225,12 @@ describe("spx.service — partial/NaN rejection", () => {
           return new Response("<html>no match</html>", {
             status: 200,
             headers: { "Content-Type": "text/html" },
+          });
+        }
+        if (url.includes("query1.finance.yahoo.com/v8/finance/chart")) {
+          return new Response(JSON.stringify({ chart: { result: [{ meta: {} }] } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           });
         }
         if (url.includes("spx-yahoo")) {
