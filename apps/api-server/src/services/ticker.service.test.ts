@@ -280,6 +280,64 @@ describe("ticker service — Google Finance AF_initDataCallback parser", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("?hl=en"))).toBe(true);
   });
 
+  it("tries Google exchange-qualified formats before Yahoo fallback for plain stock symbols", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/AAPL%3ANASDAQ")) {
+        return new Response(
+          fakeGoogleAfQuotePage({
+            ticker: "AAPL",
+            exchange: "NASDAQ",
+            name: "Apple Inc",
+            price: 315.2,
+            change: 8.88,
+            changePercent: 2.8985,
+            previousClose: 306.32,
+          }),
+          { status: 200, headers: { "Content-Type": "text/html" } }
+        );
+      }
+      if (url.includes("google.com/finance/quote/AAPL")) {
+        return new Response("<html>unqualified Google page without quote payload</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      if (url.includes("query1.finance.yahoo.com")) {
+        return new Response(
+          JSON.stringify({
+            chart: {
+              result: [
+                {
+                  meta: {
+                    symbol: "AAPL",
+                    regularMarketPrice: 315.2,
+                    chartPreviousClose: 306.32,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+    const quote = await mod.fetchTickerQuote("AAPL");
+
+    expect(quote).toMatchObject({
+      ticker: "AAPL",
+      price: 315.2,
+      previousClose: 306.32,
+    });
+    expect(quote?.sourceUrl).toContain("google.com/finance/quote/AAPL%3ANASDAQ");
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("query1.finance.yahoo.com"))).toBe(false);
+  });
+
   it("extracts postMarketPrice from AF extended-hours data", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
