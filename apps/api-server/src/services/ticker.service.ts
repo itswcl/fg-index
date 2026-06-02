@@ -778,16 +778,9 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     return direct;
   }
 
-  // 3. Yahoo quote JSON as fallback, then Yahoo chart JSON
-  const yahooChart = await fetchYahooFallbackQuote(rawTicker);
-  if (yahooChart) {
-    const enriched = await enrichWithGoogleSessionFieldsIfMissing(yahooChart, rawTicker);
-    resolvedFormatCache.set(rawTicker, rawTicker);
-    setCache(rawTicker, enriched);
-    return enriched;
-  }
-
-  // 4. Try common exchange suffixes
+  // 3. Try common Google exchange suffixes before Yahoo. Google Finance's
+  // unqualified `/quote/AAPL` page often does not contain the quote payload,
+  // while `/quote/AAPL:NASDAQ` does.
   for (const suffix of EXCHANGE_SUFFIXES) {
     const fmt = `${rawTicker}${suffix}`;
     const result = await scrapeGoogleFinance(fmt);
@@ -796,6 +789,20 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
       setCache(fmt, result);
       return result;
     }
+  }
+
+  // 4. Yahoo quote JSON as fallback, then Yahoo chart JSON.
+  const yahooChart = await fetchYahooFallbackQuote(rawTicker);
+  if (yahooChart) {
+    const enriched = await enrichWithGoogleSessionFieldsIfMissing(yahooChart, rawTicker);
+    resolvedFormatCache.set(rawTicker, rawTicker);
+    setCache(rawTicker, enriched);
+    return enriched;
+  }
+
+  // 5. Yahoo chart fallback with exchange suffixes.
+  for (const suffix of EXCHANGE_SUFFIXES) {
+    const fmt = `${rawTicker}${suffix}`;
     const yahooWithSuffix = await fetchYahooChartQuote(fmt);
     if (yahooWithSuffix) {
       const enriched = await enrichWithGoogleSessionFields(yahooWithSuffix, fmt);
@@ -805,13 +812,13 @@ async function resolveAndFetch(rawTicker: string): Promise<TickerQuote | null> {
     }
   }
 
-  // 5. Yahoo Finance fallback — try as-is
+  // 6. Yahoo Finance HTML fallback — try as-is
   const yahoo = await scrapeYahooFinance(rawTicker);
   if (yahoo) {
     return yahoo;
   }
 
-  // 6. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
+  // 7. Yahoo Finance with =F suffix (futures: "ES" → "ES=F", "NQ" → "NQ=F")
   if (!rawTicker.includes("=") && !rawTicker.includes(":")) {
     const yahooChartFutures = await fetchYahooFallbackQuote(`${rawTicker}=F`);
     if (yahooChartFutures) {
