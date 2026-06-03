@@ -226,6 +226,7 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | `SPX_INTERVAL_MS` | `10000` | S&P 500 realtime loop interval before adaptive throttling |
 | `QUOTE_REFRESH_INTERVAL_MS` | `30000` | Active custom ticker sync interval |
 | `QUOTE_REFRESH_CONCURRENCY` | `2` | Max concurrent background quote refresh workers |
+| `QUOTE_REFRESH_SPACING_MS` | `3000` | Minimum spacing between background quote refresh starts to avoid provider bursts |
 | `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Per-symbol refresh cooldown after failure |
 | `BACKGROUND_DB_FAILURE_COOLDOWN_MS` | `60000` | Shared cooldown for background DB jobs after Supabase/Prisma connectivity failures |
 | `QUOTE_STOCK_CACHE_TTL_MS` | `60000` | Freshness TTL for stock/index quote cache rows before background refresh refetches upstream |

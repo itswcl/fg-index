@@ -17,6 +17,7 @@ function applyEnv() {
   process.env.SPX_INTERVAL_MS = "10000";
   process.env.QUOTE_REFRESH_INTERVAL_MS = "15000";
   process.env.QUOTE_REFRESH_CONCURRENCY = "2";
+  process.env.QUOTE_REFRESH_SPACING_MS = "0";
   process.env.QUOTE_REFRESH_FAILURE_COOLDOWN_MS = "60000";
   process.env.CORS_ORIGIN = "*";
   process.env.INTERNAL_API_KEY = "test-key";
@@ -58,6 +59,7 @@ const fetchFreshTickerQuoteMock =
 
 describe("quote refresh queue service", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.resetModules();
     applyEnv();
@@ -188,5 +190,37 @@ describe("quote refresh queue service", () => {
         error: "Upstream quote fetch returned null",
       },
     });
+  });
+
+  it("paces upstream refresh starts to avoid provider bursts", async () => {
+    vi.useFakeTimers();
+    process.env.QUOTE_REFRESH_SPACING_MS = "1000";
+    getCachedQuoteSnapshotMock.mockResolvedValue({
+      quote: null,
+      isFresh: false,
+    });
+    fetchFreshTickerQuoteMock.mockResolvedValue({
+      ticker: "AAPL",
+      name: "Apple",
+      price: 180,
+      previousClose: 179,
+      change: 1,
+      changePercent: 0.56,
+      fetchedAt: new Date().toISOString(),
+    });
+
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+
+    mod.enqueueQuoteRefresh(["AAPL", "MSFT"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });
