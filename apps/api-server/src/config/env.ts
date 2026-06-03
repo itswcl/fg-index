@@ -21,6 +21,7 @@ const envSchema = z.object({
   SPX_INTERVAL_MS: z.string().transform(Number).default("10000"),
   QUOTE_REFRESH_INTERVAL_MS: z.string().transform(Number).default("30000"),
   QUOTE_REFRESH_CONCURRENCY: z.string().transform(Number).default("2"),
+  QUOTE_REFRESH_SPACING_MS: z.string().transform(Number).default("3000"),
   QUOTE_STOCK_CACHE_TTL_MS: z.string().transform(Number).default("60000"),
   QUOTE_MEMORY_CACHE_TTL_MS: z.string().transform(Number).default("120000"),
   QUOTE_NULL_CACHE_TTL_MS: z.string().transform(Number).default("120000"),

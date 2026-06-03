@@ -14,6 +14,8 @@ const inFlight = new Set<string>();
 const failedUntil = new Map<string, number>();
 
 let activeWorkers = 0;
+let nextWorkerStartAtMs = 0;
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
 let lastActiveSyncAt: Date | null = null;
 let lastActiveSyncError: string | null = null;
 let trackedSymbolsCount = 0;
@@ -38,8 +40,22 @@ function recordWorkerFailure(symbol: string, error: string): void {
   lastRefreshFailure = { symbol, error, at: new Date() };
 }
 
+function scheduleDrain(delayMs: number): void {
+  if (drainTimer) return;
+  drainTimer = setTimeout(() => {
+    drainTimer = null;
+    drainQueue();
+  }, delayMs);
+}
+
 function drainQueue(): void {
   while (activeWorkers < env.QUOTE_REFRESH_CONCURRENCY && queue.length > 0) {
+    const waitMs = nextWorkerStartAtMs - Date.now();
+    if (waitMs > 0) {
+      scheduleDrain(waitMs);
+      return;
+    }
+
     const symbol = queue.shift();
     if (!symbol) continue;
 
@@ -49,6 +65,7 @@ function drainQueue(): void {
     }
     inFlight.add(symbol);
     activeWorkers += 1;
+    nextWorkerStartAtMs = Date.now() + Math.max(0, env.QUOTE_REFRESH_SPACING_MS);
 
     void processSymbol(symbol).finally(() => {
       inFlight.delete(symbol);
@@ -121,6 +138,9 @@ export function getQuoteRefreshQueueStats() {
     lastActiveSyncAt,
     lastActiveSyncError,
     lastRefreshFailure,
+    nextWorkerStartAt: nextWorkerStartAtMs > Date.now()
+      ? new Date(nextWorkerStartAtMs)
+      : null,
   };
 }
 
@@ -131,11 +151,16 @@ export async function __waitForQuoteRefreshQueueToIdle(): Promise<void> {
 }
 
 export function __resetQuoteRefreshQueueForTests(): void {
+  if (drainTimer) {
+    clearTimeout(drainTimer);
+    drainTimer = null;
+  }
   queue.length = 0;
   queued.clear();
   inFlight.clear();
   failedUntil.clear();
   activeWorkers = 0;
+  nextWorkerStartAtMs = 0;
   trackedSymbolsCount = 0;
   lastActiveSyncAt = null;
   lastActiveSyncError = null;
