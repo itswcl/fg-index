@@ -56,13 +56,14 @@ app.use("/api/user", userRouter);
 app.get("/api/health", getHealth);
 app.get("/health", getHealth); // Backward compatibility
 
-// Start Schedulers
-startFearGreedScheduler();
-startVixScheduler();
-startBtcScheduler();
-startSpxScheduler();
-startTickerQuoteScheduler();
-startMarketStatusScheduler();
+if (env.SCHEDULERS_ENABLED) {
+  startFearGreedScheduler();
+  startVixScheduler();
+  startBtcScheduler();
+  startSpxScheduler();
+  startTickerQuoteScheduler();
+  startMarketStatusScheduler();
+}
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -71,6 +72,6 @@ const server = http.createServer(app);
 startWsServer(server);
 
 // Start HTTP Server
-server.listen(env.PORT, () => {
-  process.stdout.write(`HTTP server started on port ${env.PORT}\n`);
+server.listen(env.PORT, env.HOST, () => {
+  process.stdout.write(`HTTP server started on ${env.HOST}:${env.PORT}\n`);
 });
