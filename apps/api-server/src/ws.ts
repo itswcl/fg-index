@@ -134,4 +134,5 @@ export function startWsServer(server: http.Server) {
   });
 
   process.stdout.write("WebSocket server started on same port as HTTP\n");
+  return wss;
 }
