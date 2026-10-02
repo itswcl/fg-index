@@ -22,6 +22,10 @@ import { startMarketStatusScheduler } from "./schedulers/market-status.scheduler
 import { startWsServer } from "./ws.js";
 import { getHealth } from "./controllers/health.controller.js";
 import { globalRateLimiter } from "./middlewares/rateLimit.js";
+import { prisma } from "./services/db.js";
+
+const SHUTDOWN_CONNECTION_GRACE_MS = 20_000;
+const SHUTDOWN_DATABASE_GRACE_MS = 5_000;
 
 const app = express();
 
@@ -69,9 +73,71 @@ if (env.SCHEDULERS_ENABLED) {
 const server = http.createServer(app);
 
 // Start WS Server (on same port)
-startWsServer(server);
+const wsServer = startWsServer(server);
 
 // Start HTTP Server
 server.listen(env.PORT, env.HOST, () => {
   process.stdout.write(`HTTP server started on ${env.HOST}:${env.PORT}\n`);
 });
+
+let shutdownStarted = false;
+
+const shutdown = (signal: NodeJS.Signals) => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+
+  process.stdout.write(`Received ${signal}; draining HTTP and WebSocket connections\n`);
+
+  const websocketClosed = new Promise<void>((resolve) => {
+    wsServer.close(() => resolve());
+  });
+  const httpClosed = new Promise<void>((resolve) => {
+    server.close((error) => {
+      if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
+        process.stderr.write(`HTTP server close failed: ${error.message}\n`);
+      }
+      resolve();
+    });
+  });
+
+  for (const client of wsServer.clients) {
+    client.close(1001, "Server shutting down");
+  }
+
+  const forceCloseTimer = setTimeout(() => {
+    process.stderr.write("Shutdown connection grace expired; terminating remaining connections\n");
+    server.closeAllConnections();
+    for (const client of wsServer.clients) {
+      client.terminate();
+    }
+  }, SHUTDOWN_CONNECTION_GRACE_MS);
+
+  void Promise.all([httpClosed, websocketClosed]).then(async () => {
+    clearTimeout(forceCloseTimer);
+
+    // Scheduler-triggered alert evaluations are fire-and-forget and are not
+    // included in this connection drain, so shutdown does not guarantee delivery.
+    let databaseCloseTimer: NodeJS.Timeout | undefined;
+    const databaseClosed = prisma.$disconnect().catch((error: unknown) => {
+      process.stderr.write(
+        `Prisma disconnect failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    });
+    await Promise.race([
+      databaseClosed,
+      new Promise<void>((resolve) => {
+        databaseCloseTimer = setTimeout(() => {
+          process.stderr.write("Prisma disconnect grace expired; exiting\n");
+          resolve();
+        }, SHUTDOWN_DATABASE_GRACE_MS);
+      }),
+    ]);
+    if (databaseCloseTimer) clearTimeout(databaseCloseTimer);
+
+    process.stdout.write("Shutdown complete\n");
+    process.exit(0);
+  });
+};
+
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
