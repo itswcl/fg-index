@@ -176,10 +176,8 @@ export function useMarketIndicators(
   }, [onAlertTriggered]);
 
   useEffect(() => {
+    // Keep local alert evaluation in sync; the server loads alert config from the database.
     alertsRef.current = alerts;
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'set_alerts', alerts: alerts ?? [] }));
-    }
   }, [alerts]);
 
   const connect = useCallback(async () => {
@@ -199,12 +197,7 @@ export function useMarketIndicators(
         clearTimeout(disconnectTimerRef.current);
         disconnectTimerRef.current = null;
       }
-      // Sync alerts so the server can fire webhooks against the user's
-      // server-side webhook list (BE now reads from its own DB — FE no
-      // longer pushes webhook config over the socket).
-      if (alertsRef.current?.length) {
-        ws.send(JSON.stringify({ type: 'set_alerts', alerts: alertsRef.current }));
-      }
+
     };
 
     ws.onmessage = (event) => {
