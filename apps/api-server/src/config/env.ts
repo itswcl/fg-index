@@ -14,6 +14,8 @@ const envSchema = z.object({
   YAHOO_FINANCE_SPX_URL: z.string().url(),
   SCRAPER_USER_AGENT: z.string(),
   PORT: z.string().transform(Number).default("8080"),
+  HOST: z.string().default("0.0.0.0"),
+  SCHEDULERS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
   FEAR_GREED_INTERVAL_MS: z.string().transform(Number).default("1800000"),
   VIX_REALTIME_INTERVAL_MS: z.string().transform(Number).default("10000"),
   VIX_FALLBACK_INTERVAL_MS: z.string().transform(Number).default("300000"),
