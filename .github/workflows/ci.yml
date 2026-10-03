@@ -18,6 +18,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python (release poller)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test VM release poller
+        run: python -m unittest discover -s ops/release-poller -p 'test_*.py'
+
       # ── API Server ───────────────────────────────────────────────────────────
       - name: Setup Node (api-server)
         uses: actions/setup-node@v4
