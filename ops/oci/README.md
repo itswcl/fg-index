@@ -57,7 +57,7 @@ SUPABASE_JWKS_URL
 INTERNAL_API_KEY
 ```
 
-Optional names are `CORS_ORIGIN` and `MASSIVE_API_KEY`. Set `INTERNAL_API_KEY` explicitly to its production value; do not rely on the development default. Set `CORS_ORIGIN` to the Pages origin when preparing the host.
+Optional names are `CORS_ORIGIN` and `MASSIVE_API_KEY`. Set `INTERNAL_API_KEY` explicitly to its production value; do not rely on the development default. With `NODE_ENV=production`, the API refuses to start when this value is missing or set to `dev-key-123`. Set `CORS_ORIGIN` to the Pages origin when preparing the host.
 
 Systemd gives `EnvironmentFile=` entries precedence over matching `Environment=` entries ([systemd.exec](https://man7.org/linux/man-pages/man5/systemd.exec.5.html)). The unit therefore fixes `NODE_ENV`, `HOST`, `PORT`, and `SCHEDULERS_ENABLED` in the final `/usr/bin/env` invocation. Keep those reserved names out of `api.env` as well; the service must start with production mode, `127.0.0.1:8080`, and schedulers disabled. Confirm the installed runtime with `/opt/nodejs/current/bin/node --version`, including when run as `fg-index`.
 
