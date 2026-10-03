@@ -1,0 +1,63 @@
+name: Publish API release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: api-release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download production API artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: api-production-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/api-artifact
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify archive checksum and source commit
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          ARTIFACT_DIR: ${{ runner.temp }}/api-artifact
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          cd "$ARTIFACT_DIR"
+          sha256sum -c api-release.tar.gz.sha256
+          manifest_source=$(tar -xOf api-release.tar.gz ./RELEASE-MANIFEST.txt | sed -n 's/^source_commit=//p')
+          test "$manifest_source" = "$SOURCE_SHA"
+
+      - name: Checkout trusted publisher
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Create or verify per-commit API release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          ARTIFACT_DIR: ${{ runner.temp }}/api-artifact
+          API_RELEASE_IMMUTABILITY_CONFIRMED: ${{ vars.API_RELEASE_IMMUTABILITY_CONFIRMED }}
+        run: python3 ops/publish_api_release.py
