@@ -111,17 +111,52 @@ class ReleasePollerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / "var" / "lib" / "fg-index-release-poller"
+        self.policy = Path(self.temp.name) / "retention-policy.json"
+        self.policy.write_text('{"schema_version": 1, "protected_shas": []}\n', encoding="utf-8")
+        self.root_owner_check = patch.object(
+            poller.ReleasePoller, "_policy_file_is_root_owned", return_value=True
+        )
+        self.root_owner_check.start()
         self.verified: list[tuple[Path, str]] = []
 
     def tearDown(self) -> None:
+        self.root_owner_check.stop()
         self.temp.cleanup()
+
+    def make_poller(self, client=None, verifier=None) -> poller.ReleasePoller:
+        return poller.ReleasePoller(
+            self.root, client, verifier or self.verifier, retention_policy=self.policy
+        )
+
+    def add_candidate(self, sha: str, verified_at: str) -> Path:
+        path = self.root / "staged" / sha
+        path.mkdir(parents=True)
+        (path / "RELEASE-MANIFEST.txt").write_text(f"source_commit={sha}\n", encoding="utf-8")
+        (path / poller.MARKER_NAME).write_text(
+            json.dumps(
+                {
+                    "repository": poller.REPO,
+                    "source_sha": sha,
+                    "source_ref": "refs/heads/main",
+                    "tag": f"api-{sha}",
+                    "release_id": 1,
+                    "archive_sha256": "1" * 64,
+                    "checksum_asset_sha256": "2" * 64,
+                    "attestation_workflow": poller.WORKFLOW,
+                    "attestation_predicate": poller.PREDICATE,
+                    "verified_at": verified_at,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
 
     def verifier(self, archive: Path, source_sha: str) -> None:
         self.verified.append((archive, source_sha))
 
     def test_stages_only_verified_release_and_leaves_current_untouched(self) -> None:
         client = FakeGitHub()
-        result = poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+        result = self.make_poller(client).poll_once()
 
         target = self.root / "staged" / SOURCE_SHA
         self.assertEqual(result.status, "staged")
@@ -222,7 +257,7 @@ class ReleasePollerTests(unittest.TestCase):
         client.get_json = lambda url: (
             {"commit": {"sha": SOURCE_SHA}} if url.endswith("/branches/main") else None
         )
-        result = poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+        result = self.make_poller(client).poll_once()
 
         self.assertEqual(result.status, "waiting")
         self.assertEqual(client.downloads, [])
@@ -233,7 +268,7 @@ class ReleasePollerTests(unittest.TestCase):
         client.ref_sha = NEXT_SHA
 
         with self.assertRaisesRegex(poller.PollError, "does not point directly"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
         self.assertEqual(client.downloads, [])
 
     def test_rejects_release_that_is_not_immutable(self) -> None:
@@ -241,7 +276,7 @@ class ReleasePollerTests(unittest.TestCase):
         client.release["immutable"] = False
 
         with self.assertRaisesRegex(poller.PollError, "not marked immutable"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
         self.assertEqual(client.downloads, [])
 
     def test_rejects_extra_release_asset(self) -> None:
@@ -249,14 +284,14 @@ class ReleasePollerTests(unittest.TestCase):
         client.release["assets"].append(FakeGitHub._asset("unexpected.txt", b"x"))
 
         with self.assertRaisesRegex(poller.PollError, "exactly the expected"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
 
     def test_rejects_unexpected_asset_download_url(self) -> None:
         client = FakeGitHub()
         client.release["assets"][0]["browser_download_url"] = "https://attacker.example/release.tar.gz"
 
         with self.assertRaisesRegex(poller.PollError, "unexpected download URL"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
         self.assertEqual(client.downloads, [])
 
     def test_rejects_checksum_mismatch_before_attestation(self) -> None:
@@ -264,7 +299,7 @@ class ReleasePollerTests(unittest.TestCase):
         client = FakeGitHub(checksum=bad_checksum)
 
         with self.assertRaisesRegex(poller.PollError, "checksum sidecar does not verify"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
         self.assertEqual(self.verified, [])
 
     def test_rejects_failed_attestation_without_staging(self) -> None:
@@ -274,20 +309,20 @@ class ReleasePollerTests(unittest.TestCase):
             raise poller.PollError("bad provenance")
 
         with self.assertRaisesRegex(poller.PollError, "bad provenance"):
-            poller.ReleasePoller(self.root, client, reject_attestation).poll_once()
+            self.make_poller(client, reject_attestation).poll_once()
         self.assertFalse((self.root / "staged" / SOURCE_SHA).exists())
 
     def test_rejects_manifest_for_a_different_source_sha(self) -> None:
         client = FakeGitHub(archive=make_archive(NEXT_SHA))
 
         with self.assertRaisesRegex(poller.PollError, "manifest source_commit"):
-            poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+            self.make_poller(client).poll_once()
         self.assertFalse((self.root / "staged" / SOURCE_SHA).exists())
 
     def test_discards_verified_release_if_main_moves_during_verification(self) -> None:
         client = FakeGitHub()
         client.branch_shas = [SOURCE_SHA, NEXT_SHA]
-        result = poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+        result = self.make_poller(client).poll_once()
 
         self.assertEqual(result.status, "main-moved")
         self.assertFalse((self.root / "staged" / SOURCE_SHA).exists())
@@ -296,7 +331,7 @@ class ReleasePollerTests(unittest.TestCase):
         client = FakeGitHub()
         with patch("poller.shutil.disk_usage", return_value=SimpleNamespace(free=poller.MIN_FREE_BYTES)):
             with self.assertRaisesRegex(poller.PollError, "insufficient free space"):
-                poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+                self.make_poller(client).poll_once()
 
         self.assertEqual(client.downloads, [])
 
@@ -311,19 +346,120 @@ class ReleasePollerTests(unittest.TestCase):
         ]
         with patch("poller.shutil.disk_usage", side_effect=free_space):
             with self.assertRaisesRegex(poller.PollError, "insufficient free space"):
-                poller.ReleasePoller(self.root, client, self.verifier).poll_once()
+                self.make_poller(client).poll_once()
 
         self.assertFalse((self.root / "staged" / SOURCE_SHA).exists())
 
     def test_already_staged_sha_does_not_redownload_release(self) -> None:
         first = FakeGitHub()
-        poller.ReleasePoller(self.root, first, self.verifier).poll_once()
+        self.make_poller(first).poll_once()
         second = FakeGitHub()
-        result = poller.ReleasePoller(self.root, second, self.verifier).poll_once()
+        result = self.make_poller(second).poll_once()
 
         self.assertEqual(result.status, "already-staged")
         self.assertEqual(second.branch_reads, 1)
         self.assertEqual(second.downloads, [])
+
+    def test_retention_prunes_oldest_verified_candidate_to_reserve_incoming_slot(self) -> None:
+        old = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
+        middle = self.add_candidate("2" * 40, "2026-02-01T00:00:00+00:00")
+        newest = self.add_candidate("3" * 40, "2026-03-01T00:00:00+00:00")
+
+        self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertFalse(old.exists())
+        self.assertTrue(middle.exists())
+        self.assertTrue(newest.exists())
+
+    def test_retention_preserves_active_rollback_and_newest_pending_candidates(self) -> None:
+        active = self.add_candidate(SOURCE_SHA, "2026-01-01T00:00:00+00:00")
+        rollback = self.add_candidate("2" * 40, "2026-02-01T00:00:00+00:00")
+        newest = self.add_candidate("3" * 40, "2026-03-01T00:00:00+00:00")
+        old = self.add_candidate("4" * 40, "2025-12-01T00:00:00+00:00")
+        self.policy.write_text(
+            json.dumps({"schema_version": 1, "protected_shas": [rollback.name]}), encoding="utf-8"
+        )
+
+        self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=False)
+
+        self.assertTrue(active.exists())
+        self.assertTrue(rollback.exists())
+        self.assertTrue(newest.exists())
+        self.assertFalse(old.exists())
+
+    def test_retention_fails_without_deleting_when_protected_set_exceeds_limit(self) -> None:
+        candidates = [
+            self.add_candidate(sha, f"2026-0{index}-01T00:00:00+00:00")
+            for index, sha in enumerate(("1" * 40, "2" * 40, "3" * 40), start=1)
+        ]
+        self.policy.write_text(
+            json.dumps(
+                {"schema_version": 1, "protected_shas": [candidate.name for candidate in candidates]}
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(poller.PollError, "retention is blocked"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertTrue(all(candidate.exists() for candidate in candidates))
+
+    def test_retention_fails_closed_on_symlink_candidate_and_preserves_external_target(self) -> None:
+        external = Path(self.temp.name) / "outside"
+        external.mkdir()
+        (external / "sentinel").write_text("keep", encoding="utf-8")
+        staged = self.root / "staged"
+        staged.mkdir(parents=True)
+        (staged / ("1" * 40)).symlink_to(external, target_is_directory=True)
+
+        with self.assertRaisesRegex(poller.PollError, "real directory"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertEqual((external / "sentinel").read_text(encoding="utf-8"), "keep")
+
+    def test_retention_fails_closed_on_corrupt_marker_without_pruning(self) -> None:
+        candidate = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
+        (candidate / poller.MARKER_NAME).write_text("{broken", encoding="utf-8")
+
+        with self.assertRaisesRegex(poller.PollError, "complete verified release"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertTrue(candidate.exists())
+
+    def test_retention_fails_closed_on_unknown_or_stale_temporary_entries(self) -> None:
+        staged = self.root / "staged"
+        staged.mkdir(parents=True)
+        unknown = staged / "unexpected-entry"
+        unknown.mkdir()
+        with self.assertRaisesRegex(poller.PollError, "unexpected staged candidate path"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+        unknown.rmdir()
+        stale = staged / ".poller-stale"
+        stale.mkdir()
+        with self.assertRaisesRegex(poller.PollError, "unexpected in-progress"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+    def test_retention_rejects_invalid_or_untrusted_policy_without_pruning(self) -> None:
+        candidate = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
+        self.policy.write_text('{"schema_version": 2, "protected_shas": []}', encoding="utf-8")
+        with self.assertRaisesRegex(poller.PollError, "schema_version"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.policy.write_text('{"schema_version": 1, "protected_shas": []}', encoding="utf-8")
+        with patch.object(poller.ReleasePoller, "_policy_file_is_root_owned", return_value=False):
+            with self.assertRaisesRegex(poller.PollError, "owned by root"):
+                self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+        self.assertTrue(candidate.exists())
+
+    def test_retention_fails_when_policy_is_missing(self) -> None:
+        self.policy.unlink()
+        with self.assertRaisesRegex(poller.PollError, "policy is unavailable"):
+            self.make_poller()._load_protected_shas()
+
+    def test_retention_rejects_writable_policy(self) -> None:
+        self.policy.chmod(0o666)
+        with self.assertRaisesRegex(poller.PollError, "must not be group- or world-writable"):
+            self.make_poller()._load_protected_shas()
 
     def test_rejects_unsafe_tar_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
