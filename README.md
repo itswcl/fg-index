@@ -209,7 +209,7 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP + WebSocket port |
-| `INTERNAL_API_KEY` | `dev-key-123` | API key for public read endpoints; the default key disables API-key enforcement in dev |
+| `INTERNAL_API_KEY` | `dev-key-123` | API key for public read endpoints; the default disables enforcement in development and is rejected in production |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
 | `CNN_FEAR_GREED_URL` | required | CNN Fear & Greed JSON endpoint |
 | `GOOGLE_FINANCE_VIX_URL` | required | Google Finance VIX page |

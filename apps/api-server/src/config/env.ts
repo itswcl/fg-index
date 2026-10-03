@@ -4,6 +4,8 @@ import path from "path";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
+const DEVELOPMENT_INTERNAL_API_KEY = "dev-key-123";
+
 const envSchema = z.object({
   CNN_FEAR_GREED_URL: z.string().url(),
   GOOGLE_FINANCE_VIX_URL: z.string().url(),
@@ -44,7 +46,7 @@ const envSchema = z.object({
     .transform((value) => value !== "false")
     .default("true"),
   CORS_ORIGIN: z.string().default("*"),
-  INTERNAL_API_KEY: z.string().default("dev-key-123"),
+  INTERNAL_API_KEY: z.string().default(DEVELOPMENT_INTERNAL_API_KEY),
   // Supabase / Postgres — Feature 6 persistence
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url(),
@@ -52,4 +54,12 @@ const envSchema = z.object({
   SUPABASE_JWKS_URL: z.string().url(),
 });
 
-export const env = envSchema.parse(process.env);
+export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
+  const parsed = envSchema.parse(source);
+  if (source.NODE_ENV === "production" && parsed.INTERNAL_API_KEY === DEVELOPMENT_INTERNAL_API_KEY) {
+    throw new Error("INTERNAL_API_KEY must be set to a non-default value in production");
+  }
+  return parsed;
+}
+
+export const env = parseEnv(process.env);
