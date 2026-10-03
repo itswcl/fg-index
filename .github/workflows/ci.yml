@@ -114,7 +114,10 @@ jobs:
             sha256sum -c api-release.tar.gz.sha256
           )
 
+      # Temporary CI artifact only: expires after one day and is not deployment-ready
+      # until a release publisher consumes it.
       - name: Upload production API artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: api-production-${{ github.sha }}
@@ -122,7 +125,7 @@ jobs:
             ${{ runner.temp }}/api-release.tar.gz
             ${{ runner.temp }}/api-release.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
       # ── Web App ──────────────────────────────────────────────────────────────
       - name: Setup Node (web)
