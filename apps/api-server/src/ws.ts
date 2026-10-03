@@ -39,6 +39,8 @@ export function startWsServer(server: http.Server) {
         if (sub) {
           ws.userId = sub;
           registerUserSocket(sub, ws);
+          // Keep the success event fixed; do not log token or user claims.
+          process.stdout.write('{"event":"ws_auth_accepted"}\n');
         }
       }
     } catch (err) {
