@@ -96,7 +96,9 @@ type FetchFn = (metric: MetricKey) => Promise<AlertRow[]>;
 
 let fetchOverride: FetchFn | null = null;
 const inFlightMetrics = new Set<MetricKey>();
+const inFlightEvaluations = new Set<Promise<AlertTriggeredMessage[]>>();
 const candidateCache = new Map<MetricKey, { rows: AlertRow[]; expiresAtMs: number }>();
+let acceptingAlertWork = true;
 
 const stats = {
   candidateCacheHits: 0,
@@ -111,11 +113,23 @@ export function __setFetchOverrideForTests(fn: FetchFn | null): void {
 
 export function __resetAlertWorkerStateForTests(): void {
   inFlightMetrics.clear();
+  inFlightEvaluations.clear();
+  acceptingAlertWork = true;
   candidateCache.clear();
   stats.candidateCacheHits = 0;
   stats.candidateCacheMisses = 0;
   stats.candidateDbReads = 0;
   stats.candidateCacheInvalidations = 0;
+}
+
+/** Stop admitting scheduler work and wait for evaluations already in progress. */
+export function drainAlertWorker(): Promise<void> {
+  acceptingAlertWork = false;
+  return Promise.allSettled([...inFlightEvaluations]).then(() => undefined);
+}
+
+export function getInFlightAlertEvaluationCount(): number {
+  return inFlightEvaluations.size;
 }
 
 export function invalidateAlertCandidateCache(): void {
@@ -189,6 +203,31 @@ export async function evaluateForMetric(
   snapshot: MarketSnapshot,
   now: Date = new Date()
 ): Promise<AlertTriggeredMessage[]> {
+  if (!acceptingAlertWork) {
+    process.stderr.write(
+      JSON.stringify({
+        event: "alert_worker_skipped",
+        metric,
+        reason: "shutdown_in_progress",
+      }) + "\n"
+    );
+    return [];
+  }
+
+  const evaluation = runEvaluationForMetric(metric, snapshot, now);
+  inFlightEvaluations.add(evaluation);
+  try {
+    return await evaluation;
+  } finally {
+    inFlightEvaluations.delete(evaluation);
+  }
+}
+
+async function runEvaluationForMetric(
+  metric: MetricKey,
+  snapshot: MarketSnapshot,
+  now: Date
+): Promise<AlertTriggeredMessage[]> {
   if (!fetchOverride && getBackgroundDbCooldownRemainingMs() > 0) {
     return [];
   }
@@ -256,6 +295,8 @@ export async function evaluateForMetric(
 
       // 1) Persist cooldown timestamp. Use updateMany so a concurrently-
       // deleted alert can't throw.
+      // If shutdown reaches its deadline during webhook fan-out, this saved
+      // cooldown can delay another evaluation; delivery has no durable retry.
       try {
         await prisma.alert.updateMany({
           where: { id: row.id },
@@ -285,7 +326,7 @@ export async function evaluateForMetric(
           ): d is { webhookId: string; cfg: NonNullable<typeof d.cfg> } =>
             d.cfg !== null
         );
-      void Promise.allSettled(
+      await Promise.allSettled(
         deliveries.map(({ webhookId, cfg }) =>
           deliverWebhook(cfg, msg.alertName, msg.message)
             .then(() => {

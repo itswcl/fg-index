@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   evaluateForMetric,
+  drainAlertWorker,
+  getInFlightAlertEvaluationCount,
   getAlertWorkerStats,
   invalidateAlertCandidateCache,
   __resetAlertWorkerStateForTests,
@@ -311,6 +313,57 @@ describe("alertWorker.evaluateForMetric", () => {
       "My Alert",
       expect.any(String)
     );
+  });
+
+  it("drains started webhook deliveries and rejects new work after shutdown begins", async () => {
+    let releaseDelivery!: () => void;
+    deliverSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDelivery = resolve;
+        })
+    );
+    const fetch = vi.fn(async () => [
+      alertRow({
+        webhooks: [
+          {
+            id: "wh-1",
+            type: "discord",
+            url: "https://discord.com/api/webhooks/x/y",
+            botToken: null,
+            chatId: null,
+            enabled: true,
+          },
+        ],
+      }),
+    ]);
+    __setFetchOverrideForTests(fetch);
+
+    const snapshot = {
+      fearGreedScore: null,
+      vixPrice: 35,
+      btcPrice: null,
+      spxPrice: null,
+    };
+    const started = evaluateForMetric("vix", snapshot);
+    await vi.waitFor(() => expect(deliverSpy).toHaveBeenCalledTimes(1));
+    expect(getInFlightAlertEvaluationCount()).toBe(1);
+
+    let drainResolved = false;
+    const drained = drainAlertWorker().then(() => {
+      drainResolved = true;
+    });
+    await Promise.resolve();
+    expect(drainResolved).toBe(false);
+
+    await expect(evaluateForMetric("vix", snapshot)).resolves.toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    releaseDelivery();
+    await started;
+    await drained;
+    expect(drainResolved).toBe(true);
+    expect(getInFlightAlertEvaluationCount()).toBe(0);
   });
 
   it("fans out to every enabled webhook (3 destinations → 3 deliveries)", async () => {
