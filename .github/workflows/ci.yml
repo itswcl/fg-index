@@ -26,6 +26,9 @@ jobs:
       - name: Test VM release poller
         run: python -m unittest discover -s ops/release-poller -p 'test_*.py'
 
+      - name: Test API release publisher safety
+        run: python3 -m unittest ops.tests.test_publish_api_release -v
+
       # ── API Server ───────────────────────────────────────────────────────────
       - name: Setup Node (api-server)
         uses: actions/setup-node@v4
@@ -162,3 +165,37 @@ jobs:
         # Type-checking already done above; run vite build directly to avoid
         # tsc -b picking up hoisted vite v7 types from api-server.
         run: npx vite build
+
+  attest-api-release:
+    name: Attest trusted API release artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download production API artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: api-production-${{ github.sha }}
+          path: ${{ runner.temp }}/api-artifact
+
+      - name: Verify archive checksum and source commit
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          ARTIFACT_DIR: ${{ runner.temp }}/api-artifact
+        run: |
+          set -euo pipefail
+          cd "$ARTIFACT_DIR"
+          sha256sum -c api-release.tar.gz.sha256
+          manifest_source=$(tar -xOf api-release.tar.gz ./RELEASE-MANIFEST.txt | sed -n 's/^source_commit=//p')
+          test "$manifest_source" = "$SOURCE_SHA"
+
+      - name: Generate API build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/api-artifact/api-release.tar.gz
