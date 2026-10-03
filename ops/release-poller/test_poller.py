@@ -132,6 +132,12 @@ class ReleasePollerTests(unittest.TestCase):
         path = self.root / "staged" / sha
         path.mkdir(parents=True)
         (path / "RELEASE-MANIFEST.txt").write_text(f"source_commit={sha}\n", encoding="utf-8")
+        archive = b"verified archive fixture"
+        checksum = f"{sha256(archive)}  {poller.ARCHIVE_NAME}\n".encode()
+        attestation_bundle = b'{"dsseEnvelope": {}}\n'
+        (path / poller.ARCHIVE_NAME).write_bytes(archive)
+        (path / poller.CHECKSUM_NAME).write_bytes(checksum)
+        (path / poller.ATTESTATION_BUNDLE_NAME).write_bytes(attestation_bundle)
         (path / poller.MARKER_NAME).write_text(
             json.dumps(
                 {
@@ -140,8 +146,9 @@ class ReleasePollerTests(unittest.TestCase):
                     "source_ref": "refs/heads/main",
                     "tag": f"api-{sha}",
                     "release_id": 1,
-                    "archive_sha256": "1" * 64,
-                    "checksum_asset_sha256": "2" * 64,
+                    "archive_sha256": sha256(archive),
+                    "checksum_asset_sha256": sha256(checksum),
+                    "attestation_bundle_sha256": sha256(attestation_bundle),
                     "attestation_workflow": poller.WORKFLOW,
                     "attestation_predicate": poller.PREDICATE,
                     "verified_at": verified_at,
@@ -151,8 +158,11 @@ class ReleasePollerTests(unittest.TestCase):
         )
         return path
 
-    def verifier(self, archive: Path, source_sha: str) -> None:
+    def verifier(self, archive: Path, source_sha: str) -> Path:
         self.verified.append((archive, source_sha))
+        bundle = archive.parent / "fake-attestation-bundle.jsonl"
+        bundle.write_text('{"dsseEnvelope": {}}\n', encoding="utf-8")
+        return bundle
 
     def test_stages_only_verified_release_and_leaves_current_untouched(self) -> None:
         client = FakeGitHub()
@@ -162,6 +172,12 @@ class ReleasePollerTests(unittest.TestCase):
         self.assertEqual(result.status, "staged")
         self.assertTrue((target / "apps/api-server/dist/index.js").is_file())
         self.assertTrue((target / "apps/api-server/node_modules/@shared/types").is_symlink())
+        self.assertEqual((target / poller.ARCHIVE_NAME).read_bytes(), client.archive)
+        self.assertEqual((target / poller.CHECKSUM_NAME).read_bytes(), client.checksum)
+        self.assertEqual(
+            (target / poller.ATTESTATION_BUNDLE_NAME).read_text(encoding="utf-8"),
+            '{"dsseEnvelope": {}}\n',
+        )
         self.assertFalse((self.root / "current").exists())
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((target / "apps/api-server/dist/index.js").stat().st_mode), 0o600)
@@ -170,6 +186,10 @@ class ReleasePollerTests(unittest.TestCase):
         marker = json.loads((target / poller.MARKER_NAME).read_text(encoding="utf-8"))
         self.assertEqual(marker["source_sha"], SOURCE_SHA)
         self.assertEqual(marker["archive_sha256"], sha256(client.archive))
+        self.assertEqual(
+            marker["attestation_bundle_sha256"],
+            sha256((target / poller.ATTESTATION_BUNDLE_NAME).read_bytes()),
+        )
         self.assertEqual(self.verified[0][1], SOURCE_SHA)
         self.assertEqual(len(client.downloads), 2)
 
@@ -335,10 +355,31 @@ class ReleasePollerTests(unittest.TestCase):
 
         self.assertEqual(client.downloads, [])
 
+    def test_preflight_reserves_bounded_attestation_bundle_space(self) -> None:
+        client = FakeGitHub()
+        free_bytes = (
+            poller.MIN_FREE_BYTES
+            + len(client.archive)
+            + len(client.checksum)
+            + poller.MAX_ATTESTATION_BUNDLE_BYTES
+            + poller.ATTESTATION_BUNDLE_DISK_MARGIN_BYTES
+            - 1
+        )
+        with patch("poller.shutil.disk_usage", return_value=SimpleNamespace(free=free_bytes)):
+            with self.assertRaisesRegex(poller.PollError, "insufficient free space"):
+                self.make_poller(client).poll_once()
+
+        self.assertEqual(client.downloads, [])
+
     def test_cleans_temporary_release_when_expansion_would_breach_reserve(self) -> None:
         client = FakeGitHub()
         enough_for_download = (
-            poller.MIN_FREE_BYTES + len(client.archive) + len(client.checksum) + 1024
+            poller.MIN_FREE_BYTES
+            + len(client.archive)
+            + len(client.checksum)
+            + poller.MAX_ATTESTATION_BUNDLE_BYTES
+            + poller.ATTESTATION_BUNDLE_DISK_MARGIN_BYTES
+            + 1024
         )
         free_space = [
             SimpleNamespace(free=enough_for_download),
@@ -426,6 +467,24 @@ class ReleasePollerTests(unittest.TestCase):
 
         self.assertTrue(candidate.exists())
 
+    def test_retention_fails_closed_when_retained_archive_changes(self) -> None:
+        candidate = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
+        (candidate / poller.ARCHIVE_NAME).write_bytes(b"modified after verification")
+
+        with self.assertRaisesRegex(poller.PollError, "does not verify its source SHA"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertTrue(candidate.exists())
+
+    def test_retention_fails_closed_when_attestation_bundle_is_missing(self) -> None:
+        candidate = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
+        (candidate / poller.ATTESTATION_BUNDLE_NAME).unlink()
+
+        with self.assertRaisesRegex(poller.PollError, "complete verified release"):
+            self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
+
+        self.assertTrue(candidate.exists())
+
     def test_retention_fails_closed_on_unknown_or_stale_temporary_entries(self) -> None:
         staged = self.root / "staged"
         staged.mkdir(parents=True)
@@ -477,15 +536,18 @@ class ReleasePollerTests(unittest.TestCase):
 
     @patch("poller.subprocess.run")
     @patch("poller.shutil.which", return_value="/usr/bin/gh")
-    def test_attestation_cli_uses_empty_auth_config_and_exact_policy(self, which, run) -> None:
+    def test_attestation_cli_downloads_bundle_and_verifies_exact_policy(self, which, run) -> None:
         captured_env: dict = {}
 
-        def fake_run(_command, **kwargs):
+        def fake_run(command, **kwargs):
             env = kwargs["env"]
             captured_env.update(env)
             self.assertTrue(Path(env["GH_CONFIG_DIR"]).is_dir())
             self.assertEqual(list(Path(env["GH_CONFIG_DIR"]).iterdir()), [])
             self.assertEqual(Path(env["GH_CONFIG_DIR"]).parent, Path(env["HOME"]))
+            if command[1:3] == ["attestation", "download"]:
+                bundle = Path(kwargs["cwd"]) / f"sha256:{sha256(b'artifact')}.jsonl"
+                bundle.write_text('{"dsseEnvelope": {}}\n', encoding="utf-8")
             return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
         run.side_effect = fake_run
@@ -493,17 +555,49 @@ class ReleasePollerTests(unittest.TestCase):
         archive.parent.mkdir(parents=True)
         archive.write_bytes(b"artifact")
 
-        poller.verify_attestation(archive, SOURCE_SHA)
+        bundle = poller.verify_attestation(archive, SOURCE_SHA)
 
-        command = run.call_args.args[0]
+        download_command = run.call_args_list[0].args[0]
+        command = run.call_args_list[1].args[0]
         env = captured_env
+        self.assertEqual(download_command[1:3], ["attestation", "download"])
+        self.assertEqual(bundle.name, f"sha256:{sha256(b'artifact')}.jsonl")
         self.assertEqual(command[1:3], ["attestation", "verify"])
         self.assertIn(SOURCE_SHA, command)
         self.assertIn("refs/heads/main", command)
         self.assertIn(poller.WORKFLOW, command)
         self.assertIn(poller.PREDICATE, command)
+        self.assertEqual(command[command.index("--bundle") + 1], str(bundle))
         self.assertNotIn("GH_TOKEN", env)
         self.assertNotIn("GITHUB_TOKEN", env)
+
+    def test_attestation_download_cannot_write_past_file_size_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            temp = Path(temp_name)
+            archive = temp / "artifact.tar.gz"
+            archive.write_bytes(b"artifact")
+            fake_gh = temp / "fake-gh"
+            fake_gh.write_text(
+                f"#!{sys.executable}\n"
+                "import hashlib\n"
+                "import pathlib\n"
+                "import sys\n"
+                "archive = pathlib.Path(sys.argv[3])\n"
+                "digest = hashlib.sha256(archive.read_bytes()).hexdigest()\n"
+                "bundle = pathlib.Path.cwd() / f'sha256:{digest}.jsonl'\n"
+                "with bundle.open('wb') as output:\n"
+                "    while True:\n"
+                "        output.write(b'x' * (1024 * 1024))\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            with patch("poller.shutil.which", return_value=str(fake_gh)):
+                with self.assertRaisesRegex(poller.PollError, "bundle download failed"):
+                    poller.verify_attestation(archive, SOURCE_SHA)
+
+            bundle = temp / f"sha256:{sha256(b'artifact')}.jsonl"
+            self.assertLessEqual(bundle.stat().st_size, poller.MAX_ATTESTATION_BUNDLE_BYTES)
 
 
 if __name__ == "__main__":

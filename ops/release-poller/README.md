@@ -19,13 +19,22 @@ The release must already be immutable. An absent release or tag is treated as â€
 
 The poller extracts the verified archive into a temporary directory under `/var/lib/fg-index-release-poller/staged`, checks the embedded `RELEASE-MANIFEST.txt`, then atomically renames the result to `/var/lib/fg-index-release-poller/staged/<SHA>`. It uses Python's safe `tarfile` data filter, rejects archive paths that escape the destination, rejects special files, caps the archive at 100,000 filesystem entries, and limits logical member sizes to 4 GiB. Before extraction, it rounds each regular file to the actual filesystem block size, budgets an additional block for each extracted path (including implicit directories), and requires 10,000 free inodes beyond the candidate's path count. The dedicated poller user and private primary group own staged files; directories are mode `0700` and regular files are mode `0600` (with owner execute bits preserved). The API service cannot read or alter this quarantine, and the poller has no writable path under `/opt/fg-index`.
 
-A separate reviewed promotion task must later verify a candidate and copy it into the root-owned `/opt/fg-index/releases/<SHA>` tree before an operator can change the root-owned `/opt/fg-index/current` symlink. This PR does not install a privileged promotion unit, grant the poller sudo or `/opt` access, or activate a release.
+A separate reviewed promotion task must independently verify a candidate and copy it into the root-owned `/opt/fg-index/releases/<SHA>` tree before an operator can change the root-owned `/opt/fg-index/current` symlink. The poller-writable marker is not proof for that trust boundary. No privileged promotion unit is installed, the poller has no sudo or `/opt` access, and this poller does not activate a release.
 
-The poller writes `.fg-index-verification.json` into each staged release with the source SHA, release tag and ID, verified digests, signer workflow, predicate, and verification time. If that exact SHA is already staged with a matching marker and manifest, future polls only check the current `main` SHA and do not redownload it. A directory at the target SHA without a valid marker is left untouched and causes an error. The poller caps finalized verified candidates at three and prunes only the oldest eligible candidate in this private quarantine. It protects current `main`, the newest verified candidate, and SHAs in the root-maintained policy. Unknown entries, stale temporary trees, malformed candidates, a missing policy, or a protected set that cannot fit the cap stop polling without pruning. The current in-progress tree is not counted as finalized.
+Each finalized candidate also retains the evidence that the online verification used:
+
+| File | Contents | Bound |
+| --- | --- | --- |
+| `api-release.tar.gz` | Exact downloaded archive that passed GitHub's asset digest and checksum checks | 2 GiB |
+| `api-release.tar.gz.sha256` | Exact uploaded checksum sidecar | 1 KiB |
+| `attestation-bundle.jsonl` | GitHub attestation bundle downloaded for that archive digest and verified by `gh attestation verify` | 16 MiB, one bundle |
+| `.fg-index-verification.json` | Source SHA, release ID/tag, evidence SHA-256 digests, signer workflow, predicate, verification time | â€” |
+
+The poller records evidence hashes in the marker and checks all retained files when inventorying a candidate for retention. Since the marker and files are writable by the poller identity, this detects missing or inconsistent evidence but does not authenticate the quarantine to a root process. A future offline promotion operation must reverify the retained archive against the bundle and a separately trusted root-owned Sigstore trust root. If the exact SHA is already staged with matching evidence and manifest, future polls only check current `main` and do not redownload it. A malformed or incomplete candidate is left untouched and causes an error. The poller caps finalized verified candidates at three and prunes only the oldest eligible candidate in this private quarantine. It protects current `main`, the newest verified candidate, and SHAs in the root-maintained policy. Unknown entries, stale temporary trees, malformed candidates, a missing policy, or a protected set that cannot fit the cap stop polling without pruning. The current in-progress tree is not counted as finalized.
 
 ### Disk capacity and retention
 
-The poller refuses to download unless the declared asset sizes fit while preserving an 8 GiB free-space reserve. It stops each asset download as soon as the stream exceeds that asset's declared size. Before extraction, it budgets filesystem block allocation and path metadata and refuses if that estimate would breach the reserve. A concurrent disk consumer can still cause extraction to fail; the incomplete quarantine tree is cleaned up. Retention touches only `/var/lib/fg-index-release-poller/staged`; it never deletes or modifies `/opt/fg-index/releases` or `/opt/fg-index/current`.
+The poller refuses to download unless declared archive/checksum sizes plus the 16 MiB bundle allowance and 64 KiB filesystem-allocation margin fit while preserving an 8 GiB free-space reserve. Before running `gh attestation download`, it checks that reserve again and applies a subprocess-scoped `RLIMIT_FSIZE` of 16 MiB, so the bundle file cannot grow past its cap while the child runs. The CLI's `--limit 1` also restricts the lookup to one attestation; the byte cap is enforced separately. Each release asset download stops as soon as the stream exceeds its declared size. Before extraction, the poller budgets filesystem block allocation and path metadata and refuses if that estimate would breach the reserve. The retained archive and bundle occupy up to 2 GiB plus 16 MiB per finalized candidate in addition to the expanded tree; the three-candidate cap bounds this evidence overhead. A concurrent disk consumer can still cause an operation to fail; the incomplete quarantine tree is cleaned up. Retention touches only `/var/lib/fg-index-release-poller/staged`; it never deletes or modifies `/opt/fg-index/releases` or `/opt/fg-index/current`.
 
 Retention reads `/etc/fg-index-release-poller/retention-policy.json`. The operator must create this as a regular file owned by root and not writable by its group or other users. Its format is:
 
@@ -44,7 +53,7 @@ No runner or deploy credential is needed. REST and release downloads are public.
 
 - Linux with systemd
 - Python 3.12 or newer
-- GitHub CLI with `gh attestation verify` support
+- GitHub CLI with `gh attestation download` and `gh attestation verify` support
 - A dedicated `fg-index-release-poller` system user and same-named primary group, with no membership in `fg-index`
 - A private systemd state directory at `/var/lib/fg-index-release-poller`, writable only by the poller service
 - The poller script installed at `/usr/local/libexec/fg-index-release-poller/poller.py`

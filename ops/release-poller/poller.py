@@ -10,6 +10,7 @@ import json
 import os
 import posixpath
 import re
+import resource
 import shutil
 import stat
 import subprocess
@@ -33,9 +34,12 @@ WORKFLOW = f"{REPO}/.github/workflows/ci.yml"
 PREDICATE = "https://slsa.dev/provenance/v1"
 ARCHIVE_NAME = "api-release.tar.gz"
 CHECKSUM_NAME = f"{ARCHIVE_NAME}.sha256"
+ATTESTATION_BUNDLE_NAME = "attestation-bundle.jsonl"
 MARKER_NAME = ".fg-index-verification.json"
 MAX_ASSET_BYTES = 2 * 1024**3
 MAX_CHECKSUM_BYTES = 1024
+MAX_ATTESTATION_BUNDLE_BYTES = 16 * 1024**2
+ATTESTATION_BUNDLE_DISK_MARGIN_BYTES = 64 * 1024
 MAX_EXTRACTED_BYTES = 4 * 1024**3
 MAX_ARCHIVE_ENTRIES = 100_000
 MIN_FREE_BYTES = 8 * 1024**3
@@ -46,6 +50,15 @@ HTTP_TIMEOUT_SECONDS = 30
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ASSET_DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 CHECKSUM_RE = re.compile(r"^([0-9a-f]{64})[ \t]+\*?api-release\.tar\.gz\s*$")
+
+
+def _limit_attestation_file_writes() -> None:
+    """Keep the attestation downloader's regular-file output within its byte cap."""
+    _, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+    limit = MAX_ATTESTATION_BUNDLE_BYTES
+    if hard_limit != resource.RLIM_INFINITY:
+        limit = min(limit, hard_limit)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 
 
 class PollError(RuntimeError):
@@ -134,7 +147,7 @@ class ReleasePoller:
         self,
         root: Path,
         client: GitHubClient | Any | None = None,
-        attestation_verifier: Callable[[Path, str], None] | None = None,
+        attestation_verifier: Callable[[Path, str], Path] | None = None,
         retention_policy: Path = RETENTION_POLICY_PATH,
     ):
         self.root = root
@@ -226,18 +239,39 @@ class ReleasePoller:
 
         marker = path / MARKER_NAME
         manifest = path / "RELEASE-MANIFEST.txt"
+        archive = path / ARCHIVE_NAME
+        checksum = path / CHECKSUM_NAME
+        attestation_bundle = path / ATTESTATION_BUNDLE_NAME
         try:
             marker_mode = marker.lstat().st_mode
             manifest_mode = manifest.lstat().st_mode
+            archive_mode = archive.lstat().st_mode
+            checksum_mode = checksum.lstat().st_mode
+            bundle_mode = attestation_bundle.lstat().st_mode
         except OSError as error:
             raise PollError(f"staged candidate is not a complete verified release: {path}") from error
-        if stat.S_ISLNK(marker_mode) or not stat.S_ISREG(marker_mode):
-            raise PollError(f"staged candidate verification marker is not a regular file: {path}")
-        if stat.S_ISLNK(manifest_mode) or not stat.S_ISREG(manifest_mode):
-            raise PollError(f"staged candidate manifest is not a regular file: {path}")
+        for label, file_path, mode in (
+            ("verification marker", marker, marker_mode),
+            ("manifest", manifest, manifest_mode),
+            ("release archive", archive, archive_mode),
+            ("checksum sidecar", checksum, checksum_mode),
+            ("attestation bundle", attestation_bundle, bundle_mode),
+        ):
+            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                raise PollError(f"staged candidate {label} is not a regular file: {file_path}")
+        if archive.stat().st_size <= 0 or archive.stat().st_size > MAX_ASSET_BYTES:
+            raise PollError(f"staged candidate archive has an invalid size: {archive}")
+        if checksum.stat().st_size <= 0 or checksum.stat().st_size > MAX_CHECKSUM_BYTES:
+            raise PollError(f"staged candidate checksum has an invalid size: {checksum}")
+        if (
+            attestation_bundle.stat().st_size <= 0
+            or attestation_bundle.stat().st_size > MAX_ATTESTATION_BUNDLE_BYTES
+        ):
+            raise PollError(f"staged candidate attestation bundle has an invalid size: {attestation_bundle}")
         try:
             metadata = json.loads(marker.read_text(encoding="utf-8"))
             manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+            bundle_lines = attestation_bundle.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise PollError(f"staged candidate is not a complete verified release: {path}") from error
         if (
@@ -252,9 +286,16 @@ class ReleasePoller:
             or metadata["release_id"] <= 0
             or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("archive_sha256", "")))
             or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("checksum_asset_sha256", "")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("attestation_bundle_sha256", "")))
             or f"source_commit={source_sha}" not in manifest_lines
+            or not bundle_lines
+            or any(not self._is_json_object(line) for line in bundle_lines)
+            or self._sha256(archive) != metadata.get("archive_sha256")
+            or self._sha256(checksum) != metadata.get("checksum_asset_sha256")
+            or self._sha256(attestation_bundle) != metadata.get("attestation_bundle_sha256")
         ):
             raise PollError(f"staged candidate marker or manifest does not verify its source SHA: {path}")
+        self._validate_checksum(checksum, str(metadata.get("archive_sha256", "")))
         try:
             verified_at = datetime.fromisoformat(str(metadata.get("verified_at", "")).replace("Z", "+00:00"))
         except ValueError as error:
@@ -262,6 +303,13 @@ class ReleasePoller:
         if verified_at.tzinfo is None:
             raise PollError(f"staged candidate verification time must include a timezone: {path}")
         return StagedCandidate(source_sha, path, verified_at)
+
+    @staticmethod
+    def _is_json_object(line: str) -> bool:
+        try:
+            return isinstance(json.loads(line), dict)
+        except json.JSONDecodeError:
+            return False
 
     def _list_staged_candidates(self, in_progress_path: Path | None) -> list[StagedCandidate]:
         candidates: list[StagedCandidate] = []
@@ -372,6 +420,8 @@ class ReleasePoller:
         required_before_download = (
             asset_metadata[ARCHIVE_NAME]["size"]
             + asset_metadata[CHECKSUM_NAME]["size"]
+            + MAX_ATTESTATION_BUNDLE_BYTES
+            + ATTESTATION_BUNDLE_DISK_MARGIN_BYTES
             + MIN_FREE_BYTES
         )
         try:
@@ -399,7 +449,22 @@ class ReleasePoller:
             if checksum_asset_sha != expected_checksum_digest:
                 raise PollError("downloaded checksum digest does not match GitHub release metadata")
             self._validate_checksum(checksum_file, archive_sha)
-            self.attestation_verifier(archive, source_sha)
+            self._ensure_free_space(
+                self.staged,
+                MAX_ATTESTATION_BUNDLE_BYTES + ATTESTATION_BUNDLE_DISK_MARGIN_BYTES + MIN_FREE_BYTES,
+            )
+            attestation_bundle = self.attestation_verifier(archive, source_sha)
+            if (
+                not isinstance(attestation_bundle, Path)
+                or attestation_bundle.parent != work
+                or attestation_bundle.is_symlink()
+                or not attestation_bundle.is_file()
+            ):
+                raise PollError("attestation verifier did not preserve a regular bundle in the work directory")
+            bundle_size = attestation_bundle.stat().st_size
+            if bundle_size <= 0 or bundle_size > MAX_ATTESTATION_BUNDLE_BYTES:
+                raise PollError("downloaded attestation bundle has an invalid size")
+            attestation_bundle_sha = self._sha256(attestation_bundle)
             self._enforce_retention(source_sha, incoming_candidate=True, in_progress_path=work)
 
             payload = work / "payload"
@@ -411,9 +476,15 @@ class ReleasePoller:
             manifest_text = manifest.read_text(encoding="utf-8")
             if f"source_commit={source_sha}" not in manifest_text.splitlines():
                 raise PollError("release manifest source_commit does not match current main")
-            reserved_marker = payload / MARKER_NAME
-            if reserved_marker.exists() or reserved_marker.is_symlink():
-                raise PollError(f"release archive contains reserved path {MARKER_NAME}")
+            for reserved_name in (
+                MARKER_NAME,
+                ARCHIVE_NAME,
+                CHECKSUM_NAME,
+                ATTESTATION_BUNDLE_NAME,
+            ):
+                reserved_path = payload / reserved_name
+                if reserved_path.exists() or reserved_path.is_symlink():
+                    raise PollError(f"release archive contains reserved path {reserved_name}")
 
             metadata = {
                 "repository": REPO,
@@ -423,6 +494,7 @@ class ReleasePoller:
                 "release_id": release.get("id"),
                 "archive_sha256": archive_sha,
                 "checksum_asset_sha256": checksum_asset_sha,
+                "attestation_bundle_sha256": attestation_bundle_sha,
                 "attestation_workflow": WORKFLOW,
                 "attestation_predicate": PREDICATE,
                 "verified_at": datetime.now(timezone.utc).isoformat(),
@@ -430,6 +502,9 @@ class ReleasePoller:
             (payload / MARKER_NAME).write_text(
                 json.dumps(metadata, sort_keys=True, indent=2) + "\n", encoding="utf-8"
             )
+            archive.rename(payload / ARCHIVE_NAME)
+            checksum_file.rename(payload / CHECKSUM_NAME)
+            attestation_bundle.rename(payload / ATTESTATION_BUNDLE_NAME)
             self._set_private_staging_permissions(payload)
             target = self.staged / source_sha
             if target.exists() or target.is_symlink():
@@ -608,8 +683,8 @@ class ReleasePoller:
             raise PollError(f"could not safely extract API archive: {error}") from error
 
 
-def verify_attestation(archive: Path, source_sha: str) -> None:
-    """Verify GitHub's public Sigstore attestation without using saved credentials."""
+def verify_attestation(archive: Path, source_sha: str) -> Path:
+    """Download and verify a GitHub Sigstore bundle without using saved credentials."""
     gh = shutil.which("gh")
     if gh is None:
         raise PollError("GitHub CLI (gh) is required to verify build attestations")
@@ -623,6 +698,40 @@ def verify_attestation(archive: Path, source_sha: str) -> None:
             "GH_PROMPT_DISABLED": "1",
             "GH_NO_UPDATE_NOTIFIER": "1",
         }
+        archive_sha = ReleasePoller._sha256(archive)
+        bundle = archive.parent / f"sha256:{archive_sha}.jsonl"
+        download_command = [
+            gh,
+            "attestation",
+            "download",
+            str(archive),
+            "--repo",
+            REPO,
+            "--limit",
+            "1",
+            "--predicate-type",
+            PREDICATE,
+        ]
+        try:
+            downloaded = subprocess.run(
+                download_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                env=env,
+                cwd=archive.parent,
+                preexec_fn=_limit_attestation_file_writes,
+            )
+        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as error:
+            raise PollError(f"attestation bundle download could not run: {error}") from error
+        if downloaded.returncode != 0:
+            detail = downloaded.stderr.strip() or downloaded.stdout.strip() or "gh returned a failure"
+            raise PollError(f"GitHub attestation bundle download failed: {detail}")
+        if bundle.is_symlink() or not bundle.is_file():
+            raise PollError("GitHub attestation download did not create the expected bundle file")
+        if bundle.stat().st_size <= 0 or bundle.stat().st_size > MAX_ATTESTATION_BUNDLE_BYTES:
+            raise PollError("GitHub attestation bundle has an invalid size")
         command = [
             gh,
             "attestation",
@@ -638,6 +747,8 @@ def verify_attestation(archive: Path, source_sha: str) -> None:
             WORKFLOW,
             "--predicate-type",
             PREDICATE,
+            "--bundle",
+            str(bundle),
         ]
         try:
             result = subprocess.run(
@@ -648,6 +759,7 @@ def verify_attestation(archive: Path, source_sha: str) -> None:
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "gh returned a failure"
             raise PollError(f"GitHub build attestation verification failed: {detail}")
+        return bundle
 
 
 def main() -> int:
