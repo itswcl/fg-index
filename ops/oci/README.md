@@ -37,7 +37,43 @@ Create the `fg-index` system group and a same-named system user with home `/var/
 
 Keep `/opt/fg-index`, its `releases` directory, each release, and `current` root-owned and group-readable by `fg-index` (directories `0750`, regular files `0640`, preserving executable bits on any executable artifact files). Extract each verified archive into `/opt/fg-index/releases/<main-sha>`, set ownership and permissions, then atomically point `/opt/fg-index/current` at that release. The service account must not be able to modify application code.
 
-The release poller described in PR #188 stages verified candidates under `/var/lib/fg-index-release-poller/staged` with its own service identity. It is not a member of group `fg-index` and has no write access under `/opt/fg-index`. Copying a candidate into this root-owned live tree and changing `current` require a separate reviewed promotion operation; this bootstrap PR does not install that operation or grant the poller access to the deployment tree.
+The release poller described in PR #188 stages verified candidates under `/var/lib/fg-index-release-poller/staged` with its own service identity. It is not a member of group `fg-index` and has no write access under `/opt/fg-index`. The manual helper described below is separate code; this runbook update does not install it on the VM or grant the poller access to the deployment tree.
+
+## Offline promotion into the inactive release tree
+
+The reviewed helper `ops/promote_api_release.py` independently verifies one staged candidate and copies its application files into `/opt/fg-index/releases/<SHA>`. It does not change `/opt/fg-index/current`, restart or enable a service, change scheduler ownership, call GitHub, or use the poller-owned verification marker as proof. Promotion remains a manual root action after this code and the host prerequisites have been reviewed; merging the helper does not authorize a host installation or promotion.
+
+### Trust-root provisioning
+
+On a trusted, internet-connected administrator workstation with a trusted GitHub CLI installation, obtain the Sigstore trust-root snapshot:
+
+```sh
+gh attestation trusted-root > trusted_root.jsonl
+sha256sum trusted_root.jsonl
+```
+
+Record the fetch date and SHA-256 out of band. GitHub's command returns roots for both the Sigstore Public Good instance and GitHub's Sigstore instance; this public repository currently uses Public Good. Transfer the file to the VM only through an independently trusted host access path. Do not learn or accept the VM's SSH host key from a network observation. Install it as a root-owned, non-writable file:
+
+```sh
+sudo install -d -o root -g root -m 0755 /etc/fg-index-release-promoter
+sudo install -o root -g root -m 0644 trusted_root.jsonl \
+  /etc/fg-index-release-promoter/trusted_root.jsonl
+sudo stat -c '%U:%G %a %n' /etc/fg-index-release-promoter/trusted_root.jsonl
+```
+
+`gh attestation trusted-root` obtains trust metadata through Sigstore's TUF trust mechanism. Refresh the snapshot when importing later artifacts; offline verification cannot learn about a key rotation or revocation that happened after the snapshot. Keep the recorded digest with the operator's release evidence. The helper checks that the trust-root file and its directory are regular, root-owned, and not writable by group or other users.
+
+### Host requirements and operation
+
+Before installing or running the helper, verify that the host has Python 3.12 or newer; a trusted, root-installed GitHub CLI supporting `attestation verify --bundle`, `--custom-trusted-root`, and `--deny-self-hosted-runners`; the dedicated poller staging tree; the `fg-index` group; and a root-owned, non-writable `/opt/fg-index/releases` tree beneath a root-owned parent. The promoter snapshots the archive, checksum, and bundle into private temporary storage on the release filesystem before verification, so it does not trust a path or marker owned by the poller. Its capacity preflights preserve an 8 GiB byte reserve and 10,000 free inodes for both evidence snapshot and expansion.
+
+Install the reviewed helper as root-owned code at `/usr/local/libexec/fg-index-release-promoter/promote_api_release.py`. A later, separately authorized manual promotion uses only the full lowercase source SHA:
+
+```sh
+sudo /usr/local/libexec/fg-index-release-promoter/promote_api_release.py <40-character-main-sha>
+```
+
+The helper checks the archive checksum and retained evidence, then uses the local bundle and trusted root to verify the exact repository, source SHA, `refs/heads/main`, `.github/workflows/ci.yml` signer, and SLSA provenance predicate without saved GitHub credentials. It validates archive paths, member types, symlinks, size, and the embedded `source_commit`, then atomically creates the inactive release directory with `root:fg-index` ownership. An existing SHA destination is never overwritten. If verification, extraction, ownership, or the capacity preflight fails, no release is installed. Activating the release by changing `current` and restarting the API remains a separate reviewed and approved operation.
 
 Create `/etc/fg-index` as `root:fg-index`, mode `0750`, and `/etc/fg-index/api.env` as `root:fg-index`, mode `0640`. The API service can read the file; the release poller cannot traverse the directory because it runs only in its dedicated group. An owner enters values on the host only; repository files and handoffs contain variable names, never values. Required names are:
 
