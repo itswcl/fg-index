@@ -27,9 +27,7 @@ import {
   drainAlertWorker,
   getInFlightAlertEvaluationCount,
 } from "./services/alertWorker.js";
-
-const SHUTDOWN_CONNECTION_GRACE_MS = 20_000;
-const SHUTDOWN_DATABASE_GRACE_MS = 5_000;
+import { createShutdownHandler } from "./services/shutdown.js";
 
 const app = express();
 
@@ -84,84 +82,14 @@ server.listen(env.PORT, env.HOST, () => {
   process.stdout.write(`HTTP server started on ${env.HOST}:${env.PORT}\n`);
 });
 
-let shutdownStarted = false;
-
-const shutdown = (signal: NodeJS.Signals) => {
-  if (shutdownStarted) return;
-  shutdownStarted = true;
-
-  process.stdout.write(`Received ${signal}; draining HTTP and WebSocket connections\n`);
-
-  // Close scheduler admission immediately. Existing evaluations, including
-  // their webhook fan-out, share the same 20s grace window as connections.
-  const alertWorkerDrained = drainAlertWorker();
-
-  const websocketClosed = new Promise<void>((resolve) => {
-    wsServer.close(() => resolve());
-  });
-  const httpClosed = new Promise<void>((resolve) => {
-    server.close((error) => {
-      if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
-        process.stderr.write(`HTTP server close failed: ${error.message}\n`);
-      }
-      resolve();
-    });
-  });
-
-  for (const client of wsServer.clients) {
-    client.close(1001, "Server shutting down");
-  }
-
-  void (async () => {
-    let graceTimer: NodeJS.Timeout | undefined;
-    const graceExpired = new Promise<void>((resolve) => {
-      graceTimer = setTimeout(() => {
-        const inFlightCount = getInFlightAlertEvaluationCount();
-        if (inFlightCount > 0) {
-          process.stderr.write(
-            `Shutdown grace expired; ${inFlightCount} alert evaluations remain in flight\n` +
-            "Webhook delivery is best-effort; a persisted lastTriggeredAt may suppress an interrupted delivery until cooldown expires\n"
-          );
-        } else {
-          process.stderr.write("Shutdown grace expired; terminating remaining connections\n");
-        }
-        server.closeAllConnections();
-        for (const client of wsServer.clients) {
-          client.terminate();
-        }
-        resolve();
-      }, SHUTDOWN_CONNECTION_GRACE_MS);
-    });
-
-    await Promise.race([
-      Promise.all([httpClosed, websocketClosed, alertWorkerDrained]),
-      graceExpired,
-    ]);
-    if (graceTimer) clearTimeout(graceTimer);
-
-    // The 20s shared grace plus the 5s Prisma cap stays within the drafted
-    // systemd TimeoutStopSec=30s budget.
-    let databaseCloseTimer: NodeJS.Timeout | undefined;
-    const databaseClosed = prisma.$disconnect().catch((error: unknown) => {
-      process.stderr.write(
-        `Prisma disconnect failed: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
-    });
-    await Promise.race([
-      databaseClosed,
-      new Promise<void>((resolve) => {
-        databaseCloseTimer = setTimeout(() => {
-          process.stderr.write("Prisma disconnect grace expired; exiting\n");
-          resolve();
-        }, SHUTDOWN_DATABASE_GRACE_MS);
-      }),
-    ]);
-    if (databaseCloseTimer) clearTimeout(databaseCloseTimer);
-
-    process.stdout.write("Shutdown complete\n");
-    process.exit(0);
-  })();
-};
+const shutdown = createShutdownHandler({
+  httpServer: server,
+  websocketServer: wsServer,
+  drainAlertWorker,
+  getInFlightAlertEvaluationCount,
+  disconnect: () => prisma.$disconnect(),
+  exit: (code) => process.exit(code),
+});
 
 process.once("SIGTERM", shutdown);
 process.once("SIGINT", shutdown);
