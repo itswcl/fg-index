@@ -1,0 +1,6 @@
+# Merge this site block into the existing Caddyfile; keep its other sites.
+# Caddy's reverse_proxy handles WebSocket upgrades automatically.
+fg-index-api.duckdns.org {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

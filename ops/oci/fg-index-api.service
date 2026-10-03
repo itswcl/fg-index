@@ -1,0 +1,40 @@
+[Unit]
+Description=fg-index API server
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=fg-index
+Group=fg-index
+WorkingDirectory=/opt/fg-index/current/apps/api-server
+EnvironmentFile=/etc/fg-index/api.env
+ExecStart=/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=false /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+# Allows the planned 20s shared connection/alert-work drain and 5s Prisma cap.
+TimeoutStopSec=30s
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fg-index-api
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
