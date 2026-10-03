@@ -40,6 +40,8 @@ MAX_EXTRACTED_BYTES = 4 * 1024**3
 MAX_ARCHIVE_ENTRIES = 100_000
 MIN_FREE_BYTES = 8 * 1024**3
 MIN_FREE_INODES = 10_000
+MAX_FINALIZED_CANDIDATES = 3
+RETENTION_POLICY_PATH = Path("/etc/fg-index-release-poller/retention-policy.json")
 HTTP_TIMEOUT_SECONDS = 30
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ASSET_DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
@@ -50,11 +52,22 @@ class PollError(RuntimeError):
     """A release was present but failed a required verification check."""
 
 
+class CapacityError(PollError):
+    """The filesystem cannot satisfy the configured capacity reserve."""
+
+
 @dataclass(frozen=True)
 class PollResult:
     status: str
     source_sha: str
     message: str
+
+
+@dataclass(frozen=True)
+class StagedCandidate:
+    source_sha: str
+    path: Path
+    verified_at: datetime
 
 
 class GitHubClient:
@@ -122,11 +135,13 @@ class ReleasePoller:
         root: Path,
         client: GitHubClient | Any | None = None,
         attestation_verifier: Callable[[Path, str], None] | None = None,
+        retention_policy: Path = RETENTION_POLICY_PATH,
     ):
         self.root = root
         self.staged = root / "staged"
         self.client = client or GitHubClient()
         self.attestation_verifier = attestation_verifier or verify_attestation
+        self.retention_policy = retention_policy
 
     def current_main_sha(self) -> str:
         response = self.client.get_json(f"{API_ROOT}/branches/main")
@@ -160,6 +175,168 @@ class ReleasePoller:
             raise PollError(f"staged release manifest does not match current main: {target}")
         return True
 
+    @staticmethod
+    def _policy_file_is_root_owned(path: Path) -> bool:
+        try:
+            return path.lstat().st_uid == 0
+        except OSError as error:
+            raise PollError(f"could not inspect retention policy owner at {path}: {error}") from error
+
+    def _load_protected_shas(self) -> set[str]:
+        path = self.retention_policy
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise PollError(f"root-maintained retention policy is unavailable at {path}: {error}") from error
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise PollError(f"retention policy must be a regular non-symlink file: {path}")
+        if not self._policy_file_is_root_owned(path):
+            raise PollError(f"retention policy must be owned by root: {path}")
+        if mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise PollError(f"retention policy must not be group- or world-writable: {path}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise PollError(f"retention policy is not valid UTF-8 JSON: {path}") from error
+        if (
+            not isinstance(data, dict)
+            or type(data.get("schema_version")) is not int
+            or data.get("schema_version") != 1
+        ):
+            raise PollError("retention policy schema_version must be 1")
+        protected = data.get("protected_shas")
+        if not isinstance(protected, list) or any(
+            not isinstance(sha, str) or not SHA_RE.fullmatch(sha) for sha in protected
+        ):
+            raise PollError("retention policy protected_shas must contain full lowercase commit SHAs")
+        if len(protected) != len(set(protected)):
+            raise PollError("retention policy contains duplicate protected SHAs")
+        return set(protected)
+
+    def _read_staged_candidate(self, path: Path) -> StagedCandidate:
+        source_sha = path.name
+        if not SHA_RE.fullmatch(source_sha) or path.parent != self.staged:
+            raise PollError(f"unexpected staged candidate path: {path}")
+        try:
+            path_mode = path.lstat().st_mode
+        except OSError as error:
+            raise PollError(f"could not inspect staged candidate {path}: {error}") from error
+        if stat.S_ISLNK(path_mode) or not stat.S_ISDIR(path_mode):
+            raise PollError(f"staged candidate must be a real directory: {path}")
+
+        marker = path / MARKER_NAME
+        manifest = path / "RELEASE-MANIFEST.txt"
+        try:
+            marker_mode = marker.lstat().st_mode
+            manifest_mode = manifest.lstat().st_mode
+        except OSError as error:
+            raise PollError(f"staged candidate is not a complete verified release: {path}") from error
+        if stat.S_ISLNK(marker_mode) or not stat.S_ISREG(marker_mode):
+            raise PollError(f"staged candidate verification marker is not a regular file: {path}")
+        if stat.S_ISLNK(manifest_mode) or not stat.S_ISREG(manifest_mode):
+            raise PollError(f"staged candidate manifest is not a regular file: {path}")
+        try:
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+            manifest_lines = manifest.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise PollError(f"staged candidate is not a complete verified release: {path}") from error
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("source_sha") != source_sha
+            or metadata.get("repository") != REPO
+            or metadata.get("source_ref") != "refs/heads/main"
+            or metadata.get("tag") != f"api-{source_sha}"
+            or metadata.get("attestation_workflow") != WORKFLOW
+            or metadata.get("attestation_predicate") != PREDICATE
+            or type(metadata.get("release_id")) is not int
+            or metadata["release_id"] <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("archive_sha256", "")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("checksum_asset_sha256", "")))
+            or f"source_commit={source_sha}" not in manifest_lines
+        ):
+            raise PollError(f"staged candidate marker or manifest does not verify its source SHA: {path}")
+        try:
+            verified_at = datetime.fromisoformat(str(metadata.get("verified_at", "")).replace("Z", "+00:00"))
+        except ValueError as error:
+            raise PollError(f"staged candidate has an invalid verification time: {path}") from error
+        if verified_at.tzinfo is None:
+            raise PollError(f"staged candidate verification time must include a timezone: {path}")
+        return StagedCandidate(source_sha, path, verified_at)
+
+    def _list_staged_candidates(self, in_progress_path: Path | None) -> list[StagedCandidate]:
+        candidates: list[StagedCandidate] = []
+        in_progress: list[Path] = []
+        for path in self.staged.iterdir():
+            if path.name == ".release-poller.lock":
+                mode = path.lstat().st_mode
+                if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                    raise PollError(f"release poller lock must be a regular file: {path}")
+                continue
+            if path.name.startswith(".poller-"):
+                if in_progress_path is None or path != in_progress_path:
+                    raise PollError(
+                        f"unexpected in-progress quarantine tree requires operator review: {path}"
+                    )
+                mode = path.lstat().st_mode
+                if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                    raise PollError(f"in-progress quarantine path must be a real directory: {path}")
+                in_progress.append(path)
+                continue
+            candidates.append(self._read_staged_candidate(path))
+        if len(in_progress) > 1:
+            raise PollError("more than one in-progress quarantine tree exists")
+        if in_progress_path is not None and in_progress_path not in in_progress:
+            raise PollError(f"expected in-progress quarantine tree is missing: {in_progress_path}")
+        return candidates
+
+    def _delete_staged_candidate(self, candidate: StagedCandidate) -> None:
+        if candidate.path.parent != self.staged or candidate.path.name != candidate.source_sha:
+            raise PollError(f"refusing to delete a path outside the staged SHA tree: {candidate.path}")
+        current = self._read_staged_candidate(candidate.path)
+        if current.source_sha != candidate.source_sha:
+            raise PollError(f"staged candidate changed during retention review: {candidate.path}")
+        try:
+            shutil.rmtree(candidate.path)
+        except OSError as error:
+            raise PollError(f"could not prune verified staged candidate {candidate.source_sha}: {error}") from error
+        print(f"release-poller: pruned old verified quarantine candidate {candidate.source_sha}")
+
+    def _enforce_retention(
+        self,
+        current_main_sha: str,
+        *,
+        incoming_candidate: bool,
+        in_progress_path: Path | None = None,
+    ) -> None:
+        protected_shas = self._load_protected_shas()
+        candidates = self._list_staged_candidates(in_progress_path)
+        by_sha = {candidate.source_sha: candidate for candidate in candidates}
+        protected_shas.add(current_main_sha)
+        if candidates:
+            newest = max(candidates, key=lambda candidate: (candidate.verified_at, candidate.source_sha))
+            protected_shas.add(newest.source_sha)
+
+        finalized_limit = MAX_FINALIZED_CANDIDATES
+        if incoming_candidate and current_main_sha not in by_sha:
+            finalized_limit -= 1
+        protected_candidates = [candidate for candidate in candidates if candidate.source_sha in protected_shas]
+        if len(protected_candidates) > finalized_limit:
+            raise PollError(
+                f"retention is blocked: {len(protected_candidates)} finalized candidates are protected, "
+                f"but the {finalized_limit}-candidate limit leaves no safe pruning plan"
+            )
+
+        candidates.sort(key=lambda candidate: (candidate.verified_at, candidate.source_sha))
+        while len(candidates) > finalized_limit:
+            victim = next(
+                (candidate for candidate in candidates if candidate.source_sha not in protected_shas),
+                None,
+            )
+            if victim is None:
+                raise PollError("retention is blocked: no finalized verified unprotected candidate can be pruned")
+            self._delete_staged_candidate(victim)
+            candidates.remove(victim)
+
     def poll_once(self) -> PollResult:
         self.staged.mkdir(parents=True, exist_ok=True)
         lock_path = self.staged / ".release-poller.lock"
@@ -173,6 +350,7 @@ class ReleasePoller:
     def _poll_locked(self) -> PollResult:
         source_sha = self.current_main_sha()
         if self._already_staged(source_sha):
+            self._enforce_retention(source_sha, incoming_candidate=False)
             return PollResult("already-staged", source_sha, "current main is already staged")
 
         tag = f"api-{source_sha}"
@@ -196,7 +374,16 @@ class ReleasePoller:
             + asset_metadata[CHECKSUM_NAME]["size"]
             + MIN_FREE_BYTES
         )
-        self._ensure_free_space(self.staged, required_before_download)
+        try:
+            self._ensure_free_space(self.staged, required_before_download)
+        except CapacityError as capacity_error:
+            # Reclaim only eligible verified candidates when the compressed
+            # input itself would otherwise breach the reserve.
+            self._enforce_retention(source_sha, incoming_candidate=True)
+            try:
+                self._ensure_free_space(self.staged, required_before_download)
+            except CapacityError:
+                raise capacity_error
 
         with tempfile.TemporaryDirectory(prefix=".poller-", dir=self.staged) as temp_name:
             work = Path(temp_name)
@@ -213,6 +400,7 @@ class ReleasePoller:
                 raise PollError("downloaded checksum digest does not match GitHub release metadata")
             self._validate_checksum(checksum_file, archive_sha)
             self.attestation_verifier(archive, source_sha)
+            self._enforce_retention(source_sha, incoming_candidate=True, in_progress_path=work)
 
             payload = work / "payload"
             payload.mkdir()
@@ -320,7 +508,7 @@ class ReleasePoller:
         except OSError as error:
             raise PollError(f"could not check free space at {path}: {error}") from error
         if free_bytes < required_bytes:
-            raise PollError(
+            raise CapacityError(
                 f"insufficient free space at {path}: need {required_bytes} bytes, have {free_bytes}; "
                 f"requires an {MIN_FREE_BYTES}-byte reserve"
             )
@@ -402,7 +590,7 @@ class ReleasePoller:
 
                 required_inodes = len(required_paths) + MIN_FREE_INODES
                 if available_inodes < required_inodes:
-                    raise PollError(
+                    raise CapacityError(
                         f"insufficient free inodes at {destination}: "
                         f"need {required_inodes}, have {available_inodes}; "
                         f"requires a {MIN_FREE_INODES}-inode reserve"
