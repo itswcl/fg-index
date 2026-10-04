@@ -598,6 +598,55 @@ class PollerContractTest(unittest.TestCase):
     def test_exact_loaded_poller_is_accepted(self):
         validate_loaded_poller(self.props())
 
+    def test_properties_accepts_omitted_empty_environment_files_only_for_pinned_poller(self):
+        host = Host.__new__(Host)
+        fragment = Path('/etc/systemd/system/fg-index-release-poller.service')
+        pin = 'e' * 64
+        host.policy = {'pins': {str(fragment): pin}}
+        host.command = Mock(return_value=(
+            'User=fg-index-release-poller\nGroup=fg-index-release-poller\n'
+            'FragmentPath=' + str(fragment) + '\nDropInPaths=\n'
+            'WorkingDirectory=\nTimeoutStartUSec=3min\n'))
+        with patch('ops.deploy_api_release.trusted'), \
+             patch('ops.deploy_api_release.digest_file', return_value=pin), \
+             patch.object(Path, 'read_text', return_value='[Service]\nUser=fg-index-release-poller\n'):
+            props = host.properties('fg-index-release-poller.service',
+                                    ['User', 'Group', 'FragmentPath', 'DropInPaths', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec'],
+                                    allow_missing_empty=('EnvironmentFiles',))
+        self.assertEqual('', props['EnvironmentFiles'])
+        validate_loaded_poller({**self.props(), **props})
+        self.assertIn('--all', host.command.call_args.args[0])
+
+    def test_omitted_empty_environment_files_requires_clean_pinned_source_and_fixed_paths(self):
+        fragment = Path('/etc/systemd/system/fg-index-release-poller.service')
+        pin = 'e' * 64
+        output = ('FragmentPath=' + str(fragment) + '\nDropInPaths=\n')
+        for source, loaded in (('[Service]\nEnvironmentFile=/tmp/secret\n', output),
+                               ('[Service]\n', output.replace('DropInPaths=\n', 'DropInPaths=/run/override.conf\n'))):
+            host = Host.__new__(Host)
+            host.policy = {'pins': {str(fragment): pin}}
+            host.command = Mock(return_value=loaded)
+            with patch('ops.deploy_api_release.trusted'), \
+                 patch('ops.deploy_api_release.digest_file', return_value=pin), \
+                 patch.object(Path, 'read_text', return_value=source):
+                with self.assertRaises(Hold):
+                    host.properties('fg-index-release-poller.service', ['FragmentPath', 'DropInPaths', 'EnvironmentFiles'], allow_missing_empty=('EnvironmentFiles',))
+
+    def test_missing_nonallowlisted_property_stays_a_hold(self):
+        host = Host.__new__(Host)
+        host.command = Mock(return_value='ActiveState=inactive\n')
+        with self.assertRaises(Hold):
+            host.properties('fg-index-release-poller.service', ['ActiveState', 'EnvironmentFiles'])
+        host.command.return_value = 'ActiveState=inactive\nUnexpected=yes\n'
+        with self.assertRaises(Hold):
+            host.properties('fg-index-release-poller.service', ['ActiveState'])
+
+    def test_nonempty_environment_files_remain_rejected(self):
+        props = self.props()
+        props['EnvironmentFiles'] = '/tmp/unexpected.env (ignore_errors=no)'
+        with self.assertRaises(Hold):
+            validate_loaded_poller(props)
+
     def test_loaded_poller_drift_is_rejected(self):
         changes = [('User', 'root'), ('Group', 'root'), ('FragmentPath', '/run/systemd/system/fg-index-release-poller.service'),
                    ('DropInPaths', '/run/systemd/system/fg-index-release-poller.service.d/override.conf'),
