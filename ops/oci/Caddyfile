@@ -1,5 +1,34 @@
-# Merge this site block into the existing Caddyfile; keep its other sites.
+# Merge the redaction policy and site block into the existing Caddyfile; keep its other sites.
 # Caddy's reverse_proxy handles WebSocket upgrades automatically.
+# BEGIN request log redaction policy
+{
+	log {
+		format filter {
+			request>uri query {
+				delete token
+				delete apiKey
+			}
+			request>headers>Authorization delete
+			request>headers>X-Api-Key delete
+		}
+	}
+}
+
+(sensitive-request-fields) {
+	format filter {
+		request>uri query {
+			delete token
+			delete apiKey
+		}
+		request>headers>Authorization delete
+		request>headers>X-Api-Key delete
+	}
+}
+# END request log redaction policy
+
+# The global logger filter covers Caddy runtime errors. No access logger is enabled
+# here. If an access logger is added later, import sensitive-request-fields inside
+# its log block so it gets the same query and header filtering.
 fg-index-api.duckdns.org {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8080

@@ -151,6 +151,18 @@ Install `fg-index-api.service` as `/etc/systemd/system/fg-index-api.service`. It
 
 Inspect `/etc/caddy/Caddyfile` and update or add this site block without duplicating it or replacing unrelated sites. Keep the upstream at `127.0.0.1:8080`. Caddy's [`reverse_proxy`](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) handles WebSocket upgrades, so do not add custom `Connection` or `Upgrade` headers. Do not expose port 8080 through OCI ingress or the host firewall.
 
+The Caddyfile's global default logger removes `token` and `apiKey` values from structured request URIs and removes `Authorization` and `X-API-KEY` headers. This covers runtime errors such as reverse-proxy failures. Access logging remains disabled in the site block. If an access logger is added later, import the `sensitive-request-fields` snippet inside its `log` block; the global runtime filter does not configure a separate access logger. Keep Caddy's `log_credentials` option disabled. Validate the candidate with the isolated synthetic-502 check before reloading Caddy:
+
+```sh
+python3 ops/tests/test_caddy_log_redaction.py
+```
+
+The check starts a separate Caddy process on a temporary loopback port, proxies to a closed loopback port, and sends only synthetic query/header markers. It requires the 502 and its error log to remain observable while all four markers are absent from runtime and access logs. It does not change the production Caddy process or configuration.
+
+On the inspected OCI host, Caddy stdout goes to journald and stderr is inherited by journald. Journald forwards to rsyslog, which writes `/var/log/syslog`; logrotate retains four weekly compressed rotations. Journald uses its systemd size defaults because no explicit `SystemMaxUse` or `MaxRetentionSec` override was present. The journal directory is `root:systemd-journal` mode `2755`, and `/var/log/syslog` is `syslog:adm` mode `0640`; members of `adm` can read the forwarded proxy errors. The inspected `systemd-journal` group had no direct members. Recheck actual configuration and reader-group membership before any query-token probe.
+
+For a separate retention review, a candidate journal policy is `SystemMaxUse=256M` plus `MaxRetentionSec=30day` in a root-owned journald drop-in. These values are suggestions only; they are not installed by this repository change. Review the disk budget, expected log volume, and all journal readers before applying a host policy.
+
 After reviewing the staged files, validate the unit and Caddy configuration, then reload and start them:
 
 ```sh
