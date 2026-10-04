@@ -628,7 +628,7 @@ class LoadedContractTest(unittest.TestCase):
         argv = '/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=' + role + ' /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js'
         return {'User': 'fg-index', 'Group': 'fg-index', 'ControlPID': '0',
                 'FragmentPath': '/etc/systemd/system/fg-index-api.service',
-                'Requires': 'sysinit.target fg-index-api-boot-guard.service' if guard else 'sysinit.target',
+                'Requires': 'sysinit.target system.slice fg-index-api-boot-guard.service' if guard else 'sysinit.target system.slice',
                 'After': 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice fg-index-api-boot-guard.service' if guard else 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice',
                 'WorkingDirectory': '/opt/fg-index/current/apps/api-server',
                 'EnvironmentFiles': '/etc/fg-index/api.env (ignore_errors=no)',

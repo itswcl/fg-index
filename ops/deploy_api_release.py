@@ -45,6 +45,7 @@ API_WORKING_DIRECTORY = '/opt/fg-index/current/apps/api-server'
 API_NODE_EXECUTABLE = '/opt/nodejs/current/bin/node'
 SYSTEMD_API_AFTER = {'network-online.target', 'sysinit.target', 'basic.target',
                     'systemd-journald.socket', 'systemd-tmpfiles-setup.service', 'system.slice'}
+SYSTEMD_API_REQUIRES = {'sysinit.target', 'system.slice'}
 ROLE_LOCK = ROLE_STAGE / "role-deployment.lock"
 OWNER_RECEIPT = ROLE_STAGE / "scheduler-owner-receipt.json"
 BOOT_RECEIPT = ROLE_STAGE / "boot-enable-receipt.json"
@@ -202,7 +203,7 @@ def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
     require(props['WorkingDirectory'] == API_WORKING_DIRECTORY, 'loaded working directory drift')
     require(props['EnvironmentFiles'] == '/etc/fg-index/api.env (ignore_errors=no)', 'loaded environment file drift')
-    expected_requires = {'sysinit.target'} | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_requires)
+    expected_requires = SYSTEMD_API_REQUIRES | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_requires)
     expected_after = SYSTEMD_API_AFTER | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_after)
     loaded_requires = set(props['Requires'].split())
     loaded_after = set(props['After'].split())
@@ -448,7 +449,7 @@ class Host:
                 if len(fields) >= 5:
                     target = re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), fields[4])
                     targets.add(target)
-        base_requires = {'sysinit.target', BOOT_GUARD}
+        base_requires = SYSTEMD_API_REQUIRES | {BOOT_GUARD}
         base_after = SYSTEMD_API_AFTER | {BOOT_GUARD}
         required = set(requires.split()) - base_requires
         ordered = set(after.split()) - base_after
