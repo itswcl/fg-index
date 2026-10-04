@@ -26,6 +26,9 @@ jobs:
       - name: Test VM release poller
         run: python -m unittest discover -s ops/release-poller -p 'test_*.py'
 
+      - name: Test offline root release promoter
+        run: python -m unittest ops.tests.test_promote_api_release -v
+
       - name: Test API release publisher safety
         run: python3 -m unittest ops.tests.test_publish_api_release -v
 

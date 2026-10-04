@@ -19,7 +19,7 @@ The release must already be immutable. An absent release or tag is treated as â€
 
 The poller extracts the verified archive into a temporary directory under `/var/lib/fg-index-release-poller/staged`, checks the embedded `RELEASE-MANIFEST.txt`, then atomically renames the result to `/var/lib/fg-index-release-poller/staged/<SHA>`. It uses Python's safe `tarfile` data filter, rejects archive paths that escape the destination, rejects special files, caps the archive at 100,000 filesystem entries, and limits logical member sizes to 4 GiB. Before extraction, it rounds each regular file to the actual filesystem block size, budgets an additional block for each extracted path (including implicit directories), and requires 10,000 free inodes beyond the candidate's path count. The dedicated poller user and private primary group own staged files; directories are mode `0700` and regular files are mode `0600` (with owner execute bits preserved). The API service cannot read or alter this quarantine, and the poller has no writable path under `/opt/fg-index`.
 
-A separate reviewed promotion task must independently verify a candidate and copy it into the root-owned `/opt/fg-index/releases/<SHA>` tree before an operator can change the root-owned `/opt/fg-index/current` symlink. The poller-writable marker is not proof for that trust boundary. No privileged promotion unit is installed, the poller has no sudo or `/opt` access, and this poller does not activate a release.
+The separate manual helper in `ops/promote_api_release.py` independently verifies a candidate and copies it into the root-owned `/opt/fg-index/releases/<SHA>` tree. Its offline verification uses a separately provisioned, root-owned Sigstore trusted-root file and does not treat the poller-writable marker as proof. No privileged promotion unit is installed, the poller has no sudo or `/opt` access, and neither the helper nor this poller activates a release. Host installation and any promotion require their own review and authorization.
 
 Each finalized candidate also retains the evidence that the online verification used:
 
@@ -58,7 +58,7 @@ No runner or deploy credential is needed. REST and release downloads are public.
 - A private systemd state directory at `/var/lib/fg-index-release-poller`, writable only by the poller service
 - The poller script installed at `/usr/local/libexec/fg-index-release-poller/poller.py`
 
-The CI test uses only local fixtures and mocks. It does not make GitHub, VM, or staging requests.
+The poller and promoter CI tests use local fixtures and mocked command execution. They do not make GitHub, VM, or staging requests. Promoter tests cover offline verifier arguments, untrusted evidence, capacity reserves, archive traversal and symlink cases, and inactive atomic installation.
 
 ## Install after review
 
@@ -103,3 +103,5 @@ python3.12 -m unittest discover -s ops/release-poller -p 'test_*.py'
 ```
 
 The verifier options and release fields follow the [GitHub CLI attestation verification manual](https://cli.github.com/manual/gh_attestation_verify), [GitHub artifact attestation documentation](https://docs.github.com/en/actions/concepts/security/artifact-attestations), and [GitHub Releases REST API](https://docs.github.com/en/rest/releases/releases?apiVersion=latest).
+
+Offline trust-root provisioning and the separate inactive promotion procedure are documented in [`ops/oci/README.md`](../oci/README.md#offline-promotion-into-the-inactive-release-tree).
