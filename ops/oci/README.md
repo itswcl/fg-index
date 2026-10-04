@@ -37,6 +37,54 @@ Create the `fg-index` system group and a same-named system user with home `/var/
 
 Keep `/opt/fg-index`, its `releases` directory, each release, and `current` root-owned and group-readable by `fg-index` (directories `0750`, regular files `0640`, preserving executable bits on any executable artifact files). Extract each verified archive into `/opt/fg-index/releases/<main-sha>`, set ownership and permissions, then atomically point `/opt/fg-index/current` at that release. The service account must not be able to modify application code.
 
+## Nonsecret host bootstrap
+
+Preflight rejects shared primary group membership, UID/GID aliases, supplementary groups, and extended POSIX access or default ACLs on protected paths. Linux ACL metadata inspection must be available. It checks both systemd's loaded state and on-disk exact-name, dash-prefix, and service-wide drop-in directories. A bounded inventory of at most 2,048 installed or loaded units checks activation dependencies, matching timer/socket/path units, and pending jobs before changes and after reload. Missing inspection properties or oversized inventories fail closed. These checks describe the inspected state; subsequent administrator changes require a separate review.
+
+The reviewed `ops/bootstrap_oci_host.py` prepares only the existing VM's nonsecret account, directory, systemd-unit, and promoter-helper layout. On a trusted workstation, export these three files directly from the approved full `main` commit object, rather than copying a mutable working tree:
+
+```text
+ops/bootstrap_oci_host.py
+ops/oci/fg-index-api.service
+ops/promote_api_release.py
+```
+
+```sh
+mkdir bootstrap-source
+approved_bootstrap_sha=REPLACE_WITH_APPROVED_FULL_MAIN_SHA
+git archive --format=tar --output=bootstrap-source.tar "$approved_bootstrap_sha" \
+  ops/bootstrap_oci_host.py ops/oci/fg-index-api.service ops/promote_api_release.py
+tar -xf bootstrap-source.tar -C bootstrap-source
+(cd bootstrap-source && sha256sum ops/bootstrap_oci_host.py \
+  ops/oci/fg-index-api.service ops/promote_api_release.py > SHA256SUMS)
+```
+
+Keep the approved SHA and checksum list on the trusted workstation as the independent reference. Transfer the files plus `SHA256SUMS`; compare the received checksum list to that reference and verify all three files before staging. The script also pins the reviewed unit and promoter hashes, so changing either dependency requires a reviewed update to `SOURCE_HASHES` and its regression test.
+
+Transfer them over the already approved host access path, preserving these relative paths in a temporary checkout directory. Do not fetch code directly from the VM, and do not accept an SSH host key learned from a network observation. After comparing checksums to the independent reference, stage them as follows from the transferred directory:
+
+```sh
+sha256sum -c SHA256SUMS
+sudo install -d -o root -g root -m 0755 /root/fg-index-host-bootstrap/ops/oci
+sudo install -o root -g root -m 0755 ops/bootstrap_oci_host.py /root/fg-index-host-bootstrap/ops/
+sudo install -o root -g root -m 0755 ops/promote_api_release.py /root/fg-index-host-bootstrap/ops/
+sudo install -o root -g root -m 0644 ops/oci/fg-index-api.service /root/fg-index-host-bootstrap/ops/oci/
+sudo install -o root -g root -m 0644 SHA256SUMS /root/fg-index-host-bootstrap/
+sudo sh -c 'cd /root/fg-index-host-bootstrap && sha256sum -c SHA256SUMS'
+```
+
+Recompare the staged checksum list to the trusted workstation reference before running the root script. Do not run `sudo` against a user-writable checkout. The script checks all source ancestors and files for root ownership and rejects symlinks or group/other writes before reading bounded source snapshots. Its dependent-file digests must match the pinned reviewed values.
+
+Run the default dry run first and review its output:
+
+```sh
+sudo python3.12 /root/fg-index-host-bootstrap/ops/bootstrap_oci_host.py
+```
+
+Only a separately approved apply step runs `sudo python3.12 /root/fg-index-host-bootstrap/ops/bootstrap_oci_host.py --apply`. Apply preflights the whole layout, serializes with a private root-owned `/run/fg-index-host-bootstrap.lock`, then rechecks before mutations. It creates the `fg-index` system group and `nologin` user, root-owned release/configuration directories and promoter install directory, installs the reviewed API unit and promoter helper without overwriting existing files, reloads systemd, then verifies the unit remains disabled and inactive. The unit includes an install target for a later separately approved activation. Reruns converge only when existing identities, files, and protected paths match the reviewed layout; unexpected state stops the operation before writes. Service inspection is global and rejects vendor/transient units, drop-ins, and active/enabled state. The bootstrap does not create or read `api.env`, stage or promote a release, create `current`, start a timer, change scheduler ownership, modify Caddy or firewall rules, or change OCI settings. A failed apply can leave completed preparation steps; review the failure before retrying, and do not use bootstrap to repair conflicting state.
+
+This prepares only host filesystem and unit configuration. Installing the Node 24 runtime, creating secret values, provisioning the Sigstore trust root and GitHub CLI, staging an exact trusted release, activating the service, and any Pages or scheduler cutover remain separate reviewed operations. Starting the service before those prerequisites are complete is unsupported.
+
 The release poller described in PR #188 stages verified candidates under `/var/lib/fg-index-release-poller/staged` with its own service identity. It is not a member of group `fg-index` and has no write access under `/opt/fg-index`. The manual helper described below is separate code; this runbook update does not install it on the VM or grant the poller access to the deployment tree.
 
 ## Offline promotion into the inactive release tree
@@ -134,7 +182,7 @@ Keep Render's scheduler active while OCI starts with schedulers disabled so two 
 
 ## Host firewall correction (separate guarded operation)
 
-The read-only audit found the host's IPv4 nftables INPUT policy set to `accept` with no deny rule; UFW is absent. This does not describe every IPv6 or chained rule, so inspect the complete live and persistent IPv4/IPv6 ruleset and the active firewall service before planning a correction. OCI security lists/NSGs remain a separate layer. Do not widen or otherwise change OCI SSH ingress as part of this work.
+The October 3 read-only audit found an IPv4 nftables INPUT policy of `accept` with an explicit terminal `REJECT`; effective ingress was restricted to established traffic, ICMP, loopback, SSH, and TCP 80/443. IPv6 INPUT had policy `accept`, no global IPv6 address was present, and `netfilter-persistent` was active and enabled. Reinspect the complete live and persistent rules before relying on those observations or planning a correction. A policy label alone does not describe effective access. OCI security lists/NSGs remain a separate layer. Do not widen or otherwise change OCI SSH ingress as part of this work.
 
 The target host policy is default-deny inbound with explicit allowances for loopback, established/related traffic, SSH only from the already-approved source CIDR(s), Caddy on TCP 80/443, and required ICMP/ICMPv6 or DHCP traffic. Keep outbound policy unchanged and do not allow inbound 8080. Preserve existing OCI and host-managed rules; do not flush the whole nftables ruleset. This PR contains no host-specific firewall configuration and changes no SSH rules.
 

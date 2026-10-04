@@ -29,6 +29,12 @@ jobs:
       - name: Test offline root release promoter
         run: python -m unittest ops.tests.test_promote_api_release -v
 
+      - name: Test inactive OCI host bootstrap
+        run: python -m unittest ops.tests.test_bootstrap_oci_host -v
+
+      - name: Validate API systemd unit
+        run: systemd-analyze verify ops/oci/fg-index-api.service
+
       - name: Test API release publisher safety
         run: python3 -m unittest ops.tests.test_publish_api_release -v
 
