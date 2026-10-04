@@ -102,10 +102,10 @@ else:
             calls, starts, fail = root / 'guard.calls', root / 'api.starts', root / 'fail.guard'
             script.write_text("""import pathlib,sys
 mode,calls,starts,fail=sys.argv[1:]
-calls=pathlib.Path(calls);calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
 if mode=='guard':
+ calls=pathlib.Path(calls);calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
  raise SystemExit(1 if pathlib.Path(fail).exists() else 0)
-pathlib.Path(starts).write_text(pathlib.Path(starts).read_text()+'x' if pathlib.Path(starts).exists() else 'x')
+starts=pathlib.Path(starts);starts.write_text(starts.read_text()+'x' if starts.exists() else 'x')
 """)
             guard_unit.write_text('[Unit]\nDescription=Isolated guard fixture\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 ' + str(script) + ' guard ' + str(calls) + ' ' + str(starts) + ' ' + str(fail) + '\n')
             api_unit.write_text('[Unit]\nDescription=Isolated API fixture\nRequires=' + guard_name + '\nAfter=' + guard_name + '\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 ' + str(script) + ' api ' + str(calls) + ' ' + str(starts) + ' ' + str(fail) + '\n')
