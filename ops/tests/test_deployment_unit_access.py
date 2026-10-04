@@ -70,7 +70,8 @@ class UnitAccessTest(unittest.TestCase):
             host = Host.__new__(Host)
             props = host.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart',
                                            'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
-            validate_loaded_unit(props, {'enabled': False, 'generation': 1}, boot_guard_enabled=True)
+            validate_loaded_unit(props, {'enabled': False, 'generation': 1}, boot_guard_enabled=True,
+                                 automatic_mount_requires=host.automatic_api_mount_requires(props['Requires']))
         finally:
             dropin_path.unlink(missing_ok=True)
             api_path.unlink(missing_ok=True)
