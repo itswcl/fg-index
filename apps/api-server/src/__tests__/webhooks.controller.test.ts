@@ -10,6 +10,7 @@ import {
 } from "../controllers/webhooks.controller.js";
 import { prisma } from "../services/db.js";
 import * as delivery from "../services/webhookDelivery.js";
+import { WebhookDeliveryError } from "../services/webhookDestination.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const findManySpy = vi.spyOn(prisma.webhook, "findMany") as unknown as any;
@@ -318,13 +319,22 @@ describe("testWebhookById", () => {
     findFirstSpy.mockResolvedValue(
       row({ id: "wh-1", type: "slack", url: "https://example.com/h" })
     );
-    deliverSpy.mockRejectedValue(new Error("boom"));
+    deliverSpy.mockRejectedValue(new Error("https://example.com/secret-token"));
     const res = mockRes();
     await testWebhookById(
       mockReq({ userId: USER, params: { id: "wh-1" } }),
       res
     );
     expect(res._status).toBe(502);
-    expect(res._body).toMatchObject({ code: "WEBHOOK_DELIVERY_FAILED" });
+    expect(res._body).toEqual({ ok: false, error: "Webhook delivery failed; check the destination and try again", code: "WEBHOOK_DELIVERY_FAILED" });
   });
+  it("returns an actionable safe policy error without destination secrets", async () => {
+    findFirstSpy.mockResolvedValue(row({ id: "wh-1", type: "generic", url: "http://example.com/token" }));
+    deliverSpy.mockRejectedValue(new WebhookDeliveryError("Webhook destination must use HTTPS on port 443 without credentials or a fragment"));
+    const res = mockRes();
+    await testWebhookById(mockReq({ userId: USER, params: { id: "wh-1" } }), res);
+    expect(res._status).toBe(502);
+    expect(res._body).toMatchObject({ ok: false, error: "Webhook destination must use HTTPS on port 443 without credentials or a fragment" });
+  });
+
 });

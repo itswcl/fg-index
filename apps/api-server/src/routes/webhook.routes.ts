@@ -1,6 +1,5 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { testWebhook } from "../controllers/webhook.controller.js";
 import {
   getMyWebhook,
   upsertMyWebhook,
@@ -14,7 +13,6 @@ import {
   deleteWebhook,
   testWebhookById,
 } from "../controllers/webhooks.controller.js";
-import { apiKeyMiddleware } from "../middlewares/apiKey.js";
 import { authMiddleware } from "../middlewares/auth.js";
 
 const webhookTestRateLimiter = rateLimit({
@@ -30,9 +28,6 @@ const webhookTestRateLimiter = rateLimit({
 });
 
 const router = Router();
-
-// Legacy ad-hoc test endpoint (apiKey-gated) — kept for internal/dev usage.
-router.post("/test", webhookTestRateLimiter, apiKeyMiddleware, testWebhook);
 
 // Legacy single-webhook alias (JWT-gated). MUST be registered before
 // the /:id routes below or Express will bind "me" as the :id param.

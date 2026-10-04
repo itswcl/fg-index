@@ -1,109 +1,40 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { deliverWebhook } from "../services/webhookDelivery.js";
-import type { WebhookConfig } from "@shared/types";
+import { postWebhookJson } from "../services/webhookTransport.js";
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+vi.mock("../services/webhookTransport.js", () => ({ postWebhookJson: vi.fn() }));
+const post = vi.mocked(postWebhookJson);
+beforeEach(() => { post.mockReset().mockResolvedValue(undefined); });
 
-describe("deliverWebhook()", () => {
-  const mockFetch = vi.fn();
-
-  beforeEach(() => {
-    mockFetch.mockResolvedValue(new Response(null, { status: 200, statusText: "OK" }));
-    vi.stubGlobal("fetch", mockFetch);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    mockFetch.mockReset();
-  });
-
-  it("Discord: posts to webhook URL with correct content and username", async () => {
-    const config: WebhookConfig = {
-      type: "discord",
-      url: "https://discord.com/api/webhooks/123/abc",
-    };
-
-    await deliverWebhook(config, "AlertName", "Fear & Greed is 8 (< 10)");
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://discord.com/api/webhooks/123/abc");
-    expect(options.method).toBe("POST");
-    expect(options.headers).toEqual({ "Content-Type": "application/json" });
-    const body = JSON.parse(options.body as string);
-    expect(body).toEqual({
-      content: "🔔 AlertName: Fear & Greed is 8 (< 10)",
-      username: "fg-index",
+describe("webhook provider payload compatibility", () => {
+  it("Discord preserves content and username", async () => {
+    await deliverWebhook({ type: "discord", url: "https://discord.com/api/webhooks/123/abc" }, "Alert", "message");
+    expect(post).toHaveBeenCalledWith("https://discord.com/api/webhooks/123/abc", {
+      content: "🔔 Alert: message", username: "fg-index",
     });
   });
-
-  it("Slack: posts to webhook URL with correct text", async () => {
-    const config: WebhookConfig = {
-      type: "slack",
-      url: "https://hooks.slack.com/services/T000/B000/xxxx",
-    };
-
-    await deliverWebhook(config, "My Alert", "VIX is 32.1 (> 30)");
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://hooks.slack.com/services/T000/B000/xxxx");
-    expect(options.method).toBe("POST");
-    expect(options.headers).toEqual({ "Content-Type": "application/json" });
-    const body = JSON.parse(options.body as string);
-    expect(body).toEqual({
-      text: "🔔 My Alert: VIX is 32.1 (> 30)",
+  it("Slack preserves text", async () => {
+    await deliverWebhook({ type: "slack", url: "https://hooks.slack.com/services/T/B/token" }, "Alert", "message");
+    expect(post).toHaveBeenCalledWith("https://hooks.slack.com/services/T/B/token", { text: "🔔 Alert: message" });
+  });
+  it("Telegram preserves valid token and chat_id/text", async () => {
+    await deliverWebhook({ type: "telegram", botToken: "123456:ABC-DEF", chatId: "-100" }, "Alert", "message");
+    expect(post).toHaveBeenCalledWith("https://api.telegram.org/bot123456:ABC-DEF/sendMessage", {
+      chat_id: "-100", text: "🔔 Alert: message",
     });
   });
-
-  it("Telegram: posts to bot API with correct chat_id and text", async () => {
-    const config: WebhookConfig = {
-      type: "telegram",
-      botToken: "123456:ABC-DEF",
-      chatId: "-100987654321",
-    };
-
-    await deliverWebhook(config, "AlertName", "Fear & Greed is 8 (< 10)");
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      "https://api.telegram.org/bot123456:ABC-DEF/sendMessage"
-    );
-    expect(url).toContain("api.telegram.org/bot");
-    expect(url).toContain("/sendMessage");
-    expect(options.method).toBe("POST");
-    expect(options.headers).toEqual({ "Content-Type": "application/json" });
-    const body = JSON.parse(options.body as string);
-    expect(body).toEqual({
-      chat_id: "-100987654321",
-      text: "🔔 AlertName: Fear & Greed is 8 (< 10)",
+  it("Telegram token cannot inject a URL query or fragment", async () => {
+    await deliverWebhook({ type: "telegram", botToken: "123:abc?x/#", chatId: "-100" }, "Alert", "message");
+    const url = new URL(post.mock.calls[0][0]);
+    expect(url.hostname).toBe("api.telegram.org");
+    expect(url.search).toBe("");
+    expect(url.hash).toBe("");
+    expect(url.pathname).toContain("%3F");
+  });
+  it("generic preserves structured alert payload", async () => {
+    await deliverWebhook({ type: "generic", url: "https://example.com/hook" }, "Alert", "message");
+    expect(post).toHaveBeenCalledWith("https://example.com/hook", {
+      alertName: "Alert", message: "message", text: "🔔 Alert: message",
     });
-  });
-
-  it("throws when fetch rejects with a network error", async () => {
-    mockFetch.mockRejectedValue(new Error("Network error"));
-
-    const config: WebhookConfig = {
-      type: "discord",
-      url: "https://discord.com/api/webhooks/fail/test",
-    };
-
-    await expect(
-      deliverWebhook(config, "Alert", "some message")
-    ).rejects.toThrow("Network error");
-  });
-
-  it("throws when the HTTP response is not ok", async () => {
-    mockFetch.mockResolvedValue(new Response(null, { status: 400, statusText: "Bad Request" }));
-
-    const config: WebhookConfig = {
-      type: "slack",
-      url: "https://hooks.slack.com/services/T000/B000/xxxx",
-    };
-
-    await expect(
-      deliverWebhook(config, "Alert", "some message")
-    ).rejects.toThrow("HTTP 400");
   });
 });

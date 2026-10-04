@@ -290,7 +290,6 @@ These endpoints are API-key gated in production and skip API-key enforcement whe
 | `/api/spx` | `GET` | Latest S&P 500 scheduler cache |
 | `/api/quote/:ticker` | `GET` | Cached custom quote snapshot; enqueues refresh |
 | `/api/quote/batch?symbols=AAPL,MSFT` | `GET` | Up to 12 deduped quote snapshots in one response; enqueues refresh for all |
-| `/api/webhooks/test` | `POST` | Legacy ad-hoc webhook test body, API-key gated and rate-limited |
 | `/api/health` | `GET` | Scheduler and quote-refresh health |
 | `/health` | `GET` | Backward-compatible health alias |
 
@@ -363,6 +362,25 @@ Webhook destinations support:
 | Slack | Incoming webhook URL |
 | Telegram | Bot token and chat ID |
 | Generic | Webhook URL; receives JSON |
+
+Webhook delivery accepts HTTPS destinations on port 443 without URL credentials or fragments.
+Every delivery resolves and checks both IPv4 and IPv6 answers, rejects private and
+special-purpose addresses (including mixed public/private DNS answers), and pins
+its TLS socket to a validated public IP while checking the original hostname's
+certificate. Redirects are rejected; use the destination's final HTTPS URL.
+This applies to Discord, Slack, Telegram, generic hooks, and saved-webhook tests.
+Existing HTTP, private, custom-port, credential-bearing, or redirecting destinations
+must be updated before they can deliver. Delivery/test errors give a fixed safe
+message without echoing destination URLs or bot tokens.
+
+The service allows four active deliveries and at most 64 waiting calls; an
+8-second deadline includes waiting, DNS, connection, and response completion.
+Payloads are capped at 16 KiB, response headers at 16 KiB, and response bodies at
+64 KiB. Over-budget or failed deliveries remain best-effort and are not retried.
+The removed ad-hoc `POST /api/webhooks/test` route is unavailable; use a saved,
+JWT-authenticated webhook test route. These limits contain resource use but do
+not make arbitrary public webhook recipients trusted or prevent notification spam.
+
 
 ---
 
