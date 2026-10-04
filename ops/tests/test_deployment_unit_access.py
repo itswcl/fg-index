@@ -25,8 +25,8 @@ class UnitAccessTest(unittest.TestCase):
         recovery.read(UNITS / 'fg-index-deployment-recovery.service')
         self.assertEqual('read-only', recovery['Service']['ProtectHome'])
         self.assertEqual('root', recovery['Service']['User'])
-        self.assertTrue({str(ROLE_STAGE), '/var/lib/fg-index-deployment', '/opt/fg-index', '/opt/nodejs'} <=
-                        set(recovery['Service']['ReadWritePaths'].split()))
+        self.assertEqual({str(ROLE_STAGE), '/var/lib/fg-index-deployment', '/opt/fg-index', '/opt/nodejs'},
+                         set(recovery['Service']['ReadWritePaths'].split()))
         self.assertEqual({'/opt/fg-index/releases', '/opt/nodejs/releases'},
                          set(recovery['Service']['ReadOnlyPaths'].split()))
         self.assertEqual('10min', recovery['Service']['TimeoutStartSec'])
@@ -39,6 +39,7 @@ class UnitAccessTest(unittest.TestCase):
         dropin.read(UNITS / '20-deployment-boot-guard.conf')
         self.assertEqual('fg-index-api-boot-guard.service', dropin['Unit']['Requires'])
         self.assertEqual('fg-index-api-boot-guard.service', dropin['Unit']['After'])
+        self.assertEqual('/opt/nodejs/current/bin/node', dropin['Unit']['RequiresMountsFor'])
         guard = configparser.ConfigParser(interpolation=None)
         guard.read(UNITS / 'fg-index-api-boot-guard.service')
         self.assertEqual('oneshot', guard['Service']['Type'])
@@ -70,8 +71,9 @@ class UnitAccessTest(unittest.TestCase):
             host = Host.__new__(Host)
             props = host.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart',
                                            'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+            mount_requires, mount_after = host.automatic_api_mount_dependencies(props['Requires'], props['After'])
             validate_loaded_unit(props, {'enabled': False, 'generation': 1}, boot_guard_enabled=True,
-                                 automatic_mount_requires=host.automatic_api_mount_requires(props['Requires']))
+                                 automatic_mount_requires=mount_requires, automatic_mount_after=mount_after)
         finally:
             dropin_path.unlink(missing_ok=True)
             api_path.unlink(missing_ok=True)

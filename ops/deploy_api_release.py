@@ -42,6 +42,9 @@ NODE_RELEASES = Path("/opt/nodejs/releases")
 NODE_CURRENT = Path("/opt/nodejs/current")
 ROLE_STAGE = Path("/root/fg-index-api-activation-fa654555b1692111af882f45")
 API_WORKING_DIRECTORY = '/opt/fg-index/current/apps/api-server'
+API_NODE_EXECUTABLE = '/opt/nodejs/current/bin/node'
+SYSTEMD_API_AFTER = {'network-online.target', 'sysinit.target', 'basic.target',
+                    'systemd-journald.socket', 'systemd-tmpfiles-setup.service', 'system.slice'}
 ROLE_LOCK = ROLE_STAGE / "role-deployment.lock"
 OWNER_RECEIPT = ROLE_STAGE / "scheduler-owner-receipt.json"
 BOOT_RECEIPT = ROLE_STAGE / "boot-enable-receipt.json"
@@ -194,18 +197,17 @@ def node_target(version):
     return NODE_RELEASES / ('node-' + version)
 
 
-def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_requires=()):
+def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_requires=(), automatic_mount_after=()):
     require(props['User'] == props['Group'] == 'fg-index' and props['ControlPID'] == '0', 'unit identity/control process drift')
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
     require(props['WorkingDirectory'] == API_WORKING_DIRECTORY, 'loaded working directory drift')
     require(props['EnvironmentFiles'] == '/etc/fg-index/api.env (ignore_errors=no)', 'loaded environment file drift')
     expected_requires = {'sysinit.target'} | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_requires)
-    expected_after = {'network-online.target', 'sysinit.target', 'basic.target'} | ({BOOT_GUARD} if boot_guard_enabled else set())
+    expected_after = SYSTEMD_API_AFTER | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_after)
     loaded_requires = set(props['Requires'].split())
     loaded_after = set(props['After'].split())
-    forbidden_ordering = {'fg-index-deployment.service', 'fg-index-deployment-watchdog.service', RECOVERY}
     require(loaded_requires == expected_requires and
-            expected_after <= loaded_after and not (loaded_after & forbidden_ordering),
+            loaded_after == expected_after,
             'boot authorization dependency drift')
     drops = ' '.join(str(p) for p in (([ROLE_OVERRIDE] if role['enabled'] else []) +
                                       ([BOOT_GUARD_DROPIN] if boot_guard_enabled else [])))
@@ -375,8 +377,9 @@ class Host:
             if name.endswith('.timer'):
                 require(props['ActiveState'] == 'inactive', 'competing poller timer')
         props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+        mount_requires, mount_after = self.automatic_api_mount_dependencies(props['Requires'], props['After'])
         validate_loaded_unit(props, self.role, self.boot_guard_enabled,
-                             self.automatic_api_mount_requires(props['Requires']))
+                             mount_requires, mount_after)
         self.poller_contract()
 
     def retention(self, store):
@@ -425,7 +428,7 @@ class Host:
         require(not re.search(r'(?im)^[ \t]*Environment(?:File)?[ \t]*=', content), 'unit source configures an environment')
 
     def properties(self, unit, names, allow_missing_empty=()):
-        text = self.command(['/usr/bin/systemctl', 'show', '--all', unit, *['--property=' + n for n in names]], 5)
+        text = self.command(['/usr/bin/systemctl', 'show', '--all', *['--property=' + n for n in names], '--', unit], 5)
         values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
         missing = set(names) - set(values)
         require(not (set(values) - set(names)) and missing <= set(allow_missing_empty), 'incomplete systemd properties')
@@ -436,8 +439,8 @@ class Host:
             values[name] = ''
         return values
 
-    def automatic_api_mount_requires(self, requires):
-        """Return only actual mount dependencies covering the fixed API working directory."""
+    def automatic_api_mount_dependencies(self, requires, after):
+        """Return systemd mount dependencies that cover only fixed API paths."""
         targets = set()
         with open('/proc/self/mountinfo', encoding='utf-8') as reader:
             for line in reader:
@@ -445,16 +448,27 @@ class Host:
                 if len(fields) >= 5:
                     target = re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), fields[4])
                     targets.add(target)
-        automatic = set()
-        for unit in set(requires.split()) - {'sysinit.target', BOOT_GUARD}:
-            require(unit.endswith('.mount'), 'unexpected API Requires dependency: ' + unit)
+        base_requires = {'sysinit.target', BOOT_GUARD}
+        base_after = SYSTEMD_API_AFTER | {BOOT_GUARD}
+        required = set(requires.split()) - base_requires
+        ordered = set(after.split()) - base_after
+        require(required <= ordered, 'API mount requirement lacks matching ordering dependency')
+        candidates = required | ordered
+        automatic_after = set()
+        automatic_requires = set()
+        permitted_paths = (API_WORKING_DIRECTORY, API_NODE_EXECUTABLE, '/tmp', '/var/tmp')
+        required_paths = (API_WORKING_DIRECTORY, API_NODE_EXECUTABLE)
+        for unit in candidates:
+            require(unit.endswith('.mount'), 'unexpected API dependency: ' + unit)
             mount = self.properties(unit, ['Where'])['Where']
-            require(mount in targets and
-                    (mount == '/' or API_WORKING_DIRECTORY == mount or
-                     API_WORKING_DIRECTORY.startswith(mount.rstrip('/') + '/')),
-                    'API Requires mount does not cover its fixed working directory')
-            automatic.add(unit)
-        return automatic
+            covers = lambda paths: any(mount == '/' or path == mount or path.startswith(mount.rstrip('/') + '/') for path in paths)
+            require(mount in targets and covers(permitted_paths),
+                    'API dependency mount does not cover an allowed fixed path')
+            automatic_after.add(unit)
+            if unit in required:
+                require(covers(required_paths), 'API Requires mount does not cover its executable or working directory')
+                automatic_requires.add(unit)
+        return automatic_requires, automatic_after
 
     def links(self):
         values = []
@@ -560,8 +574,9 @@ class Host:
         links = self.links()
         require(all(v in {a, b} for v, a, b in zip(links, self.targets(previous), self.targets(candidate))), 'unknown links; cannot stop unowned process')
         props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+        mount_requires, mount_after = self.automatic_api_mount_dependencies(props['Requires'], props['After'])
         validate_loaded_unit(props, self.role, self.boot_guard_enabled,
-                             self.automatic_api_mount_requires(props['Requires']))
+                             mount_requires, mount_after)
         pid = self.properties(API, ['MainPID'])['MainPID']
         if pid != '0':
             require(pid.isdigit(), 'invalid owned PID')

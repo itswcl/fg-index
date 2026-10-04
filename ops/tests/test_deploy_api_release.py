@@ -629,7 +629,7 @@ class LoadedContractTest(unittest.TestCase):
         return {'User': 'fg-index', 'Group': 'fg-index', 'ControlPID': '0',
                 'FragmentPath': '/etc/systemd/system/fg-index-api.service',
                 'Requires': 'sysinit.target fg-index-api-boot-guard.service' if guard else 'sysinit.target',
-                'After': 'network-online.target sysinit.target basic.target fg-index-api-boot-guard.service' if guard else 'network-online.target sysinit.target basic.target',
+                'After': 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice fg-index-api-boot-guard.service' if guard else 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice',
                 'WorkingDirectory': '/opt/fg-index/current/apps/api-server',
                 'EnvironmentFiles': '/etc/fg-index/api.env (ignore_errors=no)',
                 'DropInPaths': ' '.join(x for x, include in (
@@ -685,6 +685,7 @@ class LoadedContractTest(unittest.TestCase):
             ('Requires', lambda v: v + ' fg-index-api-boot-guard.service'),
             ('Requires', lambda v: v + ' recovery.service'),
             ('After', lambda v: v.replace('network-online.target', 'unknown.service')),
+            ('After', lambda v: v + ' unrelated.service'),
         ]
         for field, change in modifications:
             with self.subTest(field=field):
