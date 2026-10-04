@@ -317,7 +317,7 @@ class Host:
     def retire_quarantine(self, generation):
         require(type(generation) is int and generation > 0, 'invalid retirement generation')
         name = 'fg-index-release-retire@' + str(generation) + '.service'
-        props = self.properties(name, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec', 'ActiveState', 'MainPID', 'ControlPID'])
+        props = self.properties(name, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec', 'ActiveState', 'MainPID', 'ControlPID'], allow_missing_empty=('EnvironmentFiles',))
         argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-release-poller/poller.py --root /var/lib/fg-index-release-poller --retire-rejected --generation ' + str(generation)
         match = re.fullmatch(r'\{ path=([^;{}]+?) ; argv\[\]=([^;{}]+?) ; ignore_errors=([^;{}]+?) ;[^{}]*\}', props['ExecStart'])
         require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no', 'retirement loaded argv drift')
@@ -328,13 +328,34 @@ class Host:
         require(result == {'ActiveState': 'inactive', 'Result': 'success', 'ExecMainStatus': '0', 'MainPID': '0'}, 'retirement did not finish successfully')
 
     def poller_contract(self):
-        props = self.properties(POLLER, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec'])
+        props = self.properties(POLLER, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec'], allow_missing_empty=('EnvironmentFiles',))
         validate_loaded_poller(props)
 
-    def properties(self, unit, names):
-        text = self.command(['/usr/bin/systemctl', 'show', unit, *['--property=' + n for n in names]], 5)
+    def _verify_empty_environment_contract(self, unit, values):
+        if unit == POLLER:
+            fragment = Path('/etc/systemd/system/fg-index-release-poller.service')
+        elif re.fullmatch(r'fg-index-release-retire@[1-9][0-9]*\.service', unit):
+            fragment = Path('/etc/systemd/system/fg-index-release-retire@.service')
+        else:
+            raise Hold('empty environment compatibility is unsupported for this unit')
+        require(values.get('FragmentPath') == str(fragment) and values.get('DropInPaths') == '', 'empty environment compatibility unit paths drift')
+        trusted(fragment.parent, directory=True)
+        trusted(fragment)
+        pin = self.policy['pins'].get(str(fragment))
+        require(isinstance(pin, str) and DIGEST.fullmatch(pin) and digest_file(fragment) == pin, 'empty environment unit pin drift')
+        content = fragment.read_text()
+        require(not re.search(r'(?im)^[ \t]*Environment(?:File)?[ \t]*=', content), 'unit source configures an environment')
+
+    def properties(self, unit, names, allow_missing_empty=()):
+        text = self.command(['/usr/bin/systemctl', 'show', '--all', unit, *['--property=' + n for n in names]], 5)
         values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
-        require(set(values) == set(names), 'incomplete systemd properties')
+        missing = set(names) - set(values)
+        require(not (set(values) - set(names)) and missing <= set(allow_missing_empty), 'incomplete systemd properties')
+        if allow_missing_empty:
+            self._verify_empty_environment_contract(unit, values)
+        for name in missing:
+            require(name == 'EnvironmentFiles', 'unsupported absent empty property')
+            values[name] = ''
         return values
 
     def links(self):
