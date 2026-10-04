@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 import json
@@ -12,6 +13,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import poller
+
+TRUSTED_ROOT_VALIDATOR = poller.validate_trusted_root
 
 
 SOURCE_SHA = "a" * 40
@@ -536,70 +539,141 @@ class ReleasePollerTests(unittest.TestCase):
             with self.assertRaisesRegex(poller.PollError, "unsafe path"):
                 poller.ReleasePoller._extract_archive(archive, destination)
 
+
+
+class PublicAttestationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.archive = self.root / "artifact.tar.gz"
+        self.archive.write_bytes(b"artifact")
+        self.digest = sha256(b"artifact")
+        self.bundle = self.make_bundle()
+        trusted = patch("poller.validate_trusted_root")
+        trusted.start()
+        self.addCleanup(trusted.stop)
+
+    def make_bundle(self, predicate=poller.PREDICATE, digest=None):
+        statement = {"_type": "https://in-toto.io/Statement/v1", "predicateType": predicate,
+                     "subject": [{"name": poller.ARCHIVE_NAME, "digest": {"sha256": digest or self.digest}}]}
+        return {"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "verificationMaterial": {"certificate": {}},
+                "dsseEnvelope": {"payloadType": "application/vnd.in-toto+json",
+                                 "payload": base64.b64encode(json.dumps(statement).encode()).decode(),
+                                 "signatures": [{"sig": "signed-original"}]}}
+
+    def response(self, records=None, raw=None, headers=None, url=None):
+        body = raw if raw is not None else json.dumps({"attestations": records if records is not None else [{"bundle": self.bundle}]}).encode()
+        response = io.BytesIO(body)
+        response.headers = headers or {}
+        response.geturl = lambda: url or f"{poller.API_ROOT}/attestations/sha256:{self.digest}?per_page=30"
+        return response
+
+    @patch("poller.urlopen")
+    def test_public_lookup_skips_release_attestation_and_retains_original_signed_bundle(self, open_url):
+        open_url.return_value = self.response(records=[{"bundle": self.make_bundle("https://in-toto.io/attestation/release/v0.2")}, {"bundle": self.bundle}])
+        bundle = poller.download_attestation_bundle(self.archive, self.digest)
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.full_url, f"{poller.API_ROOT}/attestations/sha256:{self.digest}?per_page=30")
+        self.assertNotIn("Authorization", dict(request.header_items()))
+        self.assertEqual(json.loads(bundle.read_text()), self.bundle)
+
+    @patch("poller.urlopen")
+    def test_rejects_missing_malformed_or_wrong_subject_evidence(self, open_url):
+        cases = [{}, {"attestations": {}}, {"attestations": []}, {"attestations": [None]},
+                 {"attestations": [{"bundle": None}]},
+                 {"attestations": [{"bundle": self.make_bundle(digest="f" * 64)}]},
+                 {"attestations": [{"bundle": self.make_bundle("release")}]},
+                 {"attestations": [{"bundle": {"dsseEnvelope": {"payload": "invalid"}}}]}]
+        for value in cases:
+            with self.subTest(value=value):
+                open_url.return_value = self.response(raw=json.dumps(value).encode())
+                with self.assertRaises(poller.PollError):
+                    poller.download_attestation_bundle(self.archive, self.digest)
+                self.assertFalse((self.root / poller.ATTESTATION_BUNDLE_NAME).exists())
+
+    @patch("poller.urlopen")
+    def test_response_stream_and_retained_bundle_are_bounded(self, open_url):
+        with patch.object(poller, "MAX_ATTESTATION_BUNDLE_BYTES", 64):
+            for headers in ({}, {"Content-Length": "65"}):
+                with self.subTest(headers=headers):
+                    open_url.return_value = self.response(raw=b"x" * 65, headers=headers)
+                    with self.assertRaisesRegex(poller.PollError, "limit"):
+                        poller.download_attestation_bundle(self.archive, self.digest)
+            self.assertFalse((self.root / poller.ATTESTATION_BUNDLE_NAME).exists())
+
+    @patch("poller.urlopen")
+    def test_serialized_retained_bundle_cap_is_independent_of_response_cap(self, open_url):
+        self.bundle["extra"] = "漢" * 1000
+        raw = json.dumps({"attestations": [{"bundle": self.bundle}]}, ensure_ascii=False).encode()
+        open_url.return_value = self.response(raw=raw)
+        with patch.object(poller, "MAX_ATTESTATION_BUNDLE_BYTES", len(raw)):
+            with self.assertRaisesRegex(poller.PollError, "retained.*limit"):
+                poller.download_attestation_bundle(self.archive, self.digest)
+        self.assertFalse((self.root / poller.ATTESTATION_BUNDLE_NAME).exists())
+
+    @patch("poller.urlopen")
+    def test_page_limit_and_missing_evidence_with_more_pages_fail_closed(self, open_url):
+        for records in ([{"bundle": self.bundle}] * 31,
+                        [{"bundle": self.make_bundle("release")}]):
+            open_url.return_value = self.response(records=records, headers={"Link": '<next>; rel="next"'})
+            with self.assertRaises(poller.PollError):
+                poller.download_attestation_bundle(self.archive, self.digest)
+        self.assertEqual(open_url.call_count, 2)
+
+    def test_trusted_root_rejects_symlinks_writable_or_nonroot_files(self):
+        root = self.root / "trusted_root.jsonl"
+        root.write_text("{}")
+        for mode, uid in ((stat.S_IFLNK | 0o644, 0), (stat.S_IFREG | 0o664, 0),
+                          (stat.S_IFREG | 0o644, 501)):
+            with self.subTest(mode=mode, uid=uid):
+                metadata = [SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
+                            SimpleNamespace(st_mode=mode, st_uid=uid)]
+                with patch.object(Path, "lstat", side_effect=metadata):
+                    with self.assertRaises(poller.PollError):
+                        TRUSTED_ROOT_VALIDATOR(root)
+
+    @patch("poller.urlopen")
+    def test_rejects_redirect_and_http_failure(self, open_url):
+        from urllib.error import HTTPError
+        open_url.return_value = self.response(url="https://example.com/evidence")
+        with self.assertRaises(poller.PollError):
+            poller.download_attestation_bundle(self.archive, self.digest)
+        error = HTTPError("url", 403, "rate limited", {}, io.BytesIO())
+        self.addCleanup(error.close)
+        open_url.side_effect = error
+        with self.assertRaisesRegex(poller.PollError, "download failed"):
+            poller.download_attestation_bundle(self.archive, self.digest)
+
+    @patch("poller.urlopen")
     @patch("poller.subprocess.run")
     @patch("poller.shutil.which", return_value="/usr/bin/gh")
-    def test_attestation_cli_downloads_bundle_and_verifies_exact_policy(self, which, run) -> None:
-        captured_env: dict = {}
-
-        def fake_run(command, **kwargs):
-            env = kwargs["env"]
-            captured_env.update(env)
-            self.assertTrue(Path(env["GH_CONFIG_DIR"]).is_dir())
-            self.assertEqual(list(Path(env["GH_CONFIG_DIR"]).iterdir()), [])
-            self.assertEqual(Path(env["GH_CONFIG_DIR"]).parent, Path(env["HOME"]))
-            if command[1:3] == ["attestation", "download"]:
-                bundle = Path(kwargs["cwd"]) / f"sha256:{sha256(b'artifact')}.jsonl"
-                bundle.write_text('{"dsseEnvelope": {}}\n', encoding="utf-8")
-            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
-
-        run.side_effect = fake_run
-        archive = self.root / "artifact.tar.gz"
-        archive.parent.mkdir(parents=True)
-        archive.write_bytes(b"artifact")
-
-        bundle = poller.verify_attestation(archive, SOURCE_SHA)
-
-        download_command = run.call_args_list[0].args[0]
-        command = run.call_args_list[1].args[0]
-        env = captured_env
-        self.assertEqual(download_command[1:3], ["attestation", "download"])
-        self.assertEqual(bundle.name, f"sha256:{sha256(b'artifact')}.jsonl")
+    def test_real_verifier_uses_public_download_and_offline_exact_policy(self, which, run, open_url):
+        open_url.return_value = self.response()
+        run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        bundle = poller.verify_attestation(self.archive, SOURCE_SHA)
+        self.assertEqual(run.call_count, 1)
+        command = run.call_args.args[0]
         self.assertEqual(command[1:3], ["attestation", "verify"])
-        self.assertIn(SOURCE_SHA, command)
-        self.assertIn("refs/heads/main", command)
-        self.assertIn(poller.WORKFLOW, command)
-        self.assertIn(poller.PREDICATE, command)
-        self.assertEqual(command[command.index("--bundle") + 1], str(bundle))
-        self.assertNotIn("GH_TOKEN", env)
-        self.assertNotIn("GITHUB_TOKEN", env)
+        for flag, value in (("--repo", poller.REPO), ("--source-digest", SOURCE_SHA),
+                            ("--source-ref", "refs/heads/main"), ("--signer-workflow", poller.WORKFLOW),
+                            ("--predicate-type", poller.PREDICATE), ("--bundle", str(bundle)),
+                            ("--custom-trusted-root", str(poller.TRUSTED_ROOT))):
+            self.assertEqual(command[command.index(flag) + 1], value)
+        self.assertIn("--deny-self-hosted-runners", command)
+        self.assertNotIn("GH_TOKEN", run.call_args.kwargs["env"])
+        self.assertNotIn("GITHUB_TOKEN", run.call_args.kwargs["env"])
+        self.assertEqual(json.loads(bundle.read_text()), self.bundle)
 
-    def test_attestation_download_cannot_write_past_file_size_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
-            temp = Path(temp_name)
-            archive = temp / "artifact.tar.gz"
-            archive.write_bytes(b"artifact")
-            fake_gh = temp / "fake-gh"
-            fake_gh.write_text(
-                f"#!{sys.executable}\n"
-                "import hashlib\n"
-                "import pathlib\n"
-                "import sys\n"
-                "archive = pathlib.Path(sys.argv[3])\n"
-                "digest = hashlib.sha256(archive.read_bytes()).hexdigest()\n"
-                "bundle = pathlib.Path.cwd() / f'sha256:{digest}.jsonl'\n"
-                "with bundle.open('wb') as output:\n"
-                "    while True:\n"
-                "        output.write(b'x' * (1024 * 1024))\n",
-                encoding="utf-8",
-            )
-            fake_gh.chmod(0o755)
-
-            with patch("poller.shutil.which", return_value=str(fake_gh)):
-                with self.assertRaisesRegex(poller.PollError, "bundle download failed"):
-                    poller.verify_attestation(archive, SOURCE_SHA)
-
-            bundle = temp / f"sha256:{sha256(b'artifact')}.jsonl"
-            self.assertLessEqual(bundle.stat().st_size, poller.MAX_ATTESTATION_BUNDLE_BYTES)
+    @patch("poller.urlopen")
+    @patch("poller.subprocess.run")
+    @patch("poller.shutil.which", return_value="/usr/bin/gh")
+    def test_failed_local_verification_does_not_report_success(self, which, run, open_url):
+        open_url.return_value = self.response()
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="invalid signature")
+        with self.assertRaisesRegex(poller.PollError, "verification failed"):
+            poller.verify_attestation(self.archive, SOURCE_SHA)
 
 
 if __name__ == "__main__":

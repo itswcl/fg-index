@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import fcntl
 import hashlib
 import json
 import os
 import posixpath
 import re
-import resource
 import shutil
 import stat
 import subprocess
@@ -46,19 +47,12 @@ MIN_FREE_BYTES = 8 * 1024**3
 MIN_FREE_INODES = 10_000
 MAX_FINALIZED_CANDIDATES = 3
 RETENTION_POLICY_PATH = Path("/etc/fg-index-release-poller/retention-policy.json")
+TRUSTED_ROOT = Path("/etc/fg-index-release-promoter/trusted_root.jsonl")
+MAX_ATTESTATION_RECORDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ASSET_DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 CHECKSUM_RE = re.compile(r"^([0-9a-f]{64})[ \t]+\*?api-release\.tar\.gz\s*$")
-
-
-def _limit_attestation_file_writes() -> None:
-    """Keep the attestation downloader's regular-file output within its byte cap."""
-    _, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
-    limit = MAX_ATTESTATION_BUNDLE_BYTES
-    if hard_limit != resource.RLIM_INFINITY:
-        limit = min(limit, hard_limit)
-    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 
 
 class PollError(RuntimeError):
@@ -683,11 +677,102 @@ class ReleasePoller:
             raise PollError(f"could not safely extract API archive: {error}") from error
 
 
+def download_attestation_bundle(archive: Path, archive_sha: str) -> Path:
+    """Select one original SLSA bundle from one bounded public REST page.
+
+    Selection examines untrusted payloads; only the offline verifier authenticates
+    them. Missing evidence on this page fails closed; this is not a full inventory.
+    """
+    if not ASSET_DIGEST_RE.fullmatch(f"sha256:{archive_sha}"):
+        raise PollError("invalid archive digest for attestation lookup")
+    url = f"{API_ROOT}/attestations/sha256:{archive_sha}?per_page={MAX_ATTESTATION_RECORDS}"
+    request = Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "fg-index-release-poller/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            if response.geturl() != url:
+                raise PollError("attestation lookup redirected from the exact repository/digest endpoint")
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) > MAX_ATTESTATION_BUNDLE_BYTES:
+                raise PollError("attestation response exceeds its byte limit")
+            body = response.read(MAX_ATTESTATION_BUNDLE_BYTES + 1)
+            if len(body) > MAX_ATTESTATION_BUNDLE_BYTES:
+                raise PollError("attestation response exceeds its byte limit")
+        data = json.loads(body.decode("utf-8"))
+    except PollError:
+        raise
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError, RecursionError) as error:
+        raise PollError(f"public attestation bundle download failed: {error}") from error
+    records = data.get("attestations") if isinstance(data, dict) else None
+    if not isinstance(records, list) or not 1 <= len(records) <= MAX_ATTESTATION_RECORDS:
+        raise PollError("attestation response must contain a bounded nonempty record list")
+    selected = None
+    for record in records:
+        bundle = record.get("bundle") if isinstance(record, dict) else None
+        if not isinstance(bundle, dict):
+            raise PollError("attestation record has no bundle object")
+        envelope = bundle.get("dsseEnvelope")
+        material = bundle.get("verificationMaterial")
+        if (not isinstance(bundle.get("mediaType"), str)
+            or not isinstance(material, dict) or not isinstance(envelope, dict)
+            or envelope.get("payloadType") != "application/vnd.in-toto+json"
+            or not isinstance(envelope.get("payload"), str)
+            or not isinstance(envelope.get("signatures"), list) or not envelope["signatures"]
+            or any(not isinstance(signature, dict) or not isinstance(signature.get("sig"), str)
+                   for signature in envelope["signatures"])):
+            raise PollError("attestation bundle has an invalid signed-envelope shape")
+        try:
+            statement = json.loads(base64.b64decode(envelope["payload"], validate=True).decode("utf-8"))
+        except (ValueError, binascii.Error, RecursionError) as error:
+            raise PollError("attestation bundle contains an invalid statement") from error
+        if not isinstance(statement, dict) or not isinstance(statement.get("subject"), list):
+            raise PollError("attestation statement has an invalid subject list")
+        if any(not isinstance(subject, dict) or not isinstance(subject.get("digest"), dict)
+               for subject in statement["subject"]):
+            raise PollError("attestation statement has an invalid subject")
+        if (statement.get("predicateType") == PREDICATE
+            and any(subject["digest"].get("sha256") == archive_sha for subject in statement["subject"])
+            and selected is None):
+            selected = bundle
+    if selected is None:
+        raise PollError("no matching SLSA build attestation in the bounded public lookup")
+    # Preserve every signed field, including the original encoded payload/signatures.
+    encoded = (json.dumps(selected, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(encoded) > MAX_ATTESTATION_BUNDLE_BYTES:
+        raise PollError("retained attestation bundle exceeds its byte limit")
+    output = archive.parent / ATTESTATION_BUNDLE_NAME
+    try:
+        with output.open("xb") as target:
+            target.write(encoded)
+    except OSError as error:
+        raise PollError(f"could not retain attestation bundle: {error}") from error
+    return output
+
+
+def validate_trusted_root(path: Path) -> None:
+    for item in (path.parent, path):
+        try:
+            metadata = item.lstat()
+        except OSError as error:
+            raise PollError(f"trusted root is unavailable: {error}") from error
+        expected_type = stat.S_ISDIR if item == path.parent else stat.S_ISREG
+        if not expected_type(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+            raise PollError("trusted root and its directory must be root-owned and not group/world-writable")
+    if not 0 < path.stat().st_size <= MAX_ATTESTATION_BUNDLE_BYTES:
+        raise PollError("trusted root has an invalid size")
+
+
 def verify_attestation(archive: Path, source_sha: str) -> Path:
     """Download and verify a GitHub Sigstore bundle without using saved credentials."""
     gh = shutil.which("gh")
     if gh is None:
         raise PollError("GitHub CLI (gh) is required to verify build attestations")
+    validate_trusted_root(TRUSTED_ROOT)
+    archive_sha = ReleasePoller._sha256(archive)
+    bundle = download_attestation_bundle(archive, archive_sha)
     with tempfile.TemporaryDirectory(prefix="fg-index-gh-") as isolated_home:
         gh_config = Path(isolated_home) / "gh-config"
         gh_config.mkdir()
@@ -698,40 +783,6 @@ def verify_attestation(archive: Path, source_sha: str) -> Path:
             "GH_PROMPT_DISABLED": "1",
             "GH_NO_UPDATE_NOTIFIER": "1",
         }
-        archive_sha = ReleasePoller._sha256(archive)
-        bundle = archive.parent / f"sha256:{archive_sha}.jsonl"
-        download_command = [
-            gh,
-            "attestation",
-            "download",
-            str(archive),
-            "--repo",
-            REPO,
-            "--limit",
-            "1",
-            "--predicate-type",
-            PREDICATE,
-        ]
-        try:
-            downloaded = subprocess.run(
-                download_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=180,
-                env=env,
-                cwd=archive.parent,
-                preexec_fn=_limit_attestation_file_writes,
-            )
-        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as error:
-            raise PollError(f"attestation bundle download could not run: {error}") from error
-        if downloaded.returncode != 0:
-            detail = downloaded.stderr.strip() or downloaded.stdout.strip() or "gh returned a failure"
-            raise PollError(f"GitHub attestation bundle download failed: {detail}")
-        if bundle.is_symlink() or not bundle.is_file():
-            raise PollError("GitHub attestation download did not create the expected bundle file")
-        if bundle.stat().st_size <= 0 or bundle.stat().st_size > MAX_ATTESTATION_BUNDLE_BYTES:
-            raise PollError("GitHub attestation bundle has an invalid size")
         command = [
             gh,
             "attestation",
@@ -749,6 +800,9 @@ def verify_attestation(archive: Path, source_sha: str) -> Path:
             PREDICATE,
             "--bundle",
             str(bundle),
+            "--custom-trusted-root",
+            str(TRUSTED_ROOT),
+            "--deny-self-hosted-runners",
         ]
         try:
             result = subprocess.run(
