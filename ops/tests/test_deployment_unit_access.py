@@ -6,19 +6,30 @@ import subprocess
 import tempfile
 import unittest
 
-from ops.deploy_api_release import ROLE_STAGE
+from ops.deploy_api_release import API, BOOT_GUARD, BOOT_GUARD_DROPIN, ROLE_STAGE, Host, validate_loaded_unit
 
 UNITS = Path(__file__).parents[1] / 'deployment/systemd'
 
 
 class UnitAccessTest(unittest.TestCase):
     def test_both_units_expose_only_accepted_role_directory_under_readonly_home(self):
-        for name in ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service', 'fg-index-deployment-recovery.service'):
+        for name in ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service'):
             parser = configparser.ConfigParser(interpolation=None)
             parser.read(UNITS / name)
             self.assertEqual('read-only', parser['Service']['ProtectHome'])
             self.assertEqual(str(ROLE_STAGE), parser['Service']['ReadWritePaths'])
             self.assertEqual('root', parser['Service']['User'])
+            self.assertEqual('30min' if name == 'fg-index-deployment.service' else '10min',
+                             parser['Service']['TimeoutStartSec'])
+        recovery = configparser.ConfigParser(interpolation=None)
+        recovery.read(UNITS / 'fg-index-deployment-recovery.service')
+        self.assertEqual('read-only', recovery['Service']['ProtectHome'])
+        self.assertEqual('root', recovery['Service']['User'])
+        self.assertTrue({str(ROLE_STAGE), '/var/lib/fg-index-deployment', '/opt/fg-index', '/opt/nodejs'} <=
+                        set(recovery['Service']['ReadWritePaths'].split()))
+        self.assertEqual({'/opt/fg-index/releases', '/opt/nodejs/releases'},
+                         set(recovery['Service']['ReadOnlyPaths'].split()))
+        self.assertEqual('10min', recovery['Service']['TimeoutStartSec'])
 
     def test_api_unit_requires_a_fresh_guard_and_guard_is_lock_free(self):
         api = configparser.ConfigParser(interpolation=None)
@@ -38,7 +49,33 @@ class UnitAccessTest(unittest.TestCase):
         recovery = configparser.ConfigParser(interpolation=None)
         recovery.read(UNITS / 'fg-index-deployment-recovery.service')
         self.assertIn('--recover', recovery['Service']['ExecStart'])
-        self.assertEqual(str(ROLE_STAGE), recovery['Service']['ReadWritePaths'])
+
+    @unittest.skipUnless(os.geteuid() == 0 and Path('/run/systemd/system').is_dir(), 'loaded API contract check runs in Linux CI')
+    def test_canonical_api_loaded_dependencies_match_systemd_baseline(self):
+        api_path = Path('/etc/systemd/system') / API
+        guard_path = Path('/etc/systemd/system') / BOOT_GUARD
+        dropin_path = BOOT_GUARD_DROPIN
+        self.assertFalse(api_path.exists(), 'CI fixture requires an unused API unit name')
+        self.assertFalse(guard_path.exists(), 'CI fixture requires an unused guard unit name')
+        self.assertFalse(dropin_path.exists(), 'CI fixture requires an unused API guard drop-in')
+        api_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            api_path.write_bytes((Path(__file__).parents[1] / 'oci/fg-index-api.service').read_bytes())
+            guard_path.write_bytes((UNITS / BOOT_GUARD).read_bytes())
+            dropin_path.parent.mkdir(parents=True, exist_ok=True)
+            dropin_path.write_bytes((UNITS / '20-deployment-boot-guard.conf').read_bytes())
+            for path in (api_path, guard_path, dropin_path):
+                path.chmod(0o644)
+            subprocess.run(['/usr/bin/systemctl', 'daemon-reload'], check=True, capture_output=True, timeout=15)
+            host = Host.__new__(Host)
+            props = host.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart',
+                                           'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+            validate_loaded_unit(props, {'enabled': False, 'generation': 1}, boot_guard_enabled=True)
+        finally:
+            dropin_path.unlink(missing_ok=True)
+            api_path.unlink(missing_ok=True)
+            guard_path.unlink(missing_ok=True)
+            subprocess.run(['/usr/bin/systemctl', 'daemon-reload'], check=True, capture_output=True, timeout=15)
 
     @unittest.skipUnless(os.geteuid() == 0 and (Path('/run/systemd/system').is_dir() or os.environ.get('FG_INDEX_REQUIRE_SYSTEMD_NAMESPACE_TEST') == '1'), 'actual root/systemd namespace check runs in Linux CI')
     def test_service_namespace_reads_private_receipts_and_writes_shared_lock(self):
@@ -67,6 +104,53 @@ else:
                                     capture_output=True, timeout=20)
             self.assertEqual(0, result.returncode, result.stderr.decode())
             self.assertEqual(0o600, (root / 'role-deployment.lock').stat().st_mode & 0o777)
+
+    @unittest.skipUnless(os.geteuid() == 0 and Path('/run/systemd/system').is_dir(), 'actual recovery namespace check runs in Linux CI')
+    def test_recovery_namespace_can_replace_only_state_and_current_links(self):
+        with tempfile.TemporaryDirectory(prefix='fg-index-recovery-fixture-', dir='/root') as directory:
+            root = Path(directory)
+            state = root / 'var/lib/fg-index-deployment'
+            role_stage = root / 'role-stage'
+            app = root / 'opt/fg-index'
+            node = root / 'opt/nodejs'
+            app_releases = app / 'releases'
+            node_releases = node / 'releases'
+            for path in (state, role_stage, app_releases / 'a', app_releases / 'b', node_releases / 'a', node_releases / 'b'):
+                path.mkdir(parents=True)
+            (app_releases / 'a/image.txt').write_text('immutable app image')
+            (node_releases / 'a/node.txt').write_text('immutable node image')
+            (app / 'current').symlink_to(app_releases / 'a')
+            (node / 'current').symlink_to(node_releases / 'a')
+            script = """import os,pathlib,sys
+root=pathlib.Path(sys.argv[1]);state=root/'var/lib/fg-index-deployment';role=root/'role-stage';app=root/'opt/fg-index';node=root/'opt/nodejs'
+(state/'.state-next').write_text('committed');os.replace(state/'.state-next',state/'state.json')
+(role/'role-deployment.lock').write_text('lock')
+for base in (app,node):
+ current=base/'current';target=base/'releases'/'b';temp=base/'current.deployment-next'
+ temp.symlink_to(target);os.replace(temp,current)
+for path in (app/'releases/a/image.txt',node/'releases/a/node.txt'):
+ try:path.write_text('mutated')
+ except OSError:pass
+ else:raise AssertionError('immutable release content was writable')
+try:(root/'outside').write_text('blocked')
+except OSError:pass
+else:raise AssertionError('unlisted recovery path was writable')
+"""
+            properties = '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect'
+            result = subprocess.run([*properties, '--property=User=root', '--property=ProtectSystem=strict',
+                                     '--property=ProtectHome=read-only',
+                                     '--property=ReadWritePaths=' + ' '.join(map(str, (state, role_stage, app, node))),
+                                     '--property=ReadOnlyPaths=' + ' '.join(map(str, (app_releases, node_releases))),
+                                     '--property=RuntimeMaxSec=10', '/usr/bin/python3', '-c', script, directory],
+                                    capture_output=True, timeout=20)
+            self.assertEqual(0, result.returncode, result.stderr.decode())
+            self.assertEqual('committed', (state / 'state.json').read_text())
+            self.assertEqual('lock', (role_stage / 'role-deployment.lock').read_text())
+            self.assertEqual(str(app_releases / 'b'), os.readlink(app / 'current'))
+            self.assertEqual(str(node_releases / 'b'), os.readlink(node / 'current'))
+            self.assertEqual('immutable app image', (app_releases / 'a/image.txt').read_text())
+            self.assertEqual('immutable node image', (node_releases / 'a/node.txt').read_text())
+            self.assertFalse((root / 'outside').exists())
 
     @unittest.skipUnless(os.geteuid() == 0 and Path('/run/systemd/system').is_dir(), 'actual systemd property serialization runs in Linux CI')
     def test_systemctl_show_may_omit_empty_environment_files_property(self):

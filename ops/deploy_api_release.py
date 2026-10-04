@@ -25,6 +25,12 @@ NODE = re.compile(r"v24\.\d+\.\d+")
 API = "fg-index-api.service"
 BOOT_GUARD = "fg-index-api-boot-guard.service"
 RECOVERY = "fg-index-deployment-recovery.service"
+CONTROLLER_TIMEOUTS = {
+    'fg-index-deployment.service': '30min',
+    'fg-index-deployment-watchdog.service': '10min',
+    RECOVERY: '10min',
+}
+IMAGE_VALIDATION_SECONDS = 90
 BOOT_GUARD_DROPIN = Path('/etc/systemd/system/fg-index-api.service.d/20-deployment-boot-guard.conf')
 POLLER = "fg-index-release-poller.service"
 PROMOTER = Path("/usr/local/libexec/fg-index-release-promoter/promote_api_release.py")
@@ -35,6 +41,7 @@ CURRENT = Path("/opt/fg-index/current")
 NODE_RELEASES = Path("/opt/nodejs/releases")
 NODE_CURRENT = Path("/opt/nodejs/current")
 ROLE_STAGE = Path("/root/fg-index-api-activation-fa654555b1692111af882f45")
+API_WORKING_DIRECTORY = '/opt/fg-index/current/apps/api-server'
 ROLE_LOCK = ROLE_STAGE / "role-deployment.lock"
 OWNER_RECEIPT = ROLE_STAGE / "scheduler-owner-receipt.json"
 BOOT_RECEIPT = ROLE_STAGE / "boot-enable-receipt.json"
@@ -187,15 +194,18 @@ def node_target(version):
     return NODE_RELEASES / ('node-' + version)
 
 
-def validate_loaded_unit(props, role, boot_guard_enabled=False):
+def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_requires=()):
     require(props['User'] == props['Group'] == 'fg-index' and props['ControlPID'] == '0', 'unit identity/control process drift')
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
-    require(props['WorkingDirectory'] == '/opt/fg-index/current/apps/api-server', 'loaded working directory drift')
+    require(props['WorkingDirectory'] == API_WORKING_DIRECTORY, 'loaded working directory drift')
     require(props['EnvironmentFiles'] == '/etc/fg-index/api.env (ignore_errors=no)', 'loaded environment file drift')
-    expected_after = {'network-online.target'} | ({BOOT_GUARD} if boot_guard_enabled else set())
+    expected_requires = {'sysinit.target'} | ({BOOT_GUARD} if boot_guard_enabled else set()) | set(automatic_mount_requires)
+    expected_after = {'network-online.target', 'sysinit.target', 'basic.target'} | ({BOOT_GUARD} if boot_guard_enabled else set())
     loaded_requires = set(props['Requires'].split())
-    require((BOOT_GUARD in loaded_requires) == boot_guard_enabled and
-            expected_after <= set(props['After'].split()),
+    loaded_after = set(props['After'].split())
+    forbidden_ordering = {'fg-index-deployment.service', 'fg-index-deployment-watchdog.service', RECOVERY}
+    require(loaded_requires == expected_requires and
+            expected_after <= loaded_after and not (loaded_after & forbidden_ordering),
             'boot authorization dependency drift')
     drops = ' '.join(str(p) for p in (([ROLE_OVERRIDE] if role['enabled'] else []) +
                                       ([BOOT_GUARD_DROPIN] if boot_guard_enabled else [])))
@@ -219,6 +229,7 @@ def validate_loaded_poller(props):
 
 def validate_loaded_controller(props, unit, action):
     require(props['User'] == 'root' and props['Type'] == 'oneshot' and
+            props['TimeoutStartUSec'] == CONTROLLER_TIMEOUTS[unit] and
             props['FragmentPath'] == '/etc/systemd/system/' + unit and props['DropInPaths'] == '',
             'loaded controller unit drift')
     argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py ' + action
@@ -351,7 +362,7 @@ class Host:
             for unit, action in (('fg-index-deployment.service', '--once'),
                                  ('fg-index-deployment-watchdog.service', '--watchdog'),
                                  (RECOVERY, '--recover')):
-                props = self.properties(unit, ['User', 'Type', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+                props = self.properties(unit, ['User', 'Type', 'TimeoutStartUSec', 'FragmentPath', 'DropInPaths', 'ExecStart'])
                 validate_loaded_controller(props, unit, action)
             props = self.properties(BOOT_GUARD, ['User', 'Group', 'Type', 'TimeoutStartUSec', 'FragmentPath', 'DropInPaths', 'ExecStart'])
             validate_loaded_guard(props)
@@ -364,7 +375,8 @@ class Host:
             if name.endswith('.timer'):
                 require(props['ActiveState'] == 'inactive', 'competing poller timer')
         props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
-        validate_loaded_unit(props, self.role, self.boot_guard_enabled)
+        validate_loaded_unit(props, self.role, self.boot_guard_enabled,
+                             self.automatic_api_mount_requires(props['Requires']))
         self.poller_contract()
 
     def retention(self, store):
@@ -424,6 +436,26 @@ class Host:
             values[name] = ''
         return values
 
+    def automatic_api_mount_requires(self, requires):
+        """Return only actual mount dependencies covering the fixed API working directory."""
+        targets = set()
+        with open('/proc/self/mountinfo', encoding='utf-8') as reader:
+            for line in reader:
+                fields = line.split(' - ', 1)[0].split()
+                if len(fields) >= 5:
+                    target = re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), fields[4])
+                    targets.add(target)
+        automatic = set()
+        for unit in set(requires.split()) - {'sysinit.target', BOOT_GUARD}:
+            require(unit.endswith('.mount'), 'unexpected API Requires dependency')
+            mount = self.properties(unit, ['Where'])['Where']
+            require(mount in targets and
+                    (mount == '/' or API_WORKING_DIRECTORY == mount or
+                     API_WORKING_DIRECTORY.startswith(mount.rstrip('/') + '/')),
+                    'API Requires mount does not cover its fixed working directory')
+            automatic.add(unit)
+        return automatic
+
     def links(self):
         values = []
         for path in (CURRENT, NODE_CURRENT):
@@ -444,7 +476,7 @@ class Host:
         trusted(root, directory=True)
         h = hashlib.sha256()
         count, total = 0, 0
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + IMAGE_VALIDATION_SECONDS
         for directory, dirs, files in os.walk(root, followlinks=False):
             dirs.sort()
             for name in sorted(dirs + files):
@@ -528,7 +560,8 @@ class Host:
         links = self.links()
         require(all(v in {a, b} for v, a, b in zip(links, self.targets(previous), self.targets(candidate))), 'unknown links; cannot stop unowned process')
         props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
-        validate_loaded_unit(props, self.role, self.boot_guard_enabled)
+        validate_loaded_unit(props, self.role, self.boot_guard_enabled,
+                             self.automatic_api_mount_requires(props['Requires']))
         pid = self.properties(API, ['MainPID'])['MainPID']
         if pid != '0':
             require(pid.isdigit(), 'invalid owned PID')
@@ -575,7 +608,7 @@ class Host:
         names = ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service', RECOVERY)
         active = []
         for name in names:
-            props = self.properties(name, ['ActiveState', 'MainPID', 'NRestarts', 'InvocationID', 'FragmentPath', 'DropInPaths', 'User', 'Type', 'ExecStart'])
+            props = self.properties(name, ['ActiveState', 'MainPID', 'NRestarts', 'InvocationID', 'FragmentPath', 'DropInPaths', 'User', 'Type', 'TimeoutStartUSec', 'ExecStart'])
             action = {'fg-index-deployment.service': '--once',
                       'fg-index-deployment-watchdog.service': '--watchdog',
                       RECOVERY: '--recover'}[name]

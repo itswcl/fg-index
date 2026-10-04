@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_poller, validate_policy_shape
+from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_controller, validate_loaded_poller, validate_policy_shape
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -628,8 +628,8 @@ class LoadedContractTest(unittest.TestCase):
         argv = '/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=' + role + ' /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js'
         return {'User': 'fg-index', 'Group': 'fg-index', 'ControlPID': '0',
                 'FragmentPath': '/etc/systemd/system/fg-index-api.service',
-                'Requires': 'fg-index-api-boot-guard.service' if guard else '',
-                'After': 'network-online.target fg-index-api-boot-guard.service' if guard else 'network-online.target',
+                'Requires': 'sysinit.target fg-index-api-boot-guard.service' if guard else 'sysinit.target',
+                'After': 'network-online.target sysinit.target basic.target fg-index-api-boot-guard.service' if guard else 'network-online.target sysinit.target basic.target',
                 'WorkingDirectory': '/opt/fg-index/current/apps/api-server',
                 'EnvironmentFiles': '/etc/fg-index/api.env (ignore_errors=no)',
                 'DropInPaths': ' '.join(x for x, include in (
@@ -657,6 +657,20 @@ class LoadedContractTest(unittest.TestCase):
         with self.assertRaises(Hold):
             validate_loaded_unit(self.props(True, guard=True), base_role, boot_guard_enabled=False)
 
+    def test_loaded_controller_timeout_matches_each_fixed_operation_budget(self):
+        for unit, action, timeout in (
+                ('fg-index-deployment.service', '--once', '30min'),
+                ('fg-index-deployment-watchdog.service', '--watchdog', '10min'),
+                ('fg-index-deployment-recovery.service', '--recover', '10min')):
+            argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py ' + action
+            props = {'User': 'root', 'Type': 'oneshot', 'TimeoutStartUSec': timeout,
+                     'FragmentPath': '/etc/systemd/system/' + unit, 'DropInPaths': '',
+                     'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=' + argv + ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
+            validate_loaded_controller(props, unit, action)
+            props['TimeoutStartUSec'] = '5min'
+            with self.assertRaises(Hold):
+                validate_loaded_controller(props, unit, action)
+
     def test_loaded_path_count_argv_workdir_env_and_dropin_drift_are_rejected(self):
         modifications = [
             ('ExecStart', lambda v: v.replace('path=/usr/bin/env', 'path=/tmp/unknown')),
@@ -669,6 +683,7 @@ class LoadedContractTest(unittest.TestCase):
             ('DropInPaths', lambda v: v + ' /etc/systemd/system/fg-index-api.service.d/20-unknown.conf'),
             ('DropInPaths', lambda v: v + ' ' + v),
             ('Requires', lambda v: v + ' fg-index-api-boot-guard.service'),
+            ('Requires', lambda v: v + ' recovery.service'),
             ('After', lambda v: v.replace('network-online.target', 'unknown.service')),
         ]
         for field, change in modifications:
