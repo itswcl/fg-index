@@ -31,6 +31,7 @@ class UnitAccessTest(unittest.TestCase):
         guard = configparser.ConfigParser(interpolation=None)
         guard.read(UNITS / 'fg-index-api-boot-guard.service')
         self.assertEqual('oneshot', guard['Service']['Type'])
+        self.assertEqual('2min', guard['Service']['TimeoutStartSec'])
         self.assertNotIn('RemainAfterExit', guard['Service'])
         self.assertNotIn('ReadWritePaths', guard['Service'])
         self.assertIn('--boot-guard', guard['Service']['ExecStart'])

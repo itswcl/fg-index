@@ -9,7 +9,7 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard
-TimeoutStartSec=30s
+TimeoutStartSec=2min
 UMask=0077
 StandardOutput=journal
 StandardError=journal
@@ -28,4 +28,3 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_UNIX
 SystemCallArchitectures=native
-

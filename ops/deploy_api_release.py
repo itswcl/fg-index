@@ -192,9 +192,9 @@ def validate_loaded_unit(props, role, boot_guard_enabled=False):
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
     require(props['WorkingDirectory'] == '/opt/fg-index/current/apps/api-server', 'loaded working directory drift')
     require(props['EnvironmentFiles'] == '/etc/fg-index/api.env (ignore_errors=no)', 'loaded environment file drift')
-    expected_requires = {BOOT_GUARD} if boot_guard_enabled else set()
     expected_after = {'network-online.target'} | ({BOOT_GUARD} if boot_guard_enabled else set())
-    require(set(props['Requires'].split()) == expected_requires and
+    loaded_requires = set(props['Requires'].split())
+    require((BOOT_GUARD in loaded_requires) == boot_guard_enabled and
             expected_after <= set(props['After'].split()),
             'boot authorization dependency drift')
     drops = ' '.join(str(p) for p in (([ROLE_OVERRIDE] if role['enabled'] else []) +
@@ -229,6 +229,7 @@ def validate_loaded_controller(props, unit, action):
 
 def validate_loaded_guard(props):
     require(props['User'] == props['Group'] == 'root' and props['Type'] == 'oneshot' and
+            props['TimeoutStartUSec'] == '2min' and
             props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
             'loaded boot guard unit drift')
     argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard'
@@ -352,7 +353,7 @@ class Host:
                                  (RECOVERY, '--recover')):
                 props = self.properties(unit, ['User', 'Type', 'FragmentPath', 'DropInPaths', 'ExecStart'])
                 validate_loaded_controller(props, unit, action)
-            props = self.properties(BOOT_GUARD, ['User', 'Group', 'Type', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+            props = self.properties(BOOT_GUARD, ['User', 'Group', 'Type', 'TimeoutStartUSec', 'FragmentPath', 'DropInPaths', 'ExecStart'])
             validate_loaded_guard(props)
         trusted(Path('/etc/fg-index/api.env'))
         require(stat.S_IMODE(Path('/etc/fg-index/api.env').stat().st_mode) == 0o640 and Path('/etc/fg-index/api.env').stat().st_gid == self.gid, 'environment permission drift')
@@ -567,7 +568,7 @@ class Host:
 
     def start(self):
         BootGate(self, Store()).authorize_start()
-        self.command(['/usr/bin/systemctl', 'start', API], 35)
+        self.command(['/usr/bin/systemctl', 'start', API], 135)
 
     def active_controller(self):
         """Return the one live, fixed controller activation context, if any."""

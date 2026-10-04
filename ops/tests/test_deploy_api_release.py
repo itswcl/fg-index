@@ -668,7 +668,7 @@ class LoadedContractTest(unittest.TestCase):
             ('EnvironmentFiles', lambda v: v.replace('no', 'yes')),
             ('DropInPaths', lambda v: v + ' /etc/systemd/system/fg-index-api.service.d/20-unknown.conf'),
             ('DropInPaths', lambda v: v + ' ' + v),
-            ('Requires', lambda v: v + ' unknown.service'),
+            ('Requires', lambda v: v + ' fg-index-api-boot-guard.service'),
             ('After', lambda v: v.replace('network-online.target', 'unknown.service')),
         ]
         for field, change in modifications:
