@@ -10,5 +10,6 @@ TimeoutStartSec=10min
 ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --watchdog
 StandardOutput=journal
 StandardError=journal
-ProtectHome=yes
+ProtectHome=read-only
+ReadWritePaths=/root/fg-index-api-activation-fa654555b1692111af882f45
 PrivateTmp=yes

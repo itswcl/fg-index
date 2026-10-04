@@ -12,5 +12,6 @@ ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_
 StandardOutput=journal
 StandardError=journal
 # Root coordinates existing units; app probes run as fg-index transient units.
-ProtectHome=yes
+ProtectHome=read-only
+ReadWritePaths=/root/fg-index-api-activation-fa654555b1692111af882f45
 PrivateTmp=yes

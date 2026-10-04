@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-from ops.deploy_api_release import Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit
+from ops.deploy_api_release import Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_poller
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -579,6 +579,45 @@ class LoadedContractTest(unittest.TestCase):
                 props[field] = change(props[field])
                 with self.assertRaises(Hold):
                     validate_loaded_unit(props, {'enabled': True, 'generation': 1})
+
+
+class PollerContractTest(unittest.TestCase):
+    def props(self):
+        argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-release-poller/poller.py --root /var/lib/fg-index-release-poller'
+        return {'User': 'fg-index-release-poller', 'Group': 'fg-index-release-poller',
+                'FragmentPath': '/etc/systemd/system/fg-index-release-poller.service', 'DropInPaths': '',
+                'EnvironmentFiles': '', 'WorkingDirectory': '', 'TimeoutStartUSec': '3min',
+                'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=' + argv + ' ; ignore_errors=no ; pid=0 ; status=0/0 }'}
+
+    def test_exact_loaded_poller_is_accepted(self):
+        validate_loaded_poller(self.props())
+
+    def test_loaded_poller_drift_is_rejected(self):
+        changes = [('User', 'root'), ('Group', 'root'), ('FragmentPath', '/run/systemd/system/fg-index-release-poller.service'),
+                   ('DropInPaths', '/run/systemd/system/fg-index-release-poller.service.d/override.conf'),
+                   ('EnvironmentFiles', '/tmp/unknown.env (ignore_errors=no)'), ('WorkingDirectory', '/tmp'),
+                   ('TimeoutStartUSec', 'infinity')]
+        for field, value in changes:
+            with self.subTest(field=field):
+                props = self.props()
+                props[field] = value
+                with self.assertRaises(Hold):
+                    validate_loaded_poller(props)
+        for change in (lambda v: v + v, lambda v: v.replace('path=/usr/bin/python3.12', 'path=/tmp/other'),
+                       lambda v: v.replace('--root /var/lib/fg-index-release-poller', '--root /tmp'),
+                       lambda v: v.replace('ignore_errors=no', 'ignore_errors=yes')):
+            props = self.props()
+            props['ExecStart'] = change(props['ExecStart'])
+            with self.assertRaises(Hold):
+                validate_loaded_poller(props)
+
+    def test_actual_poll_adapter_rechecks_contract_before_start(self):
+        host = Host.__new__(Host)
+        host.properties = Mock(return_value={**self.props(), 'User': 'root'})
+        host.command = Mock()
+        with self.assertRaises(Hold):
+            host.poll()
+        host.command.assert_not_called()
 
 
 if __name__ == '__main__':

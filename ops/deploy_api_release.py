@@ -198,6 +198,16 @@ def validate_loaded_unit(props, role):
     require(match and match.group(1) == '/usr/bin/env' and match.group(2) == argv and match.group(3) == 'no', 'loaded exact executable/argv/count drift')
 
 
+def validate_loaded_poller(props):
+    require(props['User'] == props['Group'] == 'fg-index-release-poller', 'loaded poller identity drift')
+    require(props['FragmentPath'] == '/etc/systemd/system/' + POLLER and props['DropInPaths'] == '', 'loaded poller paths drift')
+    require(props['EnvironmentFiles'] == '' and props['WorkingDirectory'] == '', 'loaded poller environment/working directory drift')
+    require(props['TimeoutStartUSec'] == '3min', 'loaded poller timeout drift')
+    argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-release-poller/poller.py --root /var/lib/fg-index-release-poller'
+    match = re.fullmatch(r'\{ path=([^;{}]+?) ; argv\[\]=([^;{}]+?) ; ignore_errors=([^;{}]+?) ;[^{}]*\}', props['ExecStart'])
+    require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no', 'loaded poller executable/argv/count drift')
+
+
 class Host:
     """Fixed host paths/commands. Application probe code always runs as fg-index."""
     def __init__(self):
@@ -287,6 +297,11 @@ class Host:
                 require(props['ActiveState'] == 'inactive', 'competing poller timer')
         props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles'])
         validate_loaded_unit(props, self.role)
+        self.poller_contract()
+
+    def poller_contract(self):
+        props = self.properties(POLLER, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec'])
+        validate_loaded_poller(props)
 
     def properties(self, unit, names):
         text = self.command(['/usr/bin/systemctl', 'show', unit, *['--property=' + n for n in names]], 5)
@@ -360,6 +375,7 @@ class Host:
         atomic_json(RETENTION, {'schema_version': 1, 'protected_shas': sorted(protected)}, 0o644)
 
     def poll(self):
+        self.poller_contract()
         props = self.properties(POLLER, ['ActiveState', 'MainPID', 'ControlPID'])
         require(props['ActiveState'] == 'inactive' and props['MainPID'] == props['ControlPID'] == '0', 'poller already active or failed')
         self.command(['/usr/bin/systemctl', 'start', POLLER], 185)

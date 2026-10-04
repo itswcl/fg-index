@@ -145,3 +145,11 @@ controlled host adapter, interruption at each activation stage, partial links,
 ambiguous stops, role drift, bad image/provenance, single recovery and DB outage.
 Linux CI validates units and native no-ACL behavior. No host mutation is needed
 for these tests.
+
+The loaded poller is checked before starting: exact fragment/no drop-ins,
+fg-index-release-poller identity, one exact Python/poller argv, empty env-file
+and working-directory properties, and3min timeout. Disk pins alone are
+insufficient. Both root controller units expose home read-only and whitelist
+only the accepted role-stage directory for shared-lock writes. Linux CI uses
+a synthetic root directory to verify this systemd namespace contract; it never
+touches the production stage or starts an application.
