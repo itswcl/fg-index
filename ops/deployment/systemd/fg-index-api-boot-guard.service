@@ -1,0 +1,31 @@
+[Unit]
+Description=Authorize fg-index API startup from committed deployment state
+DefaultDependencies=no
+After=local-fs.target
+Before=fg-index-api.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard
+TimeoutStartSec=30s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fg-index-api-boot-guard
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+

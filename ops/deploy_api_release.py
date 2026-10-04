@@ -23,6 +23,9 @@ SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 NODE = re.compile(r"v24\.\d+\.\d+")
 API = "fg-index-api.service"
+BOOT_GUARD = "fg-index-api-boot-guard.service"
+RECOVERY = "fg-index-deployment-recovery.service"
+BOOT_GUARD_DROPIN = Path('/etc/systemd/system/fg-index-api.service.d/20-deployment-boot-guard.conf')
 POLLER = "fg-index-release-poller.service"
 PROMOTER = Path("/usr/local/libexec/fg-index-release-promoter/promote_api_release.py")
 STATE = Path("/var/lib/fg-index-deployment")
@@ -184,12 +187,18 @@ def node_target(version):
     return NODE_RELEASES / ('node-' + version)
 
 
-def validate_loaded_unit(props, role):
+def validate_loaded_unit(props, role, boot_guard_enabled=False):
     require(props['User'] == props['Group'] == 'fg-index' and props['ControlPID'] == '0', 'unit identity/control process drift')
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
     require(props['WorkingDirectory'] == '/opt/fg-index/current/apps/api-server', 'loaded working directory drift')
     require(props['EnvironmentFiles'] == '/etc/fg-index/api.env (ignore_errors=no)', 'loaded environment file drift')
-    drops = str(ROLE_OVERRIDE) if role['enabled'] else ''
+    expected_requires = {BOOT_GUARD} if boot_guard_enabled else set()
+    expected_after = {'network-online.target'} | ({BOOT_GUARD} if boot_guard_enabled else set())
+    require(set(props['Requires'].split()) == expected_requires and
+            expected_after <= set(props['After'].split()),
+            'boot authorization dependency drift')
+    drops = ' '.join(str(p) for p in (([ROLE_OVERRIDE] if role['enabled'] else []) +
+                                      ([BOOT_GUARD_DROPIN] if boot_guard_enabled else [])))
     require(props['DropInPaths'] == drops, 'unknown or duplicate unit drop-ins')
     enabled = str(role['enabled']).lower()
     argv = '/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=' + enabled + ' /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js'
@@ -208,13 +217,40 @@ def validate_loaded_poller(props):
     require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no', 'loaded poller executable/argv/count drift')
 
 
+def validate_loaded_controller(props, unit, action):
+    require(props['User'] == 'root' and props['Type'] == 'oneshot' and
+            props['FragmentPath'] == '/etc/systemd/system/' + unit and props['DropInPaths'] == '',
+            'loaded controller unit drift')
+    argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py ' + action
+    match = re.fullmatch(r'\{ path=([^;{}]+?) ; argv\[\]=([^;{}]+?) ; ignore_errors=([^;{}]+?) ;[^{}]*\}', props['ExecStart'])
+    require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no',
+            'loaded controller executable/argv drift')
+
+
+def validate_loaded_guard(props):
+    require(props['User'] == props['Group'] == 'root' and props['Type'] == 'oneshot' and
+            props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
+            'loaded boot guard unit drift')
+    argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard'
+    match = re.fullmatch(r'\{ path=([^;{}]+?) ; argv\[\]=([^;{}]+?) ; ignore_errors=([^;{}]+?) ;[^{}]*\}', props['ExecStart'])
+    require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no',
+            'loaded boot guard executable/argv drift')
+
+
+def validate_policy_shape(policy):
+    fields = {'schema_version', 'role', 'boot_enabled', 'schema', 'nodes', 'pins', 'manual_adoption'}
+    require(set(policy) in (fields, fields | {'boot_guard_enabled'}), 'unknown policy fields')
+    if 'boot_guard_enabled' in policy:
+        require(type(policy['boot_guard_enabled']) is bool, 'invalid boot guard phase')
+
+
 class Host:
     """Fixed host paths/commands. Application probe code always runs as fg-index."""
     def __init__(self):
         trusted(POLICY.parent, directory=True)
         self.policy = read_json(POLICY)
         p = self.policy
-        require(set(p) == {'schema_version', 'role', 'boot_enabled', 'schema', 'nodes', 'pins', 'manual_adoption'}, 'unknown policy fields')
+        validate_policy_shape(p)
         require(p['schema_version'] == 1, 'unknown policy schema')
         validate_role(p['role'])
         require(type(p['boot_enabled']) is bool, 'invalid accepted boot policy')
@@ -229,6 +265,10 @@ class Host:
     @property
     def role(self):
         return self.policy['role'].copy()
+
+    @property
+    def boot_guard_enabled(self):
+        return self.policy.get('boot_guard_enabled', False)
 
     @staticmethod
     def command(argv, timeout):
@@ -263,6 +303,23 @@ class Host:
                     '/usr/local/libexec/fg-index-deployment/retain_api_releases.py',
                     '/etc/systemd/system/fg-index-release-retire@.service',
                     '/etc/systemd/system/' + API, '/etc/systemd/system/' + POLLER}
+        controller_unit_paths = {'/etc/systemd/system/fg-index-deployment.service',
+                                 '/etc/systemd/system/fg-index-deployment-watchdog.service',
+                                 '/etc/systemd/system/' + BOOT_GUARD,
+                                 '/etc/systemd/system/' + RECOVERY}
+        attached_unit_pins = controller_unit_paths & set(self.policy['pins'])
+        require(not attached_unit_pins or attached_unit_pins == controller_unit_paths,
+                'partial deployment guard unit pin set')
+        if attached_unit_pins:
+            expected |= controller_unit_paths
+        if self.boot_guard_enabled:
+            require(attached_unit_pins == controller_unit_paths, 'guard phase requires all fixed deployment units')
+        if self.boot_guard_enabled:
+            expected.add(str(BOOT_GUARD_DROPIN))
+            require(self.policy['pins'].get(str(BOOT_GUARD_DROPIN)) is not None, 'boot guard policy requires its exact API drop-in pin')
+        else:
+            require(not BOOT_GUARD_DROPIN.exists() and not BOOT_GUARD_DROPIN.is_symlink(),
+                    'unaccepted API boot guard drop-in is present')
         if self.role['enabled']:
             expected |= {str(ROLE_OVERRIDE), str(OWNER_RECEIPT)}
             require(self.policy['pins'].get(str(ROLE_OVERRIDE)) == ROLE_OVERRIDE_SHA, 'unaccepted role override')
@@ -289,6 +346,14 @@ class Host:
             trusted(path.parent, directory=True)
             trusted(path)
             require(digest_file(path) == digest, 'accepted source/unit drift')
+        if attached_unit_pins:
+            for unit, action in (('fg-index-deployment.service', '--once'),
+                                 ('fg-index-deployment-watchdog.service', '--watchdog'),
+                                 (RECOVERY, '--recover')):
+                props = self.properties(unit, ['User', 'Type', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+                validate_loaded_controller(props, unit, action)
+            props = self.properties(BOOT_GUARD, ['User', 'Group', 'Type', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+            validate_loaded_guard(props)
         trusted(Path('/etc/fg-index/api.env'))
         require(stat.S_IMODE(Path('/etc/fg-index/api.env').stat().st_mode) == 0o640 and Path('/etc/fg-index/api.env').stat().st_gid == self.gid, 'environment permission drift')
         for name in ('fg-index-release-poller.timer', 'fg-index-api.service'):
@@ -297,8 +362,8 @@ class Host:
             require(props['UnitFileState'] == expected_enabled, 'unaccepted unit enablement')
             if name.endswith('.timer'):
                 require(props['ActiveState'] == 'inactive', 'competing poller timer')
-        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles'])
-        validate_loaded_unit(props, self.role)
+        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+        validate_loaded_unit(props, self.role, self.boot_guard_enabled)
         self.poller_contract()
 
     def retention(self, store):
@@ -461,8 +526,8 @@ class Host:
     def stop_owned(self, previous, candidate):
         links = self.links()
         require(all(v in {a, b} for v, a, b in zip(links, self.targets(previous), self.targets(candidate))), 'unknown links; cannot stop unowned process')
-        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles'])
-        validate_loaded_unit(props, self.role)
+        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+        validate_loaded_unit(props, self.role, self.boot_guard_enabled)
         pid = self.properties(API, ['MainPID'])['MainPID']
         if pid != '0':
             require(pid.isdigit(), 'invalid owned PID')
@@ -501,7 +566,37 @@ class Host:
             sync_directory(path.parent)
 
     def start(self):
+        BootGate(self, Store()).authorize_start()
         self.command(['/usr/bin/systemctl', 'start', API], 35)
+
+    def active_controller(self):
+        """Return the one live, fixed controller activation context, if any."""
+        names = ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service', RECOVERY)
+        active = []
+        for name in names:
+            props = self.properties(name, ['ActiveState', 'MainPID', 'NRestarts', 'InvocationID', 'FragmentPath', 'DropInPaths', 'User', 'Type', 'ExecStart'])
+            action = {'fg-index-deployment.service': '--once',
+                      'fg-index-deployment-watchdog.service': '--watchdog',
+                      RECOVERY: '--recover'}[name]
+            validate_loaded_controller(props, name, action)
+            if props['ActiveState'] == 'activating':
+                require(props['MainPID'].isdigit() and int(props['MainPID']) > 0 and
+                        props['NRestarts'] == '0' and re.fullmatch(r'[0-9a-f]{32}', props['InvocationID']) and
+                        props['FragmentPath'] == '/etc/systemd/system/' + name and props['DropInPaths'] == '',
+                        'controller invocation is restarting or unidentified')
+                pid = props['MainPID']
+                require(os.readlink('/proc/' + pid + '/exe') == '/usr/bin/python3.12', 'controller executable drift')
+                argv = Path('/proc/' + pid + '/cmdline').read_bytes().split(b'\0')[:-1]
+                require(argv == [b'/usr/bin/python3.12', b'/usr/local/libexec/fg-index-deployment/deploy_api_release.py', action.encode()],
+                        'controller command line drift')
+                active.append({'unit': name, 'pid': pid, 'invocation': props['InvocationID'], 'restarts': 0})
+        require(len(active) <= 1, 'multiple controller invocations are active')
+        return active[0] if active else None
+
+    def require_recovery_context(self):
+        context = self.active_controller()
+        require(context is not None and context['unit'] == RECOVERY,
+                'recovery must run from the fixed operator recovery unit')
 
     def runtime(self, receipt, listener_required=True):
         self.preflight()
@@ -559,6 +654,46 @@ class Host:
         return {'pid': pid, 'cold_cache': code == 503}
 
 
+class BootGate:
+    """Authorize one API start from committed state or a live owned transaction."""
+    def __init__(self, host, store):
+        self.host, self.store = host, store
+
+    def authorize_start(self):
+        self.host.preflight()
+        state = self.store.load()
+        require(self.host.boot_guard_enabled, 'boot guard phase is not enabled')
+        role = self.host.role
+        require(self.host.policy['boot_enabled'] is True and role['enabled'] is True,
+                'API boot is not accepted')
+        if state['transaction'] is None:
+            require(state['hold'] is None and state['current'] is not None,
+                    'committed API state is not startable')
+            receipt = state['current']
+            require(receipt['sha'] not in state['rejected'], 'committed image is rejected')
+            require(self.host.links() == self.host.targets(receipt), 'committed links do not match state')
+            self.host.verify(receipt)
+            return receipt
+
+        tx = state['transaction']
+        require(state['hold'] is None and tx['role'] == role, 'transaction is held or role drifted')
+        if tx['stage'] == 'switched':
+            receipt = tx['next']
+            require(self.host.links() == self.host.targets(receipt), 'switched links do not match transaction')
+        elif tx['stage'] == 'rolling-back':
+            receipt = tx['previous']
+            require(self.host.links() == self.host.targets(receipt), 'rollback links do not match transaction')
+        else:
+            raise Hold('transaction stage does not authorize API start')
+        context = self.host.active_controller()
+        require(context is not None and context['restarts'] == 0,
+                'API start is outside a live controller invocation')
+        require(self.host.properties(API, ['NRestarts'])['NRestarts'] == '0',
+                'API already restarted during this transaction')
+        self.host.verify(receipt)
+        return receipt
+
+
 class Controller:
     """One transaction interface shared by CLI and failure/recovery tests."""
     def __init__(self, host, store):
@@ -574,6 +709,10 @@ class Controller:
             self.host.verify(state['rollback'])
         self.host.runtime(state['current'])
         return state
+
+    def boot_guard(self):
+        BootGate(self.host, self.store).authorize_start()
+        return 'start-authorized'
 
     def adopt(self, sha, inventory):
         with self.store.lock():
@@ -595,12 +734,14 @@ class Controller:
             return 'retention-adopted'
 
     def recover_retention(self):
+        require(self.host.boot_guard_enabled, 'retention recovery is disabled until the API boot guard is attached')
         with self.store.lock():
             state = self.check()
             self.host.retention(self.store).recover(state)
             return 'retention-recovered'
 
     def once(self):
+        require(self.host.boot_guard_enabled, 'deployment is disabled until the API boot guard is attached')
         with self.store.lock():
             state = self.check()
             self.host.probe(state['current'])  # baseline DB failure cannot trigger code rollback
@@ -698,14 +839,45 @@ class Controller:
             raise Hold(state['hold']) from None
 
     def recover(self):
+        require(self.host.boot_guard_enabled, 'recovery is disabled until the API boot guard is attached')
         with self.store.lock():
             self.host.preflight()
+            if hasattr(self.host, 'require_recovery_context'):
+                self.host.require_recovery_context()
             state = self.store.load()
             tx = state['transaction']
-            require(tx is not None and state['hold'] is None and tx['stage'] not in ('promoting', 'rolling-back'), 'ambiguous receipt requires operator review')
+            require(tx is not None, 'ambiguous receipt requires operator review')
+            if tx['stage'] == 'promoting':
+                require(isinstance(tx['next'], str) and tx['next'] not in state['rejected'], 'invalid promotion recovery')
+                require(state['hold'] in (None, 'promotion or stop incomplete; review transaction and inactive image'),
+                        'held state requires evidence review')
+                require(self.host.role == tx['role'] and self.host.links() == self.host.targets(tx['previous']),
+                        'promotion recovery identity drift')
+                self.host.verify(tx['previous'])
+                state['rejected'] = sorted(set(state['rejected']) | {tx['next']})
+                state.update(transaction=None, hold=None, failures=0)
+                self.store.save(state)
+                try:
+                    self.host.start()
+                    self.host.probe(state['current'])
+                except Exception:
+                    state['hold'] = 'previous image failed after promotion recovery'
+                    self.store.save(state)
+                    try:
+                        self.host.stop()
+                    except Exception:
+                        pass
+                    raise Hold(state['hold']) from None
+                return 'recovered-promotion'
+            require(tx['stage'] != 'promoting', 'ambiguous receipt requires operator review')
+            require(state['hold'] is None or
+                    (tx['stage'] == 'rolling-back' and state['hold'] == 'rollback incomplete; review before further action'),
+                    'held state requires evidence review')
+            state['hold'] = None
             return self.rollback(state)
 
     def watchdog(self):
+        require(self.host.boot_guard_enabled, 'watchdog is disabled until the API boot guard is attached')
         with self.store.lock():
             self.host.preflight()
             state = self.store.load()
@@ -736,7 +908,7 @@ class Controller:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
-    for name in ('check', 'once', 'recover', 'watchdog', 'adopt-retention', 'recover-retention'):
+    for name in ('check', 'once', 'recover', 'watchdog', 'boot-guard', 'adopt-retention', 'recover-retention'):
         group.add_argument('--' + name, action='store_true')
     group.add_argument('--adopt', metavar='SHA')
     parser.add_argument('--inventory', metavar='SHA256')
@@ -748,7 +920,7 @@ def main():
         if args.adopt:
             result = controller.adopt(args.adopt, args.inventory)
         else:
-            action = next((name for name in ('once', 'recover', 'watchdog', 'adopt_retention', 'recover_retention') if getattr(args, name)), 'check')
+            action = next((name for name in ('once', 'recover', 'watchdog', 'boot_guard', 'adopt_retention', 'recover_retention') if getattr(args, name)), 'check')
             result = getattr(controller, action)()
         print('deployment: ' + (result if isinstance(result, str) else 'check passed'))
         return 0
