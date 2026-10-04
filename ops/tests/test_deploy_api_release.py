@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-from ops.deploy_api_release import Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_poller
+from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_controller, validate_loaded_poller, validate_policy_shape
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -23,7 +23,7 @@ class Crash(BaseException):
 
 class TestHost:
     def __init__(self):
-        self.policy = {'manual_adoption': {A: image(A)['inventory']}}
+        self.policy = {'manual_adoption': {A: image(A)['inventory']}, 'boot_guard_enabled': True}
         self.role = {'enabled': False, 'generation': 1}
         self.main = B
         self.link = self.targets(image(A))
@@ -48,6 +48,21 @@ class TestHost:
 
     def preflight(self):
         self.event('preflight')
+
+    def active_controller(self):
+        return getattr(self, 'controller_context', None)
+
+    def require_recovery_context(self):
+        return None
+
+    @property
+    def boot_guard_enabled(self):
+        return self.policy.get('boot_guard_enabled', False)
+
+    def properties(self, unit, names):
+        if unit == 'fg-index-api.service' and names == ['NRestarts']:
+            return {'NRestarts': str(self.restart)}
+        raise AssertionError('unexpected property request')
 
     def main_sha(self):
         self.event('main')
@@ -155,6 +170,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotIn('probe:a', self.host.events)
 
     def test_explicit_adoption_only(self):
+        self.host.policy['boot_guard_enabled'] = False
         (self.root / 'state.json').unlink()
         with self.assertRaises(Hold):
             self.controller.check()
@@ -183,8 +199,70 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotIn('stop', self.host.events)
         self.assertIn(B, self.host.images)
         self.assertEqual('promoting', self.state()['transaction']['stage'])
+        self.assertEqual('recovered-promotion', self.controller.recover())
+        self.assertEqual(image(A), self.state()['current'])
+        self.assertEqual([B], self.state()['rejected'])
+
+    def test_boot_gate_requires_adopted_clean_committed_state(self):
+        self.host.role = {'enabled': True, 'generation': 1}
+        self.host.policy['boot_enabled'] = True
+        self.host.policy['boot_guard_enabled'] = True
+        gate = BootGate(self.host, self.store)
+        self.assertEqual(image(A), gate.authorize_start())
+        data = self.state()
+        data['transaction'] = {'stage': 'intent', 'previous': image(A), 'next': image(B), 'role': self.host.role}
+        self.store.save(data)
+        with self.assertRaises(Hold):
+            gate.authorize_start()
+        data['transaction'] = None
+        data['hold'] = 'operator review required'
+        self.store.save(data)
+        with self.assertRaises(Hold):
+            gate.authorize_start()
+        (self.root / 'state.json').unlink()
+        with self.assertRaises(Hold):
+            gate.authorize_start()
+
+    def test_boot_gate_transaction_allows_only_exact_live_activation(self):
+        self.host.role = {'enabled': True, 'generation': 1}
+        self.host.policy['boot_enabled'] = True
+        self.host.policy['boot_guard_enabled'] = True
+        data = self.state()
+        data['transaction'] = {'stage': 'switched', 'previous': image(A), 'next': image(B), 'role': self.host.role}
+        self.store.save(data)
+        self.host.images[B] = image(B)
+        self.host.link = self.host.targets(image(B))
+        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'invocation': 'valid', 'restarts': 0}
+        self.assertEqual(image(B), BootGate(self.host, self.store).authorize_start())
+        self.host.controller_context = None
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'invocation': 'valid', 'restarts': 1}
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'invocation': 'valid', 'restarts': 0}
+        self.host.restart = 1
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+        self.host.restart = 0
+        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'invocation': 'valid', 'restarts': 0}
+        self.host.link = ('/unknown', self.host.targets(image(B))[1])
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+
+    def test_guard_off_phase_allows_no_deployment_watchdog_or_recovery_mutation(self):
+        self.host.policy['boot_guard_enabled'] = False
+        with self.assertRaises(Hold):
+            self.controller.once()
+        with self.assertRaises(Hold):
+            self.controller.watchdog()
+        data = self.state()
+        data['transaction'] = {'stage': 'intent', 'previous': image(A), 'next': image(B), 'role': self.host.role}
+        self.store.save(data)
+        before_recovery = (self.root / 'state.json').read_bytes()
         with self.assertRaises(Hold):
             self.controller.recover()
+        self.assertEqual(before_recovery, (self.root / 'state.json').read_bytes())
 
     def test_bad_provenance_never_stops(self):
         self.host.fail.add('promote')
@@ -328,9 +406,9 @@ class DeploymentTest(unittest.TestCase):
         with self.assertRaises(Crash):
             self.controller.once()
         self.assertEqual('rolling-back', self.state()['transaction']['stage'])
-        with self.assertRaises(Hold):
-            self.controller.recover()
-        self.assertEqual(1, self.host.events.count('restore'))
+        self.host.crash = None
+        self.assertEqual('rolled-back', self.controller.recover())
+        self.assertEqual(2, self.host.events.count('restore'))
 
     def test_role_generation_drift_blocks_recovery(self):
         self.host.crash = 'switch'
@@ -545,14 +623,18 @@ class ProbeTest(unittest.TestCase):
 
 
 class LoadedContractTest(unittest.TestCase):
-    def props(self, enabled):
+    def props(self, enabled, guard=False):
         role = str(enabled).lower()
         argv = '/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=' + role + ' /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js'
         return {'User': 'fg-index', 'Group': 'fg-index', 'ControlPID': '0',
                 'FragmentPath': '/etc/systemd/system/fg-index-api.service',
+                'Requires': 'sysinit.target system.slice fg-index-api-boot-guard.service' if guard else 'sysinit.target system.slice',
+                'After': 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice fg-index-api-boot-guard.service' if guard else 'network-online.target sysinit.target basic.target systemd-journald.socket systemd-tmpfiles-setup.service system.slice',
                 'WorkingDirectory': '/opt/fg-index/current/apps/api-server',
                 'EnvironmentFiles': '/etc/fg-index/api.env (ignore_errors=no)',
-                'DropInPaths': '/etc/systemd/system/fg-index-api.service.d/10-scheduler-owner.conf' if enabled else '',
+                'DropInPaths': ' '.join(x for x, include in (
+                    ('/etc/systemd/system/fg-index-api.service.d/10-scheduler-owner.conf', enabled),
+                    ('/etc/systemd/system/fg-index-api.service.d/20-deployment-boot-guard.conf', guard)) if include),
                 'ExecStart': '{ path=/usr/bin/env ; argv[]=' + argv + ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
 
     def test_actual_node_release_layout_is_centralized(self):
@@ -566,6 +648,28 @@ class LoadedContractTest(unittest.TestCase):
     def test_exact_base_false_and_sole_reviewed_true_are_accepted(self):
         for enabled in (False, True):
             validate_loaded_unit(self.props(enabled), {'enabled': enabled, 'generation': 1})
+            validate_loaded_unit(self.props(enabled, guard=True), {'enabled': enabled, 'generation': 1}, True)
+
+    def test_partial_guard_policy_and_api_dropin_attachment_hold(self):
+        base_role = {'enabled': True, 'generation': 1}
+        with self.assertRaises(Hold):
+            validate_loaded_unit(self.props(True), base_role, boot_guard_enabled=True)
+        with self.assertRaises(Hold):
+            validate_loaded_unit(self.props(True, guard=True), base_role, boot_guard_enabled=False)
+
+    def test_loaded_controller_timeout_matches_each_fixed_operation_budget(self):
+        for unit, action, timeout in (
+                ('fg-index-deployment.service', '--once', '30min'),
+                ('fg-index-deployment-watchdog.service', '--watchdog', '10min'),
+                ('fg-index-deployment-recovery.service', '--recover', '10min')):
+            argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py ' + action
+            props = {'User': 'root', 'Type': 'oneshot', 'TimeoutStartUSec': timeout,
+                     'FragmentPath': '/etc/systemd/system/' + unit, 'DropInPaths': '',
+                     'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=' + argv + ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
+            validate_loaded_controller(props, unit, action)
+            props['TimeoutStartUSec'] = '5min'
+            with self.assertRaises(Hold):
+                validate_loaded_controller(props, unit, action)
 
     def test_loaded_path_count_argv_workdir_env_and_dropin_drift_are_rejected(self):
         modifications = [
@@ -578,6 +682,10 @@ class LoadedContractTest(unittest.TestCase):
             ('EnvironmentFiles', lambda v: v.replace('no', 'yes')),
             ('DropInPaths', lambda v: v + ' /etc/systemd/system/fg-index-api.service.d/20-unknown.conf'),
             ('DropInPaths', lambda v: v + ' ' + v),
+            ('Requires', lambda v: v + ' fg-index-api-boot-guard.service'),
+            ('Requires', lambda v: v + ' recovery.service'),
+            ('After', lambda v: v.replace('network-online.target', 'unknown.service')),
+            ('After', lambda v: v + ' unrelated.service'),
         ]
         for field, change in modifications:
             with self.subTest(field=field):
@@ -585,6 +693,19 @@ class LoadedContractTest(unittest.TestCase):
                 props[field] = change(props[field])
                 with self.assertRaises(Hold):
                     validate_loaded_unit(props, {'enabled': True, 'generation': 1})
+
+
+class PolicyPhaseTest(unittest.TestCase):
+    def test_legacy_policy_is_guard_off_and_only_exact_extension_is_accepted(self):
+        legacy = {'schema_version': 1, 'role': {}, 'boot_enabled': True, 'schema': 'a' * 64,
+                  'nodes': {}, 'pins': {}, 'manual_adoption': {}}
+        validate_policy_shape(legacy)
+        for enabled in (False, True):
+            validate_policy_shape({**legacy, 'boot_guard_enabled': enabled})
+        with self.assertRaises(Hold):
+            validate_policy_shape({**legacy, 'unknown': True})
+        with self.assertRaises(Hold):
+            validate_policy_shape({**legacy, 'boot_guard_enabled': 'true'})
 
 
 class PollerContractTest(unittest.TestCase):

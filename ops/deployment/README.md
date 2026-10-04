@@ -19,13 +19,17 @@ A reviewed installation must create `/var/lib/fg-index-deployment` root:root
 0700, install the controller root:root0755 under
 `/usr/local/libexec/fg-index-deployment/`, and provide a root:root0600
 `/etc/fg-index/deployment-policy.json` (parents root-owned without write grants
-or ACLs). There is no default permissive policy. Required policy shape:
+or ACLs). There is no default permissive policy. Install and pin the fixed
+deployment, watchdog, guard, and recovery unit files before adoption, but do not
+install the API guard drop-in yet. Reload systemd so the fixed unit contracts can
+be checked. Required policy shape after guard attachment:
 
 ```json
 {
   "schema_version": 1,
   "role": {"generation": 1, "enabled": true},
   "boot_enabled": true,
+  "boot_guard_enabled": true,
   "schema": "<reviewed SHA256 of apps/api-server/prisma/schema.prisma>",
   "nodes": {"v24.21.0": "<reviewed SHA256 of /opt/nodejs/releases/node-v24.21.0/bin/node>"},
   "pins": {
@@ -37,7 +41,12 @@ or ACLs). There is no default permissive policy. Required policy shape:
     "/etc/fg-index-release-promoter/trusted_root.jsonl": "<accepted SHA256>",
     "/etc/systemd/system/fg-index-api.service": "<accepted SHA256>",
     "/etc/systemd/system/fg-index-release-poller.service": "<accepted SHA256>",
+    "/etc/systemd/system/fg-index-api-boot-guard.service": "<accepted SHA256>",
+    "/etc/systemd/system/fg-index-deployment.service": "<accepted SHA256>",
+    "/etc/systemd/system/fg-index-deployment-watchdog.service": "<accepted SHA256>",
+    "/etc/systemd/system/fg-index-deployment-recovery.service": "<accepted SHA256>",
     "/etc/systemd/system/fg-index-api.service.d/10-scheduler-owner.conf": "32452cac8814231866521e8e5af192f7aa4df9b12573309ac071e499b8bcef64",
+    "/etc/systemd/system/fg-index-api.service.d/20-deployment-boot-guard.conf": "<accepted SHA256 when boot_guard_enabled is true>",
     "/root/fg-index-api-activation-fa654555b1692111af882f45/scheduler-owner-receipt.json": "<accepted complete owner receipt SHA256>",
     "/root/fg-index-api-activation-fa654555b1692111af882f45/boot-enable-receipt.json": "6b38e986dba34088e42d4027f34850a5d8fe4f06b987098eff39a74961903f33"
   },
@@ -70,6 +79,27 @@ first known-good receipt; it does not switch links/start/enable any service.
 `--check` then validates receipt inventory, runtime and pins without probes or
 writes. Never hand-edit state to bypass adoption or clear a HOLD.
 
+The legacy policy shape without `boot_guard_enabled` means the explicit
+guard-off phase. Install and pin the controller, guard, recovery, and existing
+deployment units before adoption, while leaving the API's `20-deployment-boot-guard.conf`
+absent. In this phase `--check`, `--adopt`, and `--adopt-retention` are allowed;
+`--once`, watchdog, recovery, and API start authorization HOLD without changing
+deployment state. Run `--adopt`, verify it with `--check`, then run the
+separately reviewed `--adopt-retention` step and verify its receipt.
+
+Only then install the exact pinned `20-deployment-boot-guard.conf`, set
+`boot_guard_enabled` to true and add its SHA256 to `pins`, run
+`systemctl daemon-reload`, and verify the loaded API `Requires=`/`After=`
+relationship and run `--check`. A partial policy/drop-in installation HOLDs.
+The guard has no timer and is not enabled independently. Its oneshot runs afresh
+for each API activation; a failed check blocks `ExecStart`. Do not start or
+restart the API as part of guard installation. The fixed recovery unit is static
+and operator initiated.
+
+After reviewing the private state and link/process evidence, invoke recovery
+through `sudo systemctl start fg-index-deployment-recovery.service`. The unit
+uses the shared lock and rejects calls outside its exact active invocation.
+
 ## Transaction and recovery
 
 ```text
@@ -87,12 +117,17 @@ write/replace/fsync during activation or rollback stops only a positively
 identified transaction-owned API and records HOLD if persistence permits; it
 never starts another process. Commit is written from a copy while retaining
 the started transaction, so a failed commit cannot erase its recovery intent. Check rejects
-an incomplete transaction. Crash recovery `--recover` accepts only recorded
-activation stages and transaction-owned link targets; it restores the prior
-verified image once under the **current committed role generation**. Promoting
-or interrupted rollback stages, changed role/links/inventory, failed stop and
-partial/unknown receipts HOLD for a new reviewed operator action. No speculative
-link overwrite, reset-failed, second automatic rollback or bad-SHA retry occurs.
+an incomplete transaction. During a transaction, API start is allowed only from
+the exact active deployment, watchdog, or recovery unit, for the recorded
+`switched` candidate or `rolling-back` previous image, matching role generation
+and link targets, with zero controller restarts. Otherwise the guard blocks
+startup. Operator `--recover` handles recorded activation stages and interrupted
+rollback idempotently after checking transaction-owned link targets. An
+interrupted `promoting` stage keeps links on the previous image, rejects the
+candidate SHA, and preserves its unknown/inactive tree for review. Changed
+role/links/inventory, failed stop, and partial/unknown receipts HOLD for evidence
+review. No speculative link overwrite, reset-failed, second automatic rollback
+or bad-SHA retry occurs.
 
 Hard new-image failure triggers one stop/restore/start/accept attempt. Baseline
 DB failure never touches a healthy current API. A DB failure after activation
