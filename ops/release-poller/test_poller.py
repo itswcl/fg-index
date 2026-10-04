@@ -218,8 +218,10 @@ class ReleasePollerTests(unittest.TestCase):
             self.assertEqual(output.stat().st_size, 0)
         self.assertEqual(response.read_sizes, [6])
 
-    def test_systemd_unit_confines_poller_to_private_state_directory(self) -> None:
+    def test_systemd_unit_bounds_poll_time_and_confines_private_state(self) -> None:
         unit = (Path(__file__).parent / "systemd" / "fg-index-release-poller.service").read_text(encoding="utf-8")
+        self.assertRegex(unit, r"(?m)^TimeoutStartSec=180$")
+        self.assertNotRegex(unit, r"(?m)^Restart=")
         self.assertRegex(unit, r"(?m)^User=fg-index-release-poller$")
         self.assertRegex(unit, r"(?m)^Group=fg-index-release-poller$")
         self.assertIn("StateDirectory=fg-index-release-poller", unit)

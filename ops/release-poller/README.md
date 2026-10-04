@@ -74,7 +74,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin --gid fg-index-
 sudo systemctl daemon-reload
 ```
 
-The service unit creates `/var/lib/fg-index-release-poller` as mode `0700` when it first runs. Installing the units does not start the service or enable the timer.
+The service unit creates `/var/lib/fg-index-release-poller` as mode `0700` when it first runs. Its `TimeoutStartSec=180` bounds each one-shot poll; a timeout marks the service failed and terminates it. The service has no automatic restart, and the timer stays disabled until a separate capacity review, so this one-shot is not automatically retried. A timeout may interrupt candidate staging; inspect the journal and staged directory before any manual retry. Installing the units does not start the service or enable the timer.
 
 ## Capacity gate and timer activation
 
