@@ -4,7 +4,7 @@
 local watchdog rollback. It reuses the unchanged root promoter and existing
 unprivileged poller. Its default `--check` reads only; it never provisions state,
 adopts an unknown image, starts the API, resets failed units, installs Node,
-migrates a database, deletes an image or enables a timer.
+migrates a database, deletes an image or enables a timer during a check.
 
 ## Installation and adoption are separate operational gates
 
@@ -30,6 +30,8 @@ or ACLs). There is no default permissive policy. Required policy shape:
   "nodes": {"v24.21.0": "<reviewed SHA256 of /opt/nodejs/releases/node-v24.21.0/bin/node>"},
   "pins": {
     "/usr/local/libexec/fg-index-deployment/deploy_api_release.py": "<reviewed SHA256>",
+    "/usr/local/libexec/fg-index-deployment/retain_api_releases.py": "<reviewed SHA256>",
+    "/etc/systemd/system/fg-index-release-retire@.service": "<reviewed SHA256>",
     "/usr/local/libexec/fg-index-release-promoter/promote_api_release.py": "<accepted SHA256>",
     "/usr/local/libexec/fg-index-release-poller/poller.py": "<accepted SHA256>",
     "/etc/fg-index-release-promoter/trusted_root.jsonl": "<accepted SHA256>",
@@ -119,14 +121,36 @@ A local lock does not fence a remote host.
 Rollback preserves the current role, including a separately approved true
 role. No automatic Render worker activation or cross-host failover exists.
 
-The controller adds current/rollback/pending evidence to the existing root
-protected-SHA policy and never removes existing protected entries. The poller
-still enforces its three-candidate cap and capacity reserves; the promoter
-independently enforces8GiB/10000inode reserves on new images. A full protected
-set holds. Root-image pruning and unprivileged rejected-candidate retirement
-remain a dependent PR; **do not enable these timers before that gate**.
-Unknown root images are never overwritten/pruned. This conservative first
-controller may eventually HOLD at capacity, requiring reviewed retirement.
+The receipt-bound retention implementation requires an explicit reviewed
+`--adopt-retention` after accepted-image adoption. It copies only current and
+rollback receipts into private `retention.json`, preserving existing operator
+protections as extras. Unknown directories are never implicitly adopted.
+
+Before incoming promotion the controller verifies complete state, exact live
+links, registered root inventories, capacity reserves, protected current/rollback
+and extras. It reserves a third root image slot and maintains a version2 root
+policy with a monotonically increasing generation. Root-declared rejected SHA
+requests bind exact marker/archive/bundle fingerprints. The dedicated disabled
+`fg-index-release-retire@<generation>.service` runs under the poller identity,
+uses the existing quarantine lock, validates the full private tree and policy
+again immediately before deletion, and refuses protected/current/rollback
+identities. Only this unprivileged path removes rejected quarantine; root never
+recursively deletes poller-owned trees. The existing three-candidate cap remains.
+
+Root pruning uses only registered, reverified root-owned images outside the
+current/rollback/operator protected set. It fsyncs exact inode/inventory intent,
+renames inside the trusted root release tree, rechecks inventory, then uses
+fd-based symlink-safe deletion and a durable ledger commit. A crash, unknown
+temporary path, generation mismatch or changed inventory HOLDs; root does not
+infer a new receipt from a directory. Explicit reviewed `--recover-retention`
+can resolve only that registered obsolete-image intent and never touches
+current/rollback/extras. No arbitrary path, force-prune or cap-lift interface is
+provided. Existing unknown/pending quarantine and unknown root images remain
+protected by fail-closed holds.
+
+Installation, initial ledger/policy adoption, controlled failure rehearsal,
+actual byte/inode runway and cadence still need PM/QA operational approval.
+**Do not enable timers merely because this source PR merged.**
 
 Suggested cadence templates: deployment2min after boot /10min after completion,
 with30s jitter; watchdog1min after boot/completion. Both use the same nonblocking
@@ -153,3 +177,44 @@ insufficient. Both root controller units expose home read-only and whitelist
 only the accepted role-stage directory for shared-lock writes. Linux CI uses
 a synthetic root directory to verify this systemd namespace contract; it never
 touches the production stage or starts an application.
+
+## Retention adoption and recovery
+
+After source/installation gates and fresh independent current/rollback receipt
+acceptance, execute the reviewed command under the existing shared lock:
+
+```text
+sudo /usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --adopt-retention
+```
+
+The private ledger must be absent; the existing version1 protected policy is
+required for initial adoption. It records only independently accepted current/
+rollback inventories, preserving other operator SHA protections. Next `--once`
+upgrades policy to version2 immediately before incoming work. A partial policy
+transition persists its exact policy intent before either generation advances.
+Reviewed `--recover-retention` can reapply only that registered intent after
+confirming current/rollback/operator protections and rejection verdicts; no
+blind counter reset or overwrite is provided. Root-state/ledger validation errors leave the
+running image alone and prevent further automatic mutation.
+
+An interrupted registered root prune can be inspected and resolved with the
+separately reviewed `--recover-retention` command. Before-rename intent recovery
+preserves the image; after-rename recovery validates exact inode and original receipt. A durable
+deleting phase is written only after moved-tree verification; mid-deletion
+recovery checks every remaining path against the registered per-entry content/
+mode/link snapshot (bounded16MiB/100000entries), refusing changed/unknown content,
+and removes only the obsolete registered private tree if still present,
+and commits the ledger. Unknown/changed/current/rollback paths HOLD.
+
+Capacity guards preserve8GiB+16MiB+64KiB and10000+10 inodes on root-image/state
+filesystems before retention writes. The unchanged poller/promoter independently
+budget incoming snapshot/expansion plus8GiB/10000inodes. State/ledger intent and
+policy are independently fsynced; a cross-file generation mismatch HOLDs. The
+new unprivileged service is oneshot/static with no timer or install target.
+
+Quarantine retirement bounds complete-plan inspection before first deletion:
+at mostthree finalized candidates,100000entries/6GiB tree content per target,
+8GiB cumulative evidence hashing and90s inspection deadline. Exact no-change
+inode/size/mtime/ctime checks replace repeated multi-GiB hashes during final
+delete rechecks. The180s unit envelope preserves a deletion margin; interruption
+leaves fail-closed operator review, never root cleanup of poller-owned trees.

@@ -107,9 +107,9 @@ def atomic_json(path, data, mode=0o600):
             os.unlink(name)
 
 
-def read_json(path, uid=0):
+def read_json(path, uid=0, max_bytes=1024 * 1024):
     trusted(path, private=True, uid=uid)
-    require(path.stat().st_size <= 1024 * 1024, 'oversized configuration/state')
+    require(path.stat().st_size <= max_bytes, 'oversized configuration/state')
     value = json.loads(path.read_text())
     require(isinstance(value, dict), 'invalid configuration/state')
     return value
@@ -260,6 +260,8 @@ class Host:
         expected = {str(PROMOTER), '/etc/fg-index-release-promoter/trusted_root.jsonl',
                     '/usr/local/libexec/fg-index-release-poller/poller.py',
                     '/usr/local/libexec/fg-index-deployment/deploy_api_release.py',
+                    '/usr/local/libexec/fg-index-deployment/retain_api_releases.py',
+                    '/etc/systemd/system/fg-index-release-retire@.service',
                     '/etc/systemd/system/' + API, '/etc/systemd/system/' + POLLER}
         if self.role['enabled']:
             expected |= {str(ROLE_OVERRIDE), str(OWNER_RECEIPT)}
@@ -299,6 +301,32 @@ class Host:
         validate_loaded_unit(props, self.role)
         self.poller_contract()
 
+    def retention(self, store):
+        if __package__:
+            from .retain_api_releases import Retention
+        else:
+            from retain_api_releases import Retention
+        return Retention(self, store)
+
+    def prepare_retention(self, store, state, incoming):
+        self.retention(store).prepare(state, incoming)
+
+    def record_image(self, store, receipt):
+        self.retention(store).record(receipt)
+
+    def retire_quarantine(self, generation):
+        require(type(generation) is int and generation > 0, 'invalid retirement generation')
+        name = 'fg-index-release-retire@' + str(generation) + '.service'
+        props = self.properties(name, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec', 'ActiveState', 'MainPID', 'ControlPID'])
+        argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-release-poller/poller.py --root /var/lib/fg-index-release-poller --retire-rejected --generation ' + str(generation)
+        match = re.fullmatch(r'\{ path=([^;{}]+?) ; argv\[\]=([^;{}]+?) ; ignore_errors=([^;{}]+?) ;[^{}]*\}', props['ExecStart'])
+        require(match and match.group(1) == '/usr/bin/python3.12' and match.group(2) == argv and match.group(3) == 'no', 'retirement loaded argv drift')
+        require(props['User'] == props['Group'] == 'fg-index-release-poller' and props['FragmentPath'] == '/etc/systemd/system/fg-index-release-retire@.service' and props['DropInPaths'] == props['EnvironmentFiles'] == props['WorkingDirectory'] == '' and props['TimeoutStartUSec'] == '3min', 'retirement loaded contract drift')
+        require(props['ActiveState'] == 'inactive' and props['MainPID'] == props['ControlPID'] == '0', 'retirement instance already active/failed')
+        self.command(['/usr/bin/systemctl', 'start', name], 185)
+        result = self.properties(name, ['ActiveState', 'Result', 'ExecMainStatus', 'MainPID'])
+        require(result == {'ActiveState': 'inactive', 'Result': 'success', 'ExecMainStatus': '0', 'MainPID': '0'}, 'retirement did not finish successfully')
+
     def poller_contract(self):
         props = self.properties(POLLER, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'EnvironmentFiles', 'WorkingDirectory', 'TimeoutStartUSec'])
         validate_loaded_poller(props)
@@ -323,9 +351,9 @@ class Host:
     def verify(self, receipt):
         require(self.image(receipt['sha']) == receipt, 'root image receipt drift')
 
-    def image(self, sha):
+    def image(self, sha, root=None):
         require(isinstance(sha, str) and SHA.fullmatch(sha), 'invalid image SHA')
-        root = RELEASES / sha
+        root = root if root is not None else RELEASES / sha
         trusted(root, directory=True)
         h = hashlib.sha256()
         count, total = 0, 0
@@ -368,11 +396,17 @@ class Host:
     def protect(self, receipts):
         trusted(RETENTION)
         previous = json.loads(RETENTION.read_text())
-        require(set(previous) == {'schema_version', 'protected_shas'} and previous['schema_version'] == 1, 'unknown retention policy')
+        require(previous.get('schema_version') in (1, 2), 'unknown retention policy')
+        if previous['schema_version'] == 1:
+            require(set(previous) == {'schema_version', 'protected_shas'}, 'unknown retention policy fields')
+        else:
+            require(set(previous) == {'schema_version', 'generation', 'protected_shas', 'retire_rejected'}, 'unknown retirement policy fields')
         require(isinstance(previous['protected_shas'], list) and all(isinstance(s, str) and SHA.fullmatch(s) for s in previous['protected_shas']), 'invalid protected set')
         protected = set(previous['protected_shas']) | {r['sha'] for r in receipts if r}
         require(len(protected) <= 3, 'protected capacity requires reviewed retirement')
-        atomic_json(RETENTION, {'schema_version': 1, 'protected_shas': sorted(protected)}, 0o644)
+        previous['protected_shas'] = sorted(protected)
+        require(not any(r['sha'] in protected for r in previous.get('retire_rejected', [])), 'retirement request conflicts with live protection')
+        atomic_json(RETENTION, previous, 0o644)
 
     def poll(self):
         self.poller_contract()
@@ -533,6 +567,18 @@ class Controller:
                              'transaction': None, 'rejected': [], 'hold': None, 'failures': 0})
             return 'adopted'
 
+    def adopt_retention(self):
+        with self.store.lock():
+            state = self.check()
+            self.host.retention(self.store).adopt(state)
+            return 'retention-adopted'
+
+    def recover_retention(self):
+        with self.store.lock():
+            state = self.check()
+            self.host.retention(self.store).recover(state)
+            return 'retention-recovered'
+
     def once(self):
         with self.store.lock():
             state = self.check()
@@ -541,6 +587,7 @@ class Controller:
             if sha == state['current']['sha']:
                 return 'unchanged'
             require(sha not in state['rejected'], 'rejected SHA requires reviewed new revision')
+            self.host.prepare_retention(self.store, state, sha)
             self.host.protect([state['current'], state['rollback']])
             self.host.poll()
             require(self.host.main_sha() == sha, 'main moved during poll')
@@ -548,6 +595,7 @@ class Controller:
             self.store.save(state)
             try:
                 candidate = self.host.promote(sha)
+                self.host.record_image(self.store, candidate)
                 self.host.protect([state['current'], state['rollback'], candidate])
                 require(self.host.main_sha() == sha, 'main moved after promotion; inactive image retained')
                 self.host.preflight()
@@ -667,7 +715,7 @@ class Controller:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
-    for name in ('check', 'once', 'recover', 'watchdog'):
+    for name in ('check', 'once', 'recover', 'watchdog', 'adopt-retention', 'recover-retention'):
         group.add_argument('--' + name, action='store_true')
     group.add_argument('--adopt', metavar='SHA')
     parser.add_argument('--inventory', metavar='SHA256')
@@ -679,7 +727,7 @@ def main():
         if args.adopt:
             result = controller.adopt(args.adopt, args.inventory)
         else:
-            action = next((name for name in ('once', 'recover', 'watchdog') if getattr(args, name)), 'check')
+            action = next((name for name in ('once', 'recover', 'watchdog', 'adopt_retention', 'recover_retention') if getattr(args, name)), 'check')
             result = getattr(controller, action)()
         print('deployment: ' + (result if isinstance(result, str) else 'check passed'))
         return 0

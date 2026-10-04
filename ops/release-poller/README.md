@@ -106,3 +106,19 @@ python3.12 -m unittest discover -s ops/release-poller -p 'test_*.py'
 The verifier options and release fields follow the [GitHub CLI attestation verification manual](https://cli.github.com/manual/gh_attestation_verify), [GitHub artifact attestation documentation](https://docs.github.com/en/actions/concepts/security/artifact-attestations), and [GitHub repository attestations REST API](https://docs.github.com/en/rest/repos/attestations), and [GitHub Releases REST API](https://docs.github.com/en/rest/releases/releases?apiVersion=latest).
 
 Offline trust-root provisioning and the separate inactive promotion procedure are documented in [`ops/oci/README.md`](../oci/README.md#offline-promotion-into-the-inactive-release-tree).
+
+### Exact rejected-candidate retirement
+
+Normal polling accepts the existing version1 protected policy and strict
+version2 generation policies. Only a separately installed, disabled/static
+`fg-index-release-retire@<generation>.service` may invoke
+`--retire-rejected --generation <positive integer>`. It reads a root-owned bounded
+policy whose request fingerprints bind a root-declared rejected SHA. Current,
+rollback and incoming/protected SHAs cannot be requests. The service runs as the
+existing poller identity, shares its quarantine lock, validates all candidates
+and the complete private target tree, rejects escapes/ACLs/unknown entries, and
+rechecks exact generation/evidence before fd-safe deletion. It does not poll the
+network, elevate, remove root images or change the three-candidate cap. Version1
+policies cannot authorize retirement. Stale/partial requests HOLD rather than
+silently proceeding; root/controller installation and policy changes remain
+separate operational gates.

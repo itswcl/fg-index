@@ -1,0 +1,19 @@
+[Unit]
+Description=Retire root-declared rejected fg-index quarantine generation %i
+
+[Service]
+Type=oneshot
+TimeoutStartSec=180
+User=fg-index-release-poller
+Group=fg-index-release-poller
+UMask=0077
+ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-release-poller/poller.py --root /var/lib/fg-index-release-poller --retire-rejected --generation %i
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/fg-index-release-poller
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
