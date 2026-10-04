@@ -452,7 +452,7 @@ class Host:
         base_after = SYSTEMD_API_AFTER | {BOOT_GUARD}
         required = set(requires.split()) - base_requires
         ordered = set(after.split()) - base_after
-        require(required <= ordered, 'API mount requirement lacks matching ordering dependency')
+        require(required <= ordered, 'API mount requirement lacks matching ordering dependency: ' + ','.join(sorted(required - ordered)))
         candidates = required | ordered
         automatic_after = set()
         automatic_requires = set()
