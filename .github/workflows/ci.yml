@@ -35,6 +35,9 @@ jobs:
       - name: Validate API systemd unit
         run: systemd-analyze verify ops/oci/fg-index-api.service
 
+      - name: Validate Caddy log redaction policy
+        run: python3 ops/tests/test_caddy_log_redaction.py --static-only
+
       - name: Test API release publisher safety
         run: python3 -m unittest ops.tests.test_publish_api_release -v
 
