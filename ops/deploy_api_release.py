@@ -447,7 +447,7 @@ class Host:
                     targets.add(target)
         automatic = set()
         for unit in set(requires.split()) - {'sysinit.target', BOOT_GUARD}:
-            require(unit.endswith('.mount'), 'unexpected API Requires dependency')
+            require(unit.endswith('.mount'), 'unexpected API Requires dependency: ' + unit)
             mount = self.properties(unit, ['Where'])['Where']
             require(mount in targets and
                     (mount == '/' or API_WORKING_DIRECTORY == mount or
