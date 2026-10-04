@@ -8,6 +8,7 @@ import {
 import { prisma } from "../services/db.js";
 import { HttpError, handleError } from "../errors/httpError.js";
 import { deliverWebhook } from "../services/webhookDelivery.js";
+import { webhookDeliveryErrorMessage } from "../services/webhookDestination.js";
 import { invalidateAlertCandidateCache } from "../services/alertWorker.js";
 
 // Per-user cap. Keep in sync with any UI-level hint.
@@ -226,12 +227,8 @@ export async function testWebhookById(
         "Your webhook is connected! Alerts will be delivered here."
       );
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new HttpError(
-        502,
-        `Delivery failed: ${msg}`,
-        "WEBHOOK_DELIVERY_FAILED"
-      );
+      res.status(502).json({ ok: false, error: webhookDeliveryErrorMessage(err), code: "WEBHOOK_DELIVERY_FAILED" });
+      return;
     }
     res.json({ ok: true });
   } catch (err) {
