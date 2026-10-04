@@ -461,11 +461,20 @@ class Host:
         for unit in candidates:
             require(unit.endswith('.mount'), 'unexpected API dependency: ' + unit)
             mount = self.properties(unit, ['Where'])['Where']
+            if not mount:
+                encoded = unit[:-len('.mount')]
+                if encoded == '-':
+                    mount = '/'
+                else:
+                    parts = re.split(r'(?<!\\)-', encoded)
+                    decoded = [re.sub(r'\\x([0-9a-fA-F]{2})', lambda match: chr(int(match.group(1), 16)), part)
+                               for part in parts]
+                    mount = '/' + '/'.join(decoded)
             covers = lambda paths: any(mount == '/' or path == mount or path.startswith(mount.rstrip('/') + '/') for path in paths)
             actual_api_mount = mount in targets and covers(required_paths)
             private_tmp_mount = unit not in required and mount in {'/tmp', '/var/tmp'}
             require(actual_api_mount or private_tmp_mount,
-                    'API dependency mount does not cover an active API path or fixed PrivateTmp path: ' + mount)
+                    'API dependency mount does not cover an active API path or fixed PrivateTmp path: ' + unit + '=' + mount)
             automatic_after.add(unit)
             if unit in required:
                 require(actual_api_mount, 'API Requires mount does not cover its executable or working directory')
