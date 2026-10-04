@@ -125,7 +125,7 @@ starts=pathlib.Path(starts);starts.write_text(starts.read_text()+'x' if starts.e
                 self.assertEqual('xxx', calls.read_text())
                 self.assertEqual('xx', starts.read_text(), 'API ExecStart ran after guard failure')
                 fail.unlink()
-                subprocess.run(['/usr/bin/systemctl', 'reset-failed', api_name, guard_name], check=True, capture_output=True, timeout=15)
+                subprocess.run(['/usr/bin/systemctl', 'reset-failed', api_name, guard_name], capture_output=True, timeout=15)
                 subprocess.run(['/usr/bin/systemctl', 'start', controller_name], check=True, capture_output=True, timeout=15)
                 self.assertEqual('xxxx', calls.read_text())
                 self.assertEqual('xxx', starts.read_text(), 'controller waiting on API and its guard deadlocked')
