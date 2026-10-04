@@ -29,6 +29,12 @@ jobs:
       - name: Test offline root release promoter
         run: python -m unittest ops.tests.test_promote_api_release -v
 
+      - name: Test root deployment transactions
+        run: python -m unittest ops.tests.test_deploy_api_release -v
+
+      - name: Validate disabled deployment units
+        run: systemd-analyze verify ops/deployment/systemd/*.service ops/deployment/systemd/*.timer
+
       - name: Test inactive OCI host bootstrap
         run: python -m unittest ops.tests.test_bootstrap_oci_host -v
 

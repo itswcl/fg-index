@@ -1,0 +1,12 @@
+[Unit]
+Description=Opt-in fg-index deployment cadence
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+AccuracySec=1min
+RandomizedDelaySec=30s
+Unit=fg-index-deployment.service
+
+[Install]
+WantedBy=timers.target

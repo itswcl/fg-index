@@ -1,0 +1,11 @@
+[Unit]
+Description=Opt-in fg-index local runtime watchdog
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Unit=fg-index-deployment-watchdog.service
+
+[Install]
+WantedBy=timers.target
