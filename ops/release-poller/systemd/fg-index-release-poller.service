@@ -5,6 +5,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=180
 User=fg-index-release-poller
 Group=fg-index-release-poller
 UMask=0077
