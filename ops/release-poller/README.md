@@ -27,14 +27,14 @@ Each finalized candidate also retains the evidence that the online verification 
 | --- | --- | --- |
 | `api-release.tar.gz` | Exact downloaded archive that passed GitHub's asset digest and checksum checks | 2 GiB |
 | `api-release.tar.gz.sha256` | Exact uploaded checksum sidecar | 1 KiB |
-| `attestation-bundle.jsonl` | GitHub attestation bundle downloaded for that archive digest and verified by `gh attestation verify` | 16 MiB, one bundle |
+| `attestation-bundle.jsonl` | GitHub attestation bundle downloaded for that archive digest and verified by `gh attestation verify` | 16 MiB, one selected build bundle |
 | `.fg-index-verification.json` | Source SHA, release ID/tag, evidence SHA-256 digests, signer workflow, predicate, verification time | — |
 
 The poller records evidence hashes in the marker and checks all retained files when inventorying a candidate for retention. Since the marker and files are writable by the poller identity, this detects missing or inconsistent evidence but does not authenticate the quarantine to a root process. A future offline promotion operation must reverify the retained archive against the bundle and a separately trusted root-owned Sigstore trust root. If the exact SHA is already staged with matching evidence and manifest, future polls only check current `main` and do not redownload it. A malformed or incomplete candidate is left untouched and causes an error. The poller caps finalized verified candidates at three and prunes only the oldest eligible candidate in this private quarantine. It protects current `main`, the newest verified candidate, and SHAs in the root-maintained policy. Unknown entries, stale temporary trees, malformed candidates, a missing policy, or a protected set that cannot fit the cap stop polling without pruning. The current in-progress tree is not counted as finalized.
 
 ### Disk capacity and retention
 
-The poller refuses to download unless declared archive/checksum sizes plus the 16 MiB bundle allowance and 64 KiB filesystem-allocation margin fit while preserving an 8 GiB free-space reserve. Before running `gh attestation download`, it checks that reserve again and applies a subprocess-scoped `RLIMIT_FSIZE` of 16 MiB, so the bundle file cannot grow past its cap while the child runs. The CLI's `--limit 1` also restricts the lookup to one attestation; the byte cap is enforced separately. Each release asset download stops as soon as the stream exceeds its declared size. Before extraction, the poller budgets filesystem block allocation and path metadata and refuses if that estimate would breach the reserve. The retained archive and bundle occupy up to 2 GiB plus 16 MiB per finalized candidate in addition to the expanded tree; the three-candidate cap bounds this evidence overhead. A concurrent disk consumer can still cause an operation to fail; the incomplete quarantine tree is cleaned up. Retention touches only `/var/lib/fg-index-release-poller/staged`; it never deletes or modifies `/opt/fg-index/releases` or `/opt/fg-index/current`.
+The poller refuses to download unless declared archive/checksum sizes plus the 16 MiB bundle allowance and 64 KiB filesystem-allocation margin fit while preserving an 8 GiB free-space reserve. Before attestation retrieval, it checks that reserve again. It fetches one public REST page from the exact repository/archive-SHA256 endpoint with `per_page=30`. Both the response body and the serialized retained bundle are capped at 16 MiB; an oversized stream or declared size fails before any bundle file is written. It validates the response and signed-envelope shapes and selects the first original SLSA provenance bundle whose subject includes the exact archive digest. These untrusted fields only select evidence; `gh attestation verify` authenticates it. The poller does not follow `bundle_url` or fetch further pages. This bounded lookup is not a complete attestation inventory: missing acceptable evidence, malformed records, HTTP/rate-limit errors, and verification failures stop the poll without finalizing a candidate. A later matching record is not tried after a selected bundle fails cryptographic verification. Each release asset download stops as soon as the stream exceeds its declared size. Before extraction, the poller budgets filesystem block allocation and path metadata and refuses if that estimate would breach the reserve. The retained archive and bundle occupy up to 2 GiB plus 16 MiB per finalized candidate in addition to the expanded tree; the three-candidate cap bounds this evidence overhead. A concurrent disk consumer can still cause an operation to fail; the incomplete quarantine tree is cleaned up. Retention touches only `/var/lib/fg-index-release-poller/staged`; it never deletes or modifies `/opt/fg-index/releases` or `/opt/fg-index/current`.
 
 Retention reads `/etc/fg-index-release-poller/retention-policy.json`. The operator must create this as a regular file owned by root and not writable by its group or other users. Its format is:
 
@@ -47,13 +47,14 @@ Retention reads `/etc/fg-index-release-poller/retention-policy.json`. The operat
 
 List each approved rollback or operator-protected candidate as a full lowercase SHA in `protected_shas`; keep the array empty when there are none. Keep the timer disabled until the owner has reviewed the protected set, measured current guest free bytes and inodes, and confirmed the retention and 8 GiB reserve fit actual capacity. The OCI console's configured volume size and earlier free-space estimates are not substitutes for guest measurements.
 
-No runner or deploy credential is needed. REST and release downloads are public. The `gh` verification process receives a temporary empty home/config directory and no inherited GitHub token variables; it uses the public GitHub attestation API and Sigstore's public-good trust root. It needs outbound HTTPS to `api.github.com`, `github.com`, and GitHub's release-asset hosts.
+No runner or deploy credential is needed. REST and release downloads are public. Attestation retrieval uses public REST directly because `gh attestation download` requires CLI authentication even for this public repository. The local `gh attestation verify --bundle` process receives a temporary empty home/config directory and no inherited GitHub token variables. It uses `--custom-trusted-root /etc/fg-index-release-promoter/trusted_root.jsonl`, the separately provisioned Sigstore root snapshot also used by the promoter, and denies self-hosted runners. The root file and its directory must be root-owned, regular file/directory respectively, and not group- or world-writable. Verification retains the exact repository, source SHA, main ref, signer workflow, SLSA predicate, and default GitHub Actions OIDC issuer constraints. Only REST and release downloads need outbound HTTPS to `api.github.com`, `github.com`, and GitHub's release-asset hosts; bundle verification uses local evidence and roots.
 
 ## Runtime requirements
 
 - Linux with systemd
 - Python 3.12 or newer
-- GitHub CLI with `gh attestation download` and `gh attestation verify` support
+- GitHub CLI with offline `gh attestation verify --bundle --custom-trusted-root` support
+- Root-owned, read-only Sigstore trusted-root snapshot at `/etc/fg-index-release-promoter/trusted_root.jsonl`
 - A dedicated `fg-index-release-poller` system user and same-named primary group, with no membership in `fg-index`
 - A private systemd state directory at `/var/lib/fg-index-release-poller`, writable only by the poller service
 - The poller script installed at `/usr/local/libexec/fg-index-release-poller/poller.py`
@@ -93,7 +94,7 @@ Recalculate the expected retention runway using that measured allocated size, ob
 sudo systemctl enable --now fg-index-release-poller.timer
 ```
 
-The timer starts two minutes after boot and then runs every ten minutes. A normal unchanged poll makes one unauthenticated GitHub REST request; a new `main` SHA triggers the release, tag, and final branch checks plus one public attestation lookup. This leaves room below GitHub's unauthenticated REST limit while avoiding repeated asset downloads for an already staged SHA. Check `journalctl -u fg-index-release-poller.service` for its result.
+The timer starts two minutes after boot and then runs every ten minutes. A normal unchanged poll makes one unauthenticated GitHub REST request; a new `main` SHA triggers the release, tag, and final branch checks plus one bounded public attestation lookup (up to 30 records, no pagination). This leaves room below GitHub's unauthenticated REST limit while avoiding repeated asset downloads for an already staged SHA. Check `journalctl -u fg-index-release-poller.service` for its result.
 
 
 ## Offline tests
@@ -102,6 +103,6 @@ The timer starts two minutes after boot and then runs every ten minutes. A norma
 python3.12 -m unittest discover -s ops/release-poller -p 'test_*.py'
 ```
 
-The verifier options and release fields follow the [GitHub CLI attestation verification manual](https://cli.github.com/manual/gh_attestation_verify), [GitHub artifact attestation documentation](https://docs.github.com/en/actions/concepts/security/artifact-attestations), and [GitHub Releases REST API](https://docs.github.com/en/rest/releases/releases?apiVersion=latest).
+The verifier options and release fields follow the [GitHub CLI attestation verification manual](https://cli.github.com/manual/gh_attestation_verify), [GitHub artifact attestation documentation](https://docs.github.com/en/actions/concepts/security/artifact-attestations), and [GitHub repository attestations REST API](https://docs.github.com/en/rest/repos/attestations), and [GitHub Releases REST API](https://docs.github.com/en/rest/releases/releases?apiVersion=latest).
 
 Offline trust-root provisioning and the separate inactive promotion procedure are documented in [`ops/oci/README.md`](../oci/README.md#offline-promotion-into-the-inactive-release-tree).
