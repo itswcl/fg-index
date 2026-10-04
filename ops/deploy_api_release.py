@@ -457,17 +457,18 @@ class Host:
         candidates = required | ordered
         automatic_after = set()
         automatic_requires = set()
-        permitted_paths = (API_WORKING_DIRECTORY, API_NODE_EXECUTABLE, '/tmp', '/var/tmp')
         required_paths = (API_WORKING_DIRECTORY, API_NODE_EXECUTABLE)
         for unit in candidates:
             require(unit.endswith('.mount'), 'unexpected API dependency: ' + unit)
             mount = self.properties(unit, ['Where'])['Where']
             covers = lambda paths: any(mount == '/' or path == mount or path.startswith(mount.rstrip('/') + '/') for path in paths)
-            require(mount in targets and covers(permitted_paths),
-                    'API dependency mount does not cover an allowed fixed path')
+            actual_api_mount = mount in targets and covers(required_paths)
+            private_tmp_mount = unit not in required and mount in {'/tmp', '/var/tmp'}
+            require(actual_api_mount or private_tmp_mount,
+                    'API dependency mount does not cover an active API path or fixed PrivateTmp path: ' + mount)
             automatic_after.add(unit)
             if unit in required:
-                require(covers(required_paths), 'API Requires mount does not cover its executable or working directory')
+                require(actual_api_mount, 'API Requires mount does not cover its executable or working directory')
                 automatic_requires.add(unit)
         return automatic_requires, automatic_after
 
