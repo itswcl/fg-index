@@ -72,6 +72,12 @@ class TestHost:
         self.event('protect')
         self.protected = [r['sha'] for r in receipts if r]
 
+    def prepare_retention(self, store, state, incoming):
+        self.event('prepare-retention')
+
+    def record_image(self, store, receipt):
+        self.event('record-image')
+
     def poll(self):
         self.event('poll')
 

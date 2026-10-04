@@ -2,6 +2,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import stat
 import sys
 import tarfile
@@ -505,7 +506,7 @@ class ReleasePollerTests(unittest.TestCase):
 
     def test_retention_rejects_invalid_or_untrusted_policy_without_pruning(self) -> None:
         candidate = self.add_candidate("1" * 40, "2026-01-01T00:00:00+00:00")
-        self.policy.write_text('{"schema_version": 2, "protected_shas": []}', encoding="utf-8")
+        self.policy.write_text('{"schema_version": 3, "protected_shas": []}', encoding="utf-8")
         with self.assertRaisesRegex(poller.PollError, "schema_version"):
             self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
 
@@ -514,6 +515,124 @@ class ReleasePollerTests(unittest.TestCase):
             with self.assertRaisesRegex(poller.PollError, "owned by root"):
                 self.make_poller()._enforce_retention(SOURCE_SHA, incoming_candidate=True)
         self.assertTrue(candidate.exists())
+
+    def retirement_fixture(self, targets=None):
+        active = self.add_candidate(SOURCE_SHA, "2026-01-01T00:00:00+00:00")
+        rollback = self.add_candidate("2" * 40, "2026-02-01T00:00:00+00:00")
+        rejected = self.add_candidate("3" * 40, "2026-03-01T00:00:00+00:00")
+        for path in [self.root / 'staged', *list((self.root / 'staged').rglob('*'))]:
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        lock = self.root / 'staged/.release-poller.lock'
+        lock.write_text('')
+        lock.chmod(0o600)
+        requests = []
+        for path in targets or [rejected]:
+            requests.append({'sha': path.name,
+                             'marker_sha256': sha256((path / poller.MARKER_NAME).read_bytes()),
+                             'archive_sha256': sha256((path / poller.ARCHIVE_NAME).read_bytes()),
+                             'attestation_bundle_sha256': sha256((path / poller.ATTESTATION_BUNDLE_NAME).read_bytes())})
+        policy = {'schema_version': 2, 'generation': 1, 'protected_shas': [active.name, rollback.name, NEXT_SHA], 'retire_rejected': requests}
+        self.policy.write_text(json.dumps(policy))
+        return active, rollback, rejected, policy
+
+    def test_retirement_resolves_failed_newest_three_protected_slot_deadlock(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        self.policy.write_text(json.dumps({'schema_version': 1, 'protected_shas': [active.name, rollback.name]}))
+        with self.assertRaisesRegex(poller.PollError, 'retention is blocked'):
+            self.make_poller()._enforce_retention(NEXT_SHA, incoming_candidate=True)
+        self.policy.write_text(json.dumps(policy))
+        self.assertEqual([rejected.name], self.make_poller().retire_rejected(1))
+        self.make_poller()._enforce_retention(NEXT_SHA, incoming_candidate=True)
+        self.assertTrue(active.exists() and rollback.exists())
+        self.assertFalse(rejected.exists())
+
+    def test_retirement_rejects_stale_generation(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        with self.assertRaisesRegex(poller.PollError, 'generation'):
+            self.make_poller().retire_rejected(2)
+        self.assertTrue(rejected.exists())
+
+    def test_retirement_refuses_current_rollback_protection(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        policy['protected_shas'].append(rejected.name)
+        self.policy.write_text(json.dumps(policy))
+        with self.assertRaisesRegex(poller.PollError, 'protected'):
+            self.make_poller().retire_rejected(1)
+        self.assertTrue(all(p.exists() for p in (active, rollback, rejected)))
+
+    def test_retirement_evidence_change_preserves_candidate(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        marker = rejected / poller.MARKER_NAME
+        marker.write_text(marker.read_text() + ' ')
+        with self.assertRaisesRegex(poller.PollError, 'evidence changed'):
+            self.make_poller().retire_rejected(1)
+        self.assertTrue(rejected.exists())
+
+    def test_retirement_refuses_symlink_escape_without_external_deletion(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (outside / 'keep').write_text('keep')
+        (rejected / 'escape').symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(poller.PollError, 'escapes'):
+            self.make_poller().retire_rejected(1)
+        self.assertTrue((outside / 'keep').exists() and rejected.exists())
+
+    def test_retirement_fails_closed_on_unknown_tree_entry(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        (self.root / 'staged/.unknown').write_text('unknown')
+        with self.assertRaises(poller.PollError):
+            self.make_poller().retire_rejected(1)
+        self.assertTrue(rejected.exists())
+
+    def test_retirement_rechecks_root_policy_before_deletion(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        instance = self.make_poller()
+        changed = dict(policy, generation=2)
+        with patch.object(instance, '_load_retention_policy', side_effect=[policy, changed]):
+            with self.assertRaisesRegex(poller.PollError, 'generation changed'):
+                instance.retire_rejected(1)
+        self.assertTrue(rejected.exists())
+
+    def test_retirement_rechecks_marker_race_before_deletion(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        instance = self.make_poller()
+        original = instance._validate_retirement_tree
+        calls = []
+        def mutate(candidate):
+            calls.append(1)
+            original(candidate)
+            if len(calls) == 2:
+                marker = rejected / poller.MARKER_NAME
+                marker.write_text(marker.read_text() + ' ')
+        with patch.object(instance, '_validate_retirement_tree', side_effect=mutate):
+            with self.assertRaisesRegex(poller.PollError, 'raced'):
+                instance.retire_rejected(1)
+        self.assertTrue(rejected.exists())
+
+    def test_retirement_shared_lock_prevents_concurrent_poll(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        import fcntl
+        with (self.root / 'staged/.release-poller.lock').open('r+') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(poller.PollError, 'already in use'):
+                self.make_poller().retire_rejected(1)
+        self.assertTrue(rejected.exists())
+
+
+    def test_retirement_oversized_tree_budget_fails_before_any_deletion(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        with patch.object(poller, 'MAX_ARCHIVE_ENTRIES', 1):
+            with self.assertRaisesRegex(poller.PollError, 'budget'):
+                self.make_poller().retire_rejected(1)
+        self.assertTrue(active.exists() and rollback.exists() and rejected.exists())
+
+    def test_retirement_deadline_exhaustion_fails_before_deletion(self):
+        active, rollback, rejected, policy = self.retirement_fixture()
+        with patch.object(poller.time, 'monotonic', side_effect=[0, 91]):
+            with self.assertRaisesRegex(poller.PollError, 'budget'):
+                self.make_poller().retire_rejected(1)
+        self.assertTrue(rejected.exists())
 
     def test_retention_fails_when_policy_is_missing(self) -> None:
         self.policy.unlink()

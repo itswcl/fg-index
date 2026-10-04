@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -189,7 +190,7 @@ class ReleasePoller:
         except OSError as error:
             raise PollError(f"could not inspect retention policy owner at {path}: {error}") from error
 
-    def _load_protected_shas(self) -> set[str]:
+    def _load_retention_policy(self) -> dict[str, Any]:
         path = self.retention_policy
         try:
             mode = path.lstat().st_mode
@@ -201,6 +202,10 @@ class ReleasePoller:
             raise PollError(f"retention policy must be owned by root: {path}")
         if mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise PollError(f"retention policy must not be group- or world-writable: {path}")
+        if path.stat().st_size > 65536:
+            raise PollError("retention policy exceeds its byte budget")
+        if hasattr(os, "listxattr") and any(name.startswith("system.posix_acl") for name in os.listxattr(path, follow_symlinks=False)):
+            raise PollError("retention policy has unexpected ACL grants")
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -208,9 +213,9 @@ class ReleasePoller:
         if (
             not isinstance(data, dict)
             or type(data.get("schema_version")) is not int
-            or data.get("schema_version") != 1
+            or data.get("schema_version") not in (1, 2)
         ):
-            raise PollError("retention policy schema_version must be 1")
+            raise PollError("retention policy schema_version must be 1 or 2")
         protected = data.get("protected_shas")
         if not isinstance(protected, list) or any(
             not isinstance(sha, str) or not SHA_RE.fullmatch(sha) for sha in protected
@@ -218,7 +223,114 @@ class ReleasePoller:
             raise PollError("retention policy protected_shas must contain full lowercase commit SHAs")
         if len(protected) != len(set(protected)):
             raise PollError("retention policy contains duplicate protected SHAs")
-        return set(protected)
+        if data["schema_version"] == 1:
+            if set(data) != {"schema_version", "protected_shas"}:
+                raise PollError("version1 retention policy has unknown fields")
+        else:
+            if set(data) != {"schema_version", "generation", "protected_shas", "retire_rejected"} or type(data["generation"]) is not int or data["generation"] <= 0:
+                raise PollError("invalid retirement policy generation/fields")
+            requests = data["retire_rejected"]
+            if not isinstance(requests, list) or len(requests) > MAX_FINALIZED_CANDIDATES:
+                raise PollError("invalid retirement request budget")
+            seen = set()
+            for request in requests:
+                if not isinstance(request, dict) or set(request) != {"sha", "marker_sha256", "archive_sha256", "attestation_bundle_sha256"}:
+                    raise PollError("invalid retirement request")
+                sha = request["sha"]
+                if not isinstance(sha, str) or not SHA_RE.fullmatch(sha) or sha in seen or sha in protected:
+                    raise PollError("retirement cannot target a duplicate/protected/current/rollback SHA")
+                seen.add(sha)
+                if any(not isinstance(request[k], str) or not re.fullmatch(r"[0-9a-f]{64}", request[k]) for k in ("marker_sha256", "archive_sha256", "attestation_bundle_sha256")):
+                    raise PollError("invalid retirement fingerprints")
+        return data
+
+    def _load_protected_shas(self) -> set[str]:
+        return set(self._load_retention_policy()["protected_shas"])
+
+    def _validate_retirement_tree(self, candidate: StagedCandidate) -> None:
+        count = 0
+        total = 0
+        if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+            raise PollError("safe fd-based quarantine removal is unavailable")
+        for directory, dirs, files in os.walk(candidate.path, followlinks=False):
+            for path in [Path(directory), *[Path(directory) / name for name in dirs + files]]:
+                info = path.lstat()
+                count += 1
+                total += info.st_size if stat.S_ISREG(info.st_mode) else 0
+                if count > MAX_ARCHIVE_ENTRIES or total > MAX_EXTRACTED_BYTES + MAX_ASSET_BYTES or time.monotonic() >= self._retirement_deadline:
+                    raise PollError("retirement inspection entry/byte/deadline budget exhausted")
+                if info.st_uid != os.geteuid():
+                    raise PollError("retirement tree has unexpected ownership")
+                if stat.S_ISLNK(info.st_mode):
+                    if not path.resolve().is_relative_to(candidate.path.resolve()):
+                        raise PollError("retirement tree symlink escapes quarantine candidate")
+                elif not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or info.st_mode & 0o077:
+                    raise PollError("retirement tree is not private regular content")
+                if hasattr(os, "listxattr") and any(name.startswith("system.posix_acl") for name in os.listxattr(path, follow_symlinks=False)):
+                    raise PollError("retirement tree has unexpected ACL grants")
+
+    def retire_rejected(self, generation: int) -> list[str]:
+        if type(generation) is not int or generation <= 0:
+            raise PollError("retirement requires a positive exact generation")
+        self._retirement_deadline = time.monotonic() + 90
+        self._retirement_hashed_bytes = 0
+        lock_path = self.staged / ".release-poller.lock"
+        fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
+        with os.fdopen(fd, "r+") as lock:
+            if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode) or os.fstat(lock.fileno()).st_uid != os.geteuid() or os.fstat(lock.fileno()).st_mode & 0o077:
+                raise PollError("retirement lock is not private and owned by the poller")
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise PollError("quarantine is already in use") from error
+            policy = self._load_retention_policy()
+            if policy["schema_version"] != 2 or policy["generation"] != generation:
+                raise PollError("stale or unapproved retirement generation")
+            if len(list(self.staged.iterdir())) > MAX_FINALIZED_CANDIDATES + 1:
+                raise PollError("retirement candidate-count budget exhausted")
+            candidates = {c.source_sha: c for c in self._list_staged_candidates(None)}
+            selected = []
+            # Validate the full plan before deleting any candidate.
+            for request in policy["retire_rejected"]:
+                candidate = candidates.get(request["sha"])
+                if candidate is None:
+                    raise PollError("retirement candidate missing; operator review required")
+                self._validate_retirement_tree(candidate)
+                if self._evidence_sha256(candidate.path / MARKER_NAME) != request["marker_sha256"] or self._evidence_sha256(candidate.path / ARCHIVE_NAME) != request["archive_sha256"] or self._evidence_sha256(candidate.path / ATTESTATION_BUNDLE_NAME) != request["attestation_bundle_sha256"]:
+                    raise PollError("retirement evidence changed from root verdict")
+                identities = {name: self._retirement_identity(candidate.path / name) for name in (MARKER_NAME, ARCHIVE_NAME, CHECKSUM_NAME, ATTESTATION_BUNDLE_NAME, "RELEASE-MANIFEST.txt")}
+                selected.append((candidate, identities))
+            for candidate, identities in selected:
+                if self._load_retention_policy() != policy:
+                    raise PollError("retirement policy generation changed before deletion")
+                self._validate_retirement_tree(candidate)
+                if any(self._retirement_identity(candidate.path / name) != identity for name, identity in identities.items()):
+                    raise PollError("retirement evidence raced before deletion")
+                # Full-plan hashes were bounded and completed before the first
+                # deletion. Rechecks use exact unchanged inode/size/mtime/ctime;
+                # no repeated multi-GiB hashing consumes the deletion reserve.
+                shutil.rmtree(candidate.path)
+            return [candidate.source_sha for candidate, identities in selected]
+
+    @staticmethod
+    def _retirement_identity(path: Path):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise PollError("retirement evidence type changed")
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def _evidence_sha256(self, path: Path) -> str:
+        deadline = getattr(self, "_retirement_deadline", None)
+        if deadline is None:
+            return self._sha256(path)
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                self._retirement_hashed_bytes += len(chunk)
+                if self._retirement_hashed_bytes > 8 * 1024**3 or time.monotonic() >= deadline:
+                    raise PollError("retirement hashing byte/deadline budget exhausted")
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _read_staged_candidate(self, path: Path) -> StagedCandidate:
         source_sha = path.name
@@ -284,9 +396,9 @@ class ReleasePoller:
             or f"source_commit={source_sha}" not in manifest_lines
             or not bundle_lines
             or any(not self._is_json_object(line) for line in bundle_lines)
-            or self._sha256(archive) != metadata.get("archive_sha256")
-            or self._sha256(checksum) != metadata.get("checksum_asset_sha256")
-            or self._sha256(attestation_bundle) != metadata.get("attestation_bundle_sha256")
+            or self._evidence_sha256(archive) != metadata.get("archive_sha256")
+            or self._evidence_sha256(checksum) != metadata.get("checksum_asset_sha256")
+            or self._evidence_sha256(attestation_bundle) != metadata.get("attestation_bundle_sha256")
         ):
             raise PollError(f"staged candidate marker or manifest does not verify its source SHA: {path}")
         self._validate_checksum(checksum, str(metadata.get("archive_sha256", "")))
@@ -824,8 +936,16 @@ def main() -> int:
         default=Path("/var/lib/fg-index-release-poller"),
         help="private poller state directory",
     )
+    parser.add_argument("--retire-rejected", action="store_true")
+    parser.add_argument("--generation", type=int)
     args = parser.parse_args()
     try:
+        if args.retire_rejected:
+            retired = ReleasePoller(args.root).retire_rejected(args.generation)
+            print(f"release-poller: retired {len(retired)} root-declared rejected candidate(s)")
+            return 0
+        if args.generation is not None:
+            raise PollError("generation is only valid with retirement")
         result = ReleasePoller(args.root).poll_once()
     except PollError as error:
         print(f"release-poller: ERROR: {error}", file=sys.stderr)
