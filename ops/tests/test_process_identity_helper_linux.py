@@ -53,13 +53,21 @@ def load_state(unit):
     )
 
 
-def wait_for_unit_cgroup_empty(unit, timeout=10):
+def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', timeout=10):
     """Wait for only this fixture unit's systemd cgroup to contain no PIDs."""
     deadline = time.monotonic() + timeout
     while True:
         state = load_state(unit)
         if state == 'not-found':
-            return True
+            if known_control_group:
+                processes = Path('/sys/fs/cgroup') / known_control_group.lstrip('/') / 'cgroup.procs'
+                try:
+                    pids = {line for line in processes.read_text(encoding='ascii').splitlines() if line}
+                except FileNotFoundError:
+                    return True
+                if not pids:
+                    return True
+            return not expected
         properties = systemctl_show(
             unit, 'ActiveState', 'MainPID', 'ControlPID', 'ControlGroup'
         )
@@ -68,10 +76,10 @@ def wait_for_unit_cgroup_empty(unit, timeout=10):
             and properties.get('MainPID') == '0'
             and properties.get('ControlPID') == '0'
         )
-        control_group = properties.get('ControlGroup', '')
+        control_group = properties.get('ControlGroup', '') or known_control_group
         cgroup_empty = False
         if not control_group:
-            cgroup_empty = stopped
+            cgroup_empty = stopped and not expected
         else:
             processes = Path('/sys/fs/cgroup') / control_group.lstrip('/') / 'cgroup.procs'
             try:
@@ -178,6 +186,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             group_created = False
             loaded_profiles = []
             cleanup_errors = []
+            expected_units = set()
+            captured_control_groups = {}
             api_script = fixture / 'api_fixture.py'
             helper_script = fixture / 'helper_fixture.py'
             controller_script = fixture / 'controller_fixture.py'
@@ -433,8 +443,11 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary["helper_policy_sha256"] = HELPER_POLICY_SHA256
                 summary["apparmor_parser_version"] = APPARMOR_PARSER_VERSION
                 summary["kernel_release"] = KERNEL_RELEASE
+                summary["controller_control_group"] = ""
+                summary["helper_control_group"] = ""
                 controller_before = show(CONTROLLER_UNIT, "ActiveState", "SubState", "MainPID",
                                          "ControlPID", "NRestarts", "InvocationID", "ControlGroup")
+                summary["controller_control_group"] = controller_before.get("ControlGroup", "")
                 controller_starttime = starttime(os.getpid())
                 with open(f"/proc/{{os.getpid()}}/cgroup", encoding="ascii") as reader:
                     controller_cgroup_rows = reader.read().splitlines()
@@ -637,6 +650,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                   "ProtectHome", "PrivateTmp",
                                   "FragmentPath")
                     helper_pid = int(helper.get("MainPID", "0"))
+                    summary["helper_control_group"] = helper.get("ControlGroup", "")
                     summary["helper_main_pid_valid"] = helper_pid > 0
                     helper_syscall_filter = helper.get("SystemCallFilter", "")
                     helper_denied_syscalls = set(helper_syscall_filter.lstrip("~").split())
@@ -937,6 +951,10 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     'HOLD: systemd rejected the AppArmor API fixture\n'
                     + api_launch.stdout + api_launch.stderr,
                 )
+                expected_units.add(api_unit)
+                captured_control_groups[api_unit] = systemctl_show(api_unit, 'ControlGroup').get(
+                    'ControlGroup', ''
+                )
                 api_ready = False
                 deadline = time.monotonic() + 10
                 while not api_ready:
@@ -998,7 +1016,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 self.assertTrue(api_ready, 'HOLD: API fixture readiness marker was not received')
 
                 controller = [
-                    '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
+                    '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait',
                     '--unit', controller_unit,
                     '--property=Type=simple', '--property=User=root',
                     '--property=CapabilityBoundingSet=', '--property=AmbientCapabilities=',
@@ -1007,9 +1025,23 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
                     '--property=RuntimeMaxSec=45s', PYTHON, '-S', str(controller_script),
                 ]
+                expected_units.update((controller_unit, helper_unit))
                 result = subprocess.run(controller, stdin=subprocess.DEVNULL, capture_output=True,
                                         text=True, timeout=55)
                 lines = [line for line in result.stdout.splitlines() if line.strip()]
+                for line in reversed(lines):
+                    try:
+                        controller_summary = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(controller_summary, dict):
+                        captured_control_groups[controller_unit] = controller_summary.get(
+                            'controller_control_group', ''
+                        )
+                        captured_control_groups[helper_unit] = controller_summary.get(
+                            'helper_control_group', ''
+                        )
+                        break
                 self.assertEqual(0, result.returncode, result.stderr + result.stdout)
                 self.assertEqual(2, len(lines), result.stdout)
                 summary = json.loads(lines[-1])
@@ -1029,16 +1061,25 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 fixture_cgroups_empty = True
                 for unit in (helper_unit, controller_unit, api_unit):
                     try:
-                        if load_state(unit) == 'loaded':
+                        state = load_state(unit)
+                        if state == 'loaded':
                             active = systemctl_show(unit, 'ActiveState').get('ActiveState')
                             if active in ('active', 'activating', 'reloading', 'deactivating'):
                                 subprocess.run(
                                     ['/usr/bin/systemctl', 'stop', unit],
                                     check=True, capture_output=True, timeout=15,
                                 )
-                            if not wait_for_unit_cgroup_empty(unit):
-                                fixture_cgroups_empty = False
-                                cleanup_errors.append(f'fixture cgroup did not empty: {unit}')
+                        elif state != 'not-found':
+                            fixture_cgroups_empty = False
+                            cleanup_errors.append(f'fixture unit state is unknown: {unit} ({state})')
+                        if not wait_for_unit_cgroup_empty(
+                            unit,
+                            expected=unit in expected_units,
+                            known_control_group=captured_control_groups.get(unit, ''),
+                        ):
+                            fixture_cgroups_empty = False
+                            cleanup_errors.append(f'fixture cgroup did not empty: {unit}')
+                        if state == 'loaded':
                             subprocess.run(
                                 ['/usr/bin/systemctl', 'reset-failed', unit],
                                 check=True, capture_output=True, timeout=15,
