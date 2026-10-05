@@ -417,7 +417,11 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary["controller_cwd_ok"] = self_cwd == {{"value": EXPECTED_CWD}}
                 summary["controller_capabilities"] = {{key: self_status[key].strip() for key in CAPABILITY_FIELDS}}
                 api_before = show(API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
-                                  "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile")
+                                  "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile",
+                                  "Type", "User", "Group", "CapabilityBoundingSet",
+                                  "AmbientCapabilities", "NoNewPrivileges", "Restart",
+                                  "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                                  "ProtectHome", "PrivateDevices", "PrivateTmp")
                 api_pid = int(api_before["MainPID"])
                 direct_api = {{"exe": readlink(f"/proc/{{api_pid}}/exe"),
                                "cwd": readlink(f"/proc/{{api_pid}}/cwd"),
@@ -443,6 +447,25 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     summary["helper_required"] and not direct_proc_hard_holds
                 )
                 summary["api_profile_property_ok"] = api_before.get("AppArmorProfile") == API_PROFILE
+                api_denied_syscalls = set(api_before.get("SystemCallFilter", "").lstrip("~").split())
+                summary["api_unit_sandbox_properties_ok"] = (
+                    api_before.get("Type") == "simple"
+                    and api_before.get("User") == "fg-index"
+                    and api_before.get("Group") == "fg-index"
+                    and api_before.get("CapabilityBoundingSet", "") == ""
+                    and api_before.get("AmbientCapabilities", "") == ""
+                    and api_before.get("NoNewPrivileges") == "yes"
+                    and api_before.get("Restart") == "no"
+                    and set(api_before.get("RestrictAddressFamilies", "").split())
+                        == {{"AF_UNIX", "AF_INET", "AF_INET6"}}
+                    and api_before.get("SystemCallFilter", "").startswith("~")
+                    and {{"ptrace", "process_vm_readv", "process_vm_writev",
+                         "process_madvise", "pidfd_getfd"}} <= api_denied_syscalls
+                    and api_before.get("ProtectSystem") == "strict"
+                    and api_before.get("ProtectHome") == "yes"
+                    and api_before.get("PrivateDevices") == "yes"
+                    and api_before.get("PrivateTmp") == "yes"
+                )
                 summary["api_live_profile_label_pre_helper_ok"] = (
                     direct_api["profile_label"] == {{"value": API_PROFILE + " (enforce)"}}
                 )
@@ -484,6 +507,10 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 api_confirm_before_helper = show(
                     API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
                     "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile",
+                    "Type", "User", "Group", "CapabilityBoundingSet",
+                    "AmbientCapabilities", "NoNewPrivileges", "Restart",
+                    "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                    "ProtectHome", "PrivateDevices", "PrivateTmp",
                 )
                 summary["api_snapshot_pre_helper_ok"] = (
                     api_confirm_before_helper == api_before
@@ -496,7 +523,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     and api_pid > 0 and api_poll.poll(0) == []
                 )
                 summary["api_pre_helper_trust_ok"] = all(summary.get(key, False) for key in (
-                    "api_profile_property_ok", "api_live_profile_label_pre_helper_ok",
+                    "api_profile_property_ok", "api_unit_sandbox_properties_ok",
+                    "api_live_profile_label_pre_helper_ok",
                     "api_profile_enforcing_pre_helper", "helper_profile_enforcing_pre_helper",
                     "api_profile_receipt_pre_helper_ok", "api_snapshot_pre_helper_ok",
                 )) and summary["helper_fallback_selected"]
@@ -673,7 +701,11 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     extra_ready, _, _ = select.select([child.stdout], [], [], 0.05)
                     summary["extra_output_absent"] = not extra_ready
                     api_after = show(API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
-                                     "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile")
+                                     "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile",
+                                     "Type", "User", "Group", "CapabilityBoundingSet",
+                                     "AmbientCapabilities", "NoNewPrivileges", "Restart",
+                                     "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                                     "ProtectHome", "PrivateDevices", "PrivateTmp")
                     summary["api_snapshot_stable"] = api_after == api_before and api_poll.poll(0) == []
                     api_label_after = readtext(f"/proc/{{api_pid}}/attr/current")
                     summary["api_profile_label_stable"] = (
@@ -718,7 +750,11 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     controller_after = show(CONTROLLER_UNIT, "ActiveState", "SubState", "MainPID",
                                             "ControlPID", "NRestarts", "InvocationID", "ControlGroup")
                     api_after = show(API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
-                                     "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile")
+                                     "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile",
+                                     "Type", "User", "Group", "CapabilityBoundingSet",
+                                     "AmbientCapabilities", "NoNewPrivileges", "Restart",
+                                     "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                                     "ProtectHome", "PrivateDevices", "PrivateTmp")
                     summary["api_final_snapshot_stable"] = api_after == api_before and api_poll.poll(0) == []
                     summary["controller_final_snapshot_stable"] = (
                         controller_after == controller_before
