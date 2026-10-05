@@ -57,17 +57,30 @@ def wait_for_unit_cgroup_empty(unit, timeout=10):
     """Wait for only this fixture unit's systemd cgroup to contain no PIDs."""
     deadline = time.monotonic() + timeout
     while True:
-        if load_state(unit) == 'not-found':
+        state = load_state(unit)
+        if state == 'not-found':
             return True
-        control_group = systemctl_show(unit, 'ControlGroup').get('ControlGroup', '')
+        properties = systemctl_show(
+            unit, 'ActiveState', 'MainPID', 'ControlPID', 'ControlGroup'
+        )
+        stopped = (
+            properties.get('ActiveState') in ('inactive', 'failed', 'dead')
+            and properties.get('MainPID') == '0'
+            and properties.get('ControlPID') == '0'
+        )
+        control_group = properties.get('ControlGroup', '')
+        cgroup_empty = False
         if not control_group:
-            return True
-        processes = Path('/sys/fs/cgroup') / control_group.lstrip('/') / 'cgroup.procs'
-        try:
-            pids = {line for line in processes.read_text(encoding='ascii').splitlines() if line}
-        except FileNotFoundError:
-            return True
-        if not pids:
+            cgroup_empty = stopped
+        else:
+            processes = Path('/sys/fs/cgroup') / control_group.lstrip('/') / 'cgroup.procs'
+            try:
+                pids = {line for line in processes.read_text(encoding='ascii').splitlines() if line}
+            except FileNotFoundError:
+                cgroup_empty = stopped
+            else:
+                cgroup_empty = not pids
+        if stopped and cgroup_empty:
             return True
         if time.monotonic() >= deadline:
             return False
