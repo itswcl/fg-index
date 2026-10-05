@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import pwd
 import grp
+import inspect
 import shutil
 import socket
 import subprocess
@@ -25,6 +26,280 @@ SYSTEMD = Path('/run/systemd/system')
 PYTHON = '/usr/bin/python3.12'
 CAPABILITY_FIELDS = ('CapEff', 'CapPrm', 'CapBnd', 'CapAmb')
 APPARMOR_PROFILES = Path('/sys/kernel/security/apparmor/profiles')
+HELPER_RECORD_FIELDS = frozenset({
+    'schema', 'helper_invocation_id', 'api_pid', 'api_invocation_id',
+    'api_control_group', 'api_starttime', 'api_exe', 'api_cwd',
+    'api_profile_label', 'api_capabilities', 'api_fd_inodes', 'listener',
+    'pidfd_live', 'helper_capabilities', 'argv_ok', 'caller_parameters_absent',
+})
+
+
+def parse_helper_record_output(
+    data, expected_helper_invocation_id, expected_api_pid,
+    expected_api_invocation_id, expected_api_control_group,
+    expected_exe, expected_cwd, expected_profile_label,
+):
+    """Parse exactly one bounded, unique-key helper record or reject it."""
+    if not isinstance(expected_helper_invocation_id, str) or not expected_helper_invocation_id:
+        raise ValueError('trusted helper InvocationID is unavailable')
+    if type(expected_api_pid) is not int or expected_api_pid <= 0:
+        raise ValueError('trusted API PID is unavailable')
+    if any(not isinstance(value, str) or not value for value in (
+        expected_api_invocation_id, expected_api_control_group,
+        expected_exe, expected_cwd, expected_profile_label,
+    )):
+        raise ValueError('trusted API identity snapshot is incomplete')
+    if not isinstance(data, bytes) or len(data) > 4096:
+        raise ValueError('helper output exceeds the 4 KiB limit')
+    if data.count(b'\n') != 1 or not data.endswith(b'\n') or b'\r' in data:
+        raise ValueError('helper output is not exactly one newline-terminated record')
+
+    def reject_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('helper JSON contains a duplicate key')
+            result[key] = value
+        return result
+
+    def reject_nonstandard_constant(token):
+        raise ValueError('helper JSON contains non-standard constant ' + token)
+
+    try:
+        record = json.loads(
+            data[:-1].decode('ascii'), object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonstandard_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ValueError('helper output is not valid unique-key ASCII JSON') from exc
+    if not isinstance(record, dict):
+        raise ValueError('helper output is not a JSON object')
+    if set(record) != HELPER_RECORD_FIELDS:
+        raise ValueError('helper record has missing or unexpected fields')
+    if record.get('schema') != 'fg-index.process-identity.helper.v1':
+        raise ValueError('helper record schema mismatch')
+    text_fields = (
+        'helper_invocation_id', 'api_invocation_id', 'api_control_group',
+        'api_starttime', 'api_exe', 'api_cwd', 'api_profile_label',
+    )
+    if any(not isinstance(record.get(key), str) or not record[key] for key in text_fields):
+        raise ValueError('helper record contains an empty or non-string identity field')
+    if not record['api_starttime'].isdecimal():
+        raise ValueError('helper record start time is not decimal')
+    if type(record.get('api_pid')) is not int or record['api_pid'] <= 0:
+        raise ValueError('helper record API PID is not a positive integer')
+    for key in ('api_capabilities', 'helper_capabilities'):
+        values = record.get(key)
+        if not isinstance(values, dict) or set(values) != set(CAPABILITY_FIELDS):
+            raise ValueError('helper record capability fields have an invalid shape')
+        if any(
+            not isinstance(value, str) or len(value) != 16
+            or any(character not in '0123456789abcdefABCDEF' for character in value)
+            for value in values.values()
+        ):
+            raise ValueError('helper record capability mask is invalid')
+    fd_inodes = record.get('api_fd_inodes')
+    if (
+        not isinstance(fd_inodes, list)
+        or any(not isinstance(inode, str) or not inode.isdecimal() for inode in fd_inodes)
+        or len(set(fd_inodes)) != len(fd_inodes)
+    ):
+        raise ValueError('helper record FD inode list has an invalid shape')
+    listener = record.get('listener')
+    if (
+        not isinstance(listener, dict)
+        or set(listener) != {'address', 'port', 'state', 'inode'}
+        or not isinstance(listener.get('address'), str)
+        or type(listener.get('port')) is not int
+        or not isinstance(listener.get('state'), str)
+        or not isinstance(listener.get('inode'), str)
+        or not listener['inode'].isdecimal()
+    ):
+        raise ValueError('helper record listener has an invalid shape')
+    if any(type(record.get(key)) is not bool for key in (
+        'pidfd_live', 'argv_ok', 'caller_parameters_absent',
+    )):
+        raise ValueError('helper record boolean fields have an invalid type')
+    if record.get('helper_invocation_id') != expected_helper_invocation_id:
+        raise ValueError('helper record InvocationID mismatch')
+    expected_identity = {
+        'api_pid': expected_api_pid,
+        'api_invocation_id': expected_api_invocation_id,
+        'api_control_group': expected_api_control_group,
+        'api_exe': expected_exe,
+        'api_cwd': expected_cwd,
+        'api_profile_label': expected_profile_label,
+    }
+    if any(record.get(key) != value for key, value in expected_identity.items()):
+        raise ValueError('helper record API identity binding mismatch')
+    if (
+        record['listener']['address'] != '127.0.0.1'
+        or record['listener']['port'] != 8080
+        or record['listener']['state'] != '0A'
+        or record['listener']['inode'] not in record['api_fd_inodes']
+    ):
+        raise ValueError('helper record listener binding mismatch')
+    return record
+
+
+class ProcessIdentityHelperOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.record = {
+            'schema': 'fg-index.process-identity.helper.v1',
+            'helper_invocation_id': 'helper-invocation-1',
+            'api_pid': 123,
+            'api_invocation_id': 'api-invocation-1',
+            'api_control_group': '/system.slice/api.service',
+            'api_starttime': '456',
+            'api_exe': PYTHON,
+            'api_cwd': '/opt/fg-index',
+            'api_profile_label': 'api-profile (enforce)',
+            'api_capabilities': {key: '0000000000000000' for key in CAPABILITY_FIELDS},
+            'api_fd_inodes': ['98765'],
+            'listener': {'address': '127.0.0.1', 'port': 8080, 'state': '0A', 'inode': '98765'},
+            'pidfd_live': True,
+            'helper_capabilities': {key: '0000000000000000' for key in CAPABILITY_FIELDS},
+            'argv_ok': True,
+            'caller_parameters_absent': True,
+        }
+        self.valid = json.dumps(self.record, separators=(',', ':')).encode('ascii') + b'\n'
+
+    def parse(self, output, expected_invocation='helper-invocation-1'):
+        return parse_helper_record_output(
+            output, expected_invocation, self.record['api_pid'],
+            self.record['api_invocation_id'], self.record['api_control_group'],
+            self.record['api_exe'], self.record['api_cwd'], self.record['api_profile_label'],
+        )
+
+    def assert_rejected(self, output, expected_invocation='helper-invocation-1'):
+        with self.assertRaises(ValueError):
+            self.parse(output, expected_invocation)
+
+    def test_valid_record_at_exact_4k_limit(self):
+        padded = self.valid[:-1] + b' ' * (4096 - len(self.valid)) + b'\n'
+        self.assertEqual(4096, len(padded))
+        self.assertEqual(
+            self.record,
+            self.parse(padded, 'helper-invocation-1'),
+        )
+        embedded_source = (
+            'import json\n'
+            + f'CAPABILITY_FIELDS = {CAPABILITY_FIELDS!r}\n'
+            + f'HELPER_RECORD_FIELDS = {HELPER_RECORD_FIELDS!r}\n'
+            + inspect.getsource(parse_helper_record_output)
+        )
+        namespace = {}
+        exec(compile(embedded_source, '<embedded-helper-parser>', 'exec'), namespace)
+        self.assertEqual(
+            self.record,
+            namespace['parse_helper_record_output'](
+                self.valid, 'helper-invocation-1', 123, 'api-invocation-1',
+                '/system.slice/api.service', PYTHON, '/opt/fg-index', 'api-profile (enforce)',
+            ),
+        )
+
+    def test_rejects_hostile_record_framing_and_size(self):
+        at_limit = self.valid[:-1] + b' ' * (4096 - len(self.valid)) + b'\n'
+        cases = {
+            'oversize': at_limit[:-1] + b' \n',
+            'missing final LF': self.valid[:-1],
+            'multiple records': self.valid + self.valid,
+            'non-final LF': self.valid[:-1] + b'\n ',
+            'blank line': self.valid + b'\n',
+            'CRLF terminator': self.valid[:-1] + b'\r\n',
+            'second JSON value': self.valid[:-1] + b' {}\n',
+        }
+        for name, output in cases.items():
+            with self.subTest(name=name):
+                self.assert_rejected(output)
+
+    def test_rejects_malformed_truncated_and_non_ascii_json(self):
+        cases = {
+            'malformed': b'{not-json}\n',
+            'truncated': b'{"schema":"fg-index.process-identity.helper.v1"\n',
+            'non-ascii': self.valid[:-1] + b'\xff\n',
+            'deep nesting': b'[' * 1000 + b'0' + b']' * 1000 + b'\n',
+        }
+        for name, output in cases.items():
+            with self.subTest(name=name):
+                self.assert_rejected(output)
+
+    def test_rejects_duplicate_top_level_and_nested_json_keys(self):
+        duplicate_top = self.valid.replace(
+            b'{"schema":', b'{"schema":"duplicate","schema":', 1
+        )
+        duplicate_nested = self.valid.replace(
+            b'"listener":{"address":', b'"listener":{"address":"duplicate","address":', 1
+        )
+        for name, output in (
+            ('top-level', duplicate_top), ('nested', duplicate_nested),
+        ):
+            with self.subTest(name=name):
+                self.assert_rejected(output)
+
+    def test_rejects_non_objects_duplicate_schema_fields_and_non_finite_numbers(self):
+        missing = dict(self.record)
+        missing.pop('api_pid')
+        extra = dict(self.record, unexpected=True)
+        non_finite = dict(self.record, api_pid=float('nan'))
+        cases = {
+            'array': b'[]\n',
+            'missing field': json.dumps(missing).encode('ascii') + b'\n',
+            'extra field': json.dumps(extra).encode('ascii') + b'\n',
+            'NaN': json.dumps(non_finite, separators=(',', ':')).encode('ascii') + b'\n',
+            'Infinity': self.valid.replace(b'"api_pid":123', b'"api_pid":Infinity'),
+            'nested NaN': self.valid.replace(b'"port":8080', b'"port":NaN'),
+            'empty expected invocation': self.valid,
+            'stale invocation': self.valid,
+        }
+        for name, output in cases.items():
+            expected = '' if name == 'empty expected invocation' else (
+                'prior-invocation' if name == 'stale invocation' else 'helper-invocation-1'
+            )
+            with self.subTest(name=name):
+                self.assert_rejected(output, expected)
+
+    def test_rejects_wrong_scalar_and_nested_field_shapes(self):
+        malformed = []
+        for field, value in (
+            ('api_pid', '123'), ('api_pid', True), ('api_starttime', 456),
+            ('helper_invocation_id', []), ('api_capabilities', []),
+            ('helper_capabilities', None), ('api_fd_inodes', {}),
+            ('listener', []), ('listener', {'address': '127.0.0.1'}),
+            ('pidfd_live', 1),
+        ):
+            changed = dict(self.record)
+            changed[field] = value
+            malformed.append((field, changed))
+        changed = dict(self.record)
+        changed['api_capabilities'] = dict(self.record['api_capabilities'], CapEff=0)
+        malformed.append(('capability value', changed))
+        for name, record in malformed:
+            output = json.dumps(record, separators=(',', ':')).encode('ascii') + b'\n'
+            with self.subTest(name=name):
+                self.assert_rejected(output)
+
+    def test_rejects_api_snapshot_and_identity_mismatches(self):
+        for field, value in (
+            ('api_pid', 124), ('api_invocation_id', 'prior-invocation'),
+            ('api_control_group', '/system.slice/other.service'),
+            ('api_exe', '/usr/bin/other'), ('api_cwd', '/tmp'),
+            ('api_profile_label', 'unconfined'),
+        ):
+            changed = dict(self.record, **{field: value})
+            output = json.dumps(changed, separators=(',', ':')).encode('ascii') + b'\n'
+            with self.subTest(field=field):
+                self.assert_rejected(output)
+        for name, listener in (
+            ('wrong address', dict(self.record['listener'], address='0.0.0.0')),
+            ('wrong port', dict(self.record['listener'], port=8081)),
+            ('wrong state', dict(self.record['listener'], state='01')),
+            ('unmatched inode', dict(self.record['listener'], inode='12345')),
+        ):
+            changed = dict(self.record, listener=listener)
+            output = json.dumps(changed, separators=(',', ':')).encode('ascii') + b'\n'
+            with self.subTest(listener=name):
+                self.assert_rejected(output)
 
 
 def systemctl_show(unit, *properties):
@@ -502,6 +777,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 HELPER_SOURCE_SHA256 = {helper_source_digest!r}
                 HELPER_FIXTURE_SHA256 = {helper_fixture_digest!r}
                 CAPABILITY_FIELDS = {CAPABILITY_FIELDS!r}
+                HELPER_RECORD_FIELDS = {HELPER_RECORD_FIELDS!r}
+
+                PARSER_SOURCE_PLACEHOLDER
 
                 def readlink(path):
                     try:
@@ -746,23 +1024,28 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary["output_bytes"] = len(data)
                 summary["bounded_output_ok"] = len(data) <= 4096
                 summary["one_record_ok"] = data.count(b"\\n") == 1 and data.endswith(b"\\n")
-                record = None
-                if summary["bounded_output_ok"] and summary["one_record_ok"]:
-                    try:
-                        record = json.loads(bytes(data[:-1]).decode("ascii"))
-                    except (UnicodeError, json.JSONDecodeError):
-                        summary["errors"].append("helper output malformed")
-                else:
-                    summary["errors"].append("helper output is oversized or not one record")
-
-                helper_pidfd = None
+                helper = {{}}
                 try:
                     helper = show(HELPER_UNIT, "MainPID", "InvocationID", "ControlGroup", "LoadState",
                                   "User", "Group", "AppArmorProfile", "CapabilityBoundingSet",
                                   "AmbientCapabilities", "NoNewPrivileges", "Restart", "ExecStart",
-                                  "TimeoutStartUSec", "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
-                                  "ProtectHome", "PrivateTmp",
-                                  "FragmentPath")
+                                  "TimeoutStartUSec", "RestrictAddressFamilies", "SystemCallFilter",
+                                  "ProtectSystem", "ProtectHome", "PrivateTmp", "FragmentPath")
+                except (OSError, KeyError, ValueError, subprocess.SubprocessError) as exc:
+                    summary["errors"].append("helper unit snapshot failed: " + str(exc))
+                record = None
+                try:
+                    record = parse_helper_record_output(
+                        bytes(data), helper.get("InvocationID", ""), api_pid,
+                        api_before.get("InvocationID", ""),
+                        api_before.get("ControlGroup", ""), EXPECTED_EXE,
+                        EXPECTED_CWD, API_PROFILE + " (enforce)",
+                    )
+                except ValueError as exc:
+                    summary["errors"].append("helper output rejected: " + str(exc))
+
+                helper_pidfd = None
+                try:
                     helper_pid = int(helper.get("MainPID", "0"))
                     summary["helper_control_group"] = helper.get("ControlGroup", "")
                     summary["helper_main_pid_valid"] = helper_pid > 0
@@ -835,14 +1118,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                             == HELPER_FIXTURE_SHA256
                     )
                     if record is not None:
-                        expected_fields = {{
-                            "schema", "helper_invocation_id", "api_pid", "api_invocation_id",
-                            "api_control_group", "api_starttime", "api_exe", "api_cwd",
-                            "api_profile_label", "api_capabilities", "api_fd_inodes", "listener",
-                            "pidfd_live", "helper_capabilities",
-                            "argv_ok", "caller_parameters_absent",
-                        }}
-                        summary["schema_ok"] = set(record) == expected_fields
+                        summary["schema_ok"] = set(record) == HELPER_RECORD_FIELDS
                         summary["invocation_binding_ok"] = (
                             record.get("helper_invocation_id") == helper.get("InvocationID")
                         )
@@ -1011,7 +1287,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     and summary.get("bounded_output_ok") else "HOLD"
                 )
                 print(json.dumps(summary, sort_keys=True), flush=True)
-            '''), encoding='utf-8')
+            ''').replace(
+                'PARSER_SOURCE_PLACEHOLDER', inspect.getsource(parse_helper_record_output)
+            ), encoding='utf-8')
             controller_script.chmod(0o644)
 
             try:
