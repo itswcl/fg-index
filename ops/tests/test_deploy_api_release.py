@@ -3,12 +3,13 @@ import copy
 import json
 import io
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_controller, validate_loaded_poller, validate_policy_shape
+from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_controller, validate_loaded_guard, validate_loaded_poller, validate_policy_shape
 from ops.process_identity import IdentityRecordError
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
@@ -52,6 +53,29 @@ class TestHost:
 
     def active_controller(self):
         return getattr(self, 'controller_context', None)
+
+    @contextmanager
+    def lifecycle_lock(self):
+        self.events.append('lifecycle-lock-enter')
+        try:
+            yield
+        finally:
+            self.events.append('lifecycle-lock-exit')
+
+    def lifecycle_start_lease(self):
+        return None
+
+    def validate_lifecycle_start_lease(self, lease):
+        current = self.active_controller()
+        expected = {key: current[key] for key in
+                    ('unit', 'pid', 'invocation', 'starttime', 'control_group')}
+        if lease != expected or current.get('restarts') != 0:
+            raise Hold('API start lease mismatch')
+
+    def start_lease(self):
+        current = self.active_controller()
+        return {key: current[key] for key in
+                ('unit', 'pid', 'invocation', 'starttime', 'control_group')}
 
     def require_recovery_context(self):
         return None
@@ -210,6 +234,8 @@ class DeploymentTest(unittest.TestCase):
         self.host.policy['boot_guard_enabled'] = True
         gate = BootGate(self.host, self.store)
         self.assertEqual(image(A), gate.authorize_start())
+        self.assertEqual(1, self.host.events.count('lifecycle-lock-enter'))
+        self.assertEqual(1, self.host.events.count('lifecycle-lock-exit'))
         data = self.state()
         data['transaction'] = {'stage': 'intent', 'previous': image(A), 'next': image(B), 'role': self.host.role}
         self.store.save(data)
@@ -233,8 +259,19 @@ class DeploymentTest(unittest.TestCase):
         self.store.save(data)
         self.host.images[B] = image(B)
         self.host.link = self.host.targets(image(B))
-        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'invocation': 'valid', 'restarts': 0}
+        self.host.controller_context = {'unit': 'fg-index-deployment.service', 'pid': '42', 'invocation': '1' * 32, 'starttime': '123', 'control_group': '/system.slice/fg-index-deployment.service', 'restarts': 0}
+        lease = self.host.start_lease()
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+        self.host.lifecycle_start_lease = lambda: lease
+        lock_count = self.host.events.count('lifecycle-lock-enter')
         self.assertEqual(image(B), BootGate(self.host, self.store).authorize_start())
+        self.assertEqual(lock_count, self.host.events.count('lifecycle-lock-enter'))
+        bad_lease = dict(lease, pid='43')
+        self.host.lifecycle_start_lease = lambda: bad_lease
+        with self.assertRaises(Hold):
+            BootGate(self.host, self.store).authorize_start()
+        self.host.lifecycle_start_lease = lambda: None
         self.host.controller_context = None
         with self.assertRaises(Hold):
             BootGate(self.host, self.store).authorize_start()
@@ -621,6 +658,79 @@ class ProbeTest(unittest.TestCase):
                 host.main_sha()
 
 
+class LifecycleOwnershipTest(unittest.TestCase):
+    def test_pending_systemd_api_job_blocks_new_lifecycle_action(self):
+        host = Host.__new__(Host)
+        host.command = Mock(return_value='17 fg-index-api.service start running')
+        with self.assertRaises(Hold):
+            host._require_no_api_lifecycle_job()
+        host.command.return_value = ''
+        host._require_no_api_lifecycle_job()
+        host.command.return_value = 'not a systemd job line'
+        with self.assertRaises(Hold):
+            host._require_no_api_lifecycle_job()
+
+    def test_lifecycle_lock_serializes_concurrent_start_owners(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        lock_path = Path(temp.name) / 'api-lifecycle.lock'
+        first, second = Host.__new__(Host), Host.__new__(Host)
+        fake_stat = type('Stat', (), {'st_mode': 0o100600, 'st_uid': 0})()
+        with patch('ops.deploy_api_release.API_LIFECYCLE_LOCK', lock_path), \
+                patch('ops.deploy_api_release.os.fstat', return_value=fake_stat):
+            with first.lifecycle_lock():
+                with self.assertRaises(Hold):
+                    with second.lifecycle_lock():
+                        pass
+
+    def test_controller_start_lease_spans_boot_gate_and_systemctl_start(self):
+        host = Host.__new__(Host)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        lease_path = root / 'api-start-lease.json'
+        owner = {'unit': 'fg-index-deployment.service', 'pid': '42',
+                 'invocation': '1' * 32, 'starttime': '123',
+                 'control_group': '/system.slice/fg-index-deployment.service',
+                 'restarts': 0}
+        host.active_controller = Mock(return_value=owner)
+        lock_events = []
+
+        @contextmanager
+        def lifecycle_lock():
+            lock_events.append('enter')
+            try:
+                yield
+            finally:
+                lock_events.append('exit')
+
+        host.lifecycle_lock = lifecycle_lock
+        host._require_no_api_lifecycle_job = Mock()
+        observed = []
+
+        def authorize_start(**kwargs):
+            observed.append(('boot-gate', json.loads(lease_path.read_text()), kwargs))
+
+        def systemctl_start(argv, timeout):
+            observed.append(('systemctl', json.loads(lease_path.read_text()), argv, timeout))
+
+        gate = Mock()
+        gate.authorize_start.side_effect = authorize_start
+        host.command = Mock(side_effect=systemctl_start)
+        with patch('ops.deploy_api_release.API_START_LEASE', lease_path), \
+                patch('ops.deploy_api_release.BootGate', return_value=gate):
+            Host.start(host)
+
+        self.assertEqual(['enter', 'exit'], lock_events)
+        self.assertEqual(['boot-gate', 'systemctl'], [row[0] for row in observed])
+        expected_lease = {key: owner[key] for key in
+                          ('unit', 'pid', 'invocation', 'starttime', 'control_group')}
+        self.assertEqual(expected_lease, observed[0][1])
+        self.assertEqual(expected_lease, observed[0][2]['controller_lease'])
+        self.assertEqual(expected_lease, observed[1][1])
+        self.assertFalse(lease_path.exists())
+
+
 class LoadedContractTest(unittest.TestCase):
     def props(self, enabled, guard=False):
         role = str(enabled).lower()
@@ -668,11 +778,29 @@ class LoadedContractTest(unittest.TestCase):
                      'AmbientCapabilities': '',
                      'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6',
                      'SystemCallArchitectures': 'native',
+                     'ReadWritePaths': ('/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment /opt/fg-index /opt/nodejs'
+                                        if unit == 'fg-index-deployment-recovery.service'
+                                        else '/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment'),
                      'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=' + argv + ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
             validate_loaded_controller(props, unit, action)
             props['TimeoutStartUSec'] = '5min'
             with self.assertRaises(Hold):
                 validate_loaded_controller(props, unit, action)
+
+    def test_boot_guard_can_write_only_the_private_deployment_state(self):
+        props = {'User': 'root', 'Group': 'root', 'Type': 'oneshot',
+                 'NoNewPrivileges': 'yes', 'CapabilityBoundingSet': '',
+                 'AmbientCapabilities': '', 'RestrictAddressFamilies': 'AF_UNIX',
+                 'SystemCallArchitectures': 'native', 'ProtectSystem': 'strict',
+                 'ReadWritePaths': '/var/lib/fg-index-deployment',
+                 'TimeoutStartUSec': '2min',
+                 'FragmentPath': '/etc/systemd/system/fg-index-api-boot-guard.service',
+                 'DropInPaths': '',
+                 'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
+        validate_loaded_guard(props)
+        props['ReadWritePaths'] = '/var/lib'
+        with self.assertRaises(Hold):
+            validate_loaded_guard(props)
 
     def test_loaded_path_count_argv_workdir_env_and_dropin_drift_are_rejected(self):
         modifications = [

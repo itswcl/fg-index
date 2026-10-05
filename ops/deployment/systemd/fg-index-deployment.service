@@ -14,7 +14,7 @@ StandardOutput=journal
 StandardError=journal
 # Root coordinates existing units; app probes run as fg-index transient units.
 ProtectHome=read-only
-ReadWritePaths=/root/fg-index-api-activation-fa654555b1692111af882f45
+ReadWritePaths=/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment
 PrivateTmp=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=

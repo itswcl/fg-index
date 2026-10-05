@@ -68,6 +68,12 @@ IDENTITY_UNIT_DROPIN = Path('/etc/systemd/system/fg-index-api.service.d/30-proce
 IDENTITY_OBSERVER = Path('/usr/local/libexec/fg-index-deployment/process_identity_observer')
 IDENTITY_CONTROLLER_MODULE = Path('/usr/local/libexec/fg-index-deployment/process_identity.py')
 API_LIFECYCLE_LOCK = STATE / 'api-lifecycle.lock'
+API_START_LEASE = STATE / 'api-start-lease.json'
+CONTROLLER_WRITE_PATHS = {
+    'fg-index-deployment.service': '/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment',
+    'fg-index-deployment-watchdog.service': '/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment',
+    RECOVERY: '/root/fg-index-api-activation-fa654555b1692111af882f45 /var/lib/fg-index-deployment /opt/fg-index /opt/nodejs',
+}
 
 
 class PersistenceError(RuntimeError):
@@ -252,6 +258,7 @@ def validate_loaded_controller(props, unit, action):
             props['AmbientCapabilities'] == '' and
             props['RestrictAddressFamilies'] == 'AF_UNIX AF_INET AF_INET6' and
             props['SystemCallArchitectures'] == 'native' and
+            props['ReadWritePaths'] == CONTROLLER_WRITE_PATHS[unit] and
             props['TimeoutStartUSec'] == CONTROLLER_TIMEOUTS[unit] and
             props['FragmentPath'] == '/etc/systemd/system/' + unit and props['DropInPaths'] == '',
             'loaded controller unit drift')
@@ -268,6 +275,8 @@ def validate_loaded_guard(props):
             props['AmbientCapabilities'] == '' and
             props['RestrictAddressFamilies'] == 'AF_UNIX' and
             props['SystemCallArchitectures'] == 'native' and
+            props['ProtectSystem'] == 'strict' and
+            props['ReadWritePaths'] == str(STATE) and
             props['TimeoutStartUSec'] == '2min' and
             props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
             'loaded boot guard unit drift')
@@ -404,6 +413,7 @@ class Host:
                     'DropInPaths', 'ExecStart', 'NoNewPrivileges',
                     'CapabilityBoundingSet', 'AmbientCapabilities',
                     'RestrictAddressFamilies', 'SystemCallArchitectures',
+                    'ReadWritePaths',
                 ])
                 validate_loaded_controller(props, unit, action)
             props = self.properties(BOOT_GUARD, [
@@ -411,6 +421,7 @@ class Host:
                 'DropInPaths', 'ExecStart', 'NoNewPrivileges',
                 'CapabilityBoundingSet', 'AmbientCapabilities',
                 'RestrictAddressFamilies', 'SystemCallArchitectures',
+                'ProtectSystem', 'ReadWritePaths',
             ])
             validate_loaded_guard(props)
         trusted(Path('/etc/fg-index/api.env'))
@@ -848,6 +859,34 @@ class Host:
             require(API not in fields[1:2],
                     'API already has a queued or running lifecycle job')
 
+    def validate_lifecycle_start_lease(self, lease):
+        require(isinstance(lease, dict) and
+                set(lease) == {'unit', 'pid', 'invocation', 'starttime', 'control_group'} and
+                lease['unit'] in {'fg-index-deployment.service',
+                                  'fg-index-deployment-watchdog.service', RECOVERY} and
+                isinstance(lease['pid'], str) and lease['pid'].isdecimal() and
+                re.fullmatch(r'[0-9a-f]{32}', lease['invocation']) and
+                lease['starttime'].isdecimal() and
+                isinstance(lease['control_group'], str) and
+                lease['control_group'].startswith('/system.slice/'),
+                'API start lease is malformed')
+        current = self.active_controller()
+        require(current is not None and
+                {key: current[key] for key in lease} == lease and
+                current['restarts'] == 0,
+                'API start lease is not owned by the live controller invocation')
+
+    def lifecycle_start_lease(self):
+        try:
+            trusted(API_START_LEASE, private=True)
+        except Hold:
+            if not API_START_LEASE.exists() and not API_START_LEASE.is_symlink():
+                return None
+            raise
+        lease = read_json(API_START_LEASE)
+        self.validate_lifecycle_start_lease(lease)
+        return lease
+
     def stop_owned(self, previous, candidate):
         with self.lifecycle_lock():
             self._require_no_api_lifecycle_job()
@@ -937,8 +976,22 @@ class Host:
 
     def start(self):
         with self.lifecycle_lock():
-            BootGate(self, Store()).authorize_start()
-            self.command(['/usr/bin/systemctl', 'start', API], 135)
+            self._require_no_api_lifecycle_job()
+            owner = self.active_controller()
+            require(owner is not None and owner['restarts'] == 0,
+                    'API start requires one live deployment controller')
+            lease = {key: owner[key] for key in
+                     ('unit', 'pid', 'invocation', 'starttime', 'control_group')}
+            atomic_json(API_START_LEASE, lease)
+            try:
+                BootGate(self, Store()).authorize_start(controller_lease=lease)
+                self.command(['/usr/bin/systemctl', 'start', API], 135)
+            finally:
+                try:
+                    API_START_LEASE.unlink()
+                    sync_directory(API_START_LEASE.parent)
+                except FileNotFoundError:
+                    pass
 
     def active_controller(self):
         """Return the one live, fixed controller activation context, if any."""
@@ -951,7 +1004,7 @@ class Host:
                 'User', 'Group', 'Type', 'TimeoutStartUSec', 'ExecStart',
                 'NoNewPrivileges', 'CapabilityBoundingSet',
                 'AmbientCapabilities', 'RestrictAddressFamilies',
-                'SystemCallArchitectures',
+                'SystemCallArchitectures', 'ReadWritePaths',
             ])
             action = {'fg-index-deployment.service': '--once',
                       'fg-index-deployment-watchdog.service': '--watchdog',
@@ -984,7 +1037,9 @@ class Host:
                             process_identity.pidfd_is_live(pidfd), 'controller changed during identity inspection')
                 finally:
                     os.close(pidfd)
-                active.append({'unit': name, 'pid': str(pid), 'invocation': props['InvocationID'], 'restarts': 0})
+                active.append({'unit': name, 'pid': str(pid), 'invocation': props['InvocationID'],
+                               'starttime': starttime, 'control_group': cgroup,
+                               'restarts': 0})
         require(len(active) <= 1, 'multiple controller invocations are active')
         return active[0] if active else None
 
@@ -1051,7 +1106,22 @@ class BootGate:
     def __init__(self, host, store):
         self.host, self.store = host, store
 
-    def authorize_start(self):
+    def authorize_start(self, *, controller_lease=None):
+        persisted_lease = (controller_lease if controller_lease is not None
+                           else self.host.lifecycle_start_lease())
+        if persisted_lease is not None:
+            # The API unit's systemd dependency runs in another process while
+            # its controller still owns the lifecycle lock. Accept only the
+            # root-owned, exact-invocation lease created under that lock.
+            return self._authorize_start(persisted_lease)
+        with self.host.lifecycle_lock():
+            require(self.host.active_controller() is None,
+                    'standalone API authorization conflicts with a live controller')
+            return self._authorize_start(None)
+
+    def _authorize_start(self, controller_lease):
+        if controller_lease is not None:
+            self.host.validate_lifecycle_start_lease(controller_lease)
         self.host.preflight()
         state = self.store.load()
         require(self.host.boot_guard_enabled, 'boot guard phase is not enabled')
@@ -1065,6 +1135,8 @@ class BootGate:
             require(receipt['sha'] not in state['rejected'], 'committed image is rejected')
             require(self.host.links() == self.host.targets(receipt), 'committed links do not match state')
             self.host.verify(receipt)
+            if controller_lease is not None:
+                self.host.validate_lifecycle_start_lease(controller_lease)
             return receipt
 
         tx = state['transaction']
@@ -1083,6 +1155,8 @@ class BootGate:
         require(self.host.properties(API, ['NRestarts'])['NRestarts'] == '0',
                 'API already restarted during this transaction')
         self.host.verify(receipt)
+        if controller_lease is not None:
+            self.host.validate_lifecycle_start_lease(controller_lease)
         return receipt
 
 
