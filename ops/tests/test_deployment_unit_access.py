@@ -6,18 +6,18 @@ import subprocess
 import tempfile
 import unittest
 
-from ops.deploy_api_release import API, BOOT_GUARD, BOOT_GUARD_DROPIN, ROLE_STAGE, Host, validate_loaded_unit
+from ops.deploy_api_release import API, API_LIFECYCLE_LOCK, BOOT_GUARD, BOOT_GUARD_DROPIN, ROLE_STAGE, STATE, Host, validate_loaded_unit
 
 UNITS = Path(__file__).parents[1] / 'deployment/systemd'
 
 
 class UnitAccessTest(unittest.TestCase):
-    def test_both_units_expose_only_accepted_role_directory_under_readonly_home(self):
+    def test_controllers_can_write_state_and_role_stage_under_readonly_home(self):
         for name in ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service'):
             parser = configparser.ConfigParser(interpolation=None)
             parser.read(UNITS / name)
             self.assertEqual('read-only', parser['Service']['ProtectHome'])
-            self.assertEqual(str(ROLE_STAGE), parser['Service']['ReadWritePaths'])
+            self.assertEqual(f'{ROLE_STAGE} {STATE}', parser['Service']['ReadWritePaths'])
             self.assertEqual('root', parser['Service']['User'])
             self.assertEqual('30min' if name == 'fg-index-deployment.service' else '10min',
                              parser['Service']['TimeoutStartSec'])
@@ -31,7 +31,7 @@ class UnitAccessTest(unittest.TestCase):
                          set(recovery['Service']['ReadOnlyPaths'].split()))
         self.assertEqual('10min', recovery['Service']['TimeoutStartSec'])
 
-    def test_api_unit_requires_a_fresh_guard_and_guard_is_lock_free(self):
+    def test_api_unit_requires_a_fresh_guard_and_guard_writes_only_lifecycle_lock(self):
         api = configparser.ConfigParser(interpolation=None)
         api.read(Path(__file__).parents[1] / 'oci/fg-index-api.service')
         self.assertNotIn('Requires', api['Unit'])
@@ -45,7 +45,7 @@ class UnitAccessTest(unittest.TestCase):
         self.assertEqual('oneshot', guard['Service']['Type'])
         self.assertEqual('2min', guard['Service']['TimeoutStartSec'])
         self.assertNotIn('RemainAfterExit', guard['Service'])
-        self.assertNotIn('ReadWritePaths', guard['Service'])
+        self.assertEqual(str(API_LIFECYCLE_LOCK), guard['Service']['ReadWritePaths'])
         self.assertIn('--boot-guard', guard['Service']['ExecStart'])
         recovery = configparser.ConfigParser(interpolation=None)
         recovery.read(UNITS / 'fg-index-deployment-recovery.service')
@@ -107,6 +107,37 @@ else:
                                     capture_output=True, timeout=20)
             self.assertEqual(0, result.returncode, result.stderr.decode())
             self.assertEqual(0o600, (root / 'role-deployment.lock').stat().st_mode & 0o777)
+
+    @unittest.skipUnless(os.geteuid() == 0 and Path('/run/systemd/system').is_dir(), 'exact lock-file write-scope check runs in Linux CI')
+    def test_boot_guard_can_lock_precreated_file_but_cannot_mutate_siblings(self):
+        with tempfile.TemporaryDirectory(prefix='fg-index-boot-guard-lock-', dir='/root') as directory:
+            root = Path(directory)
+            lock = root / 'api-lifecycle.lock'
+            sibling = root / 'state.json'
+            lock.touch(mode=0o600)
+            sibling.write_text('committed state')
+            script = """import fcntl,os,pathlib,sys
+lock=pathlib.Path(sys.argv[1]);sibling=pathlib.Path(sys.argv[2])
+fd=os.open(lock,os.O_RDWR|os.O_CLOEXEC|os.O_NOFOLLOW)
+fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);os.write(fd,b'x');os.fsync(fd);os.close(fd)
+try: sibling.unlink()
+except OSError: pass
+else: raise AssertionError('BootGate deleted sibling state')
+try: (sibling.parent/'new-state').open('x').close()
+except OSError: pass
+else: raise AssertionError('BootGate created sibling state')
+"""
+            result = subprocess.run([
+                '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
+                '--property=User=root', '--property=Group=root',
+                '--property=ProtectSystem=strict', '--property=ReadWritePaths=' + str(lock),
+                '--property=RuntimeMaxSec=10', '/usr/bin/python3.12', '-c', script,
+                str(lock), str(sibling),
+            ], capture_output=True, timeout=20)
+            self.assertEqual(0, result.returncode, result.stderr.decode())
+            self.assertEqual(b'x', lock.read_bytes())
+            self.assertEqual('committed state', sibling.read_text())
+            self.assertFalse((root / 'new-state').exists())
 
     @unittest.skipUnless(os.geteuid() == 0 and Path('/run/systemd/system').is_dir(), 'actual recovery namespace check runs in Linux CI')
     def test_recovery_namespace_can_replace_only_state_and_current_links(self):

@@ -276,7 +276,7 @@ def validate_loaded_guard(props):
             props['RestrictAddressFamilies'] == 'AF_UNIX' and
             props['SystemCallArchitectures'] == 'native' and
             props['ProtectSystem'] == 'strict' and
-            props['ReadWritePaths'] == str(STATE) and
+            props['ReadWritePaths'] == str(API_LIFECYCLE_LOCK) and
             props['TimeoutStartUSec'] == '2min' and
             props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
             'loaded boot guard unit drift')
@@ -830,8 +830,11 @@ class Host:
     @contextlib.contextmanager
     def lifecycle_lock(self):
         """Serialize every installed controller API lifecycle operation."""
-        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
-        fd = os.open(API_LIFECYCLE_LOCK, flags, 0o600)
+        flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            fd = os.open(API_LIFECYCLE_LOCK, flags)
+        except OSError as error:
+            raise Hold('pre-provisioned API lifecycle lock is unavailable') from error
         try:
             info = os.fstat(fd)
             require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and

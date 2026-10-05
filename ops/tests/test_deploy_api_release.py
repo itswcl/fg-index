@@ -674,6 +674,7 @@ class LifecycleOwnershipTest(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         lock_path = Path(temp.name) / 'api-lifecycle.lock'
+        lock_path.touch(mode=0o600)
         first, second = Host.__new__(Host), Host.__new__(Host)
         fake_stat = type('Stat', (), {'st_mode': 0o100600, 'st_uid': 0})()
         with patch('ops.deploy_api_release.API_LIFECYCLE_LOCK', lock_path), \
@@ -682,6 +683,17 @@ class LifecycleOwnershipTest(unittest.TestCase):
                 with self.assertRaises(Hold):
                     with second.lifecycle_lock():
                         pass
+
+    def test_lifecycle_lock_fails_closed_when_not_preprovisioned(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        lock_path = Path(temp.name) / 'api-lifecycle.lock'
+        host = Host.__new__(Host)
+        with patch('ops.deploy_api_release.API_LIFECYCLE_LOCK', lock_path):
+            with self.assertRaises(Hold):
+                with host.lifecycle_lock():
+                    pass
+        self.assertFalse(lock_path.exists())
 
     def test_controller_start_lease_spans_boot_gate_and_systemctl_start(self):
         host = Host.__new__(Host)
@@ -792,13 +804,13 @@ class LoadedContractTest(unittest.TestCase):
                  'NoNewPrivileges': 'yes', 'CapabilityBoundingSet': '',
                  'AmbientCapabilities': '', 'RestrictAddressFamilies': 'AF_UNIX',
                  'SystemCallArchitectures': 'native', 'ProtectSystem': 'strict',
-                 'ReadWritePaths': '/var/lib/fg-index-deployment',
+                 'ReadWritePaths': '/var/lib/fg-index-deployment/api-lifecycle.lock',
                  'TimeoutStartUSec': '2min',
                  'FragmentPath': '/etc/systemd/system/fg-index-api-boot-guard.service',
                  'DropInPaths': '',
                  'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
         validate_loaded_guard(props)
-        props['ReadWritePaths'] = '/var/lib'
+        props['ReadWritePaths'] = '/var/lib/fg-index-deployment'
         with self.assertRaises(Hold):
             validate_loaded_guard(props)
 

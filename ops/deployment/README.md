@@ -16,7 +16,11 @@ as `fg-index` in bounded transient units with captured/discarded child output.
 No authenticated HTTP, JWT or User writes are used.
 
 A reviewed installation must create `/var/lib/fg-index-deployment` root:root
-0700, install the controller root:root0755 under
+0700 and pre-create `/var/lib/fg-index-deployment/api-lifecycle.lock` as a
+root:root0600 regular file before enabling any API/controller units. The
+controller opens this existing lock without creating it; the BootGate unit's
+only writable path under `/var/lib/fg-index-deployment` is that lock file.
+Install the controller root:root0755 under
 `/usr/local/libexec/fg-index-deployment/`, and provide a root:root0600
 `/etc/fg-index/deployment-policy.json` (parents root-owned without write grants
 or ACLs). There is no default permissive policy. Install and pin the fixed
