@@ -257,13 +257,17 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                     observed["direct_a_errors"] = operation_errors
                     observed["aggregate_gate"] = "HOLD"
                     observed["aggregate_pending_gates"] = [
-                        "fixed-helper E2E and enforcing API/helper AppArmor identity",
+                        "fixed-helper runtime E2E with enforcing API/helper AppArmor identities",
+                        "API /proc/self and /proc/thread-self access under the exact profile",
+                        "same-UID API-to-helper isolation before/after helper dumpability changes",
+                        "helper-to-unrelated-same-UID-peer status-read denial",
+                        "proc PID/TID/root aliases, descendants, and API exec/exit/PID-reuse races",
+                        "foreign-controller rejection and exact listener ambiguity cases",
+                        "stale profile/receipt mismatch and loaded-policy freshness negatives",
+                        "malformed, duplicate, replayed, oversized, and timeout helper records",
                         "C fixed-unit MainPID/InvocationID/cgroup/starttime and before/after snapshots",
                         "API unit/cgroup/starttime before/after snapshots and pidfd ordering/binding",
-                        "foreign-controller, PID-reuse, exec-race, and process-exit cases",
-                        "same-UID API-to-helper proc/syscall isolation and descendant escape tests",
-                        "bounded helper output, invocation binding, malformed/replay/oversize/timeout cases",
-                        "all installed API lifecycle actors and shared stop lock",
+                        "inventory/test of all lifecycle actors, shared lock, and direct manager bypass",
                         "replacement invocation at stop-job acceptance boundary",
                         "required production controller sandbox/context matrix",
                     ]

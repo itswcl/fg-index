@@ -53,6 +53,27 @@ def load_state(unit):
     )
 
 
+def wait_for_unit_cgroup_empty(unit, timeout=10):
+    """Wait for only this fixture unit's systemd cgroup to contain no PIDs."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if load_state(unit) == 'not-found':
+            return True
+        control_group = systemctl_show(unit, 'ControlGroup').get('ControlGroup', '')
+        if not control_group:
+            return True
+        processes = Path('/sys/fs/cgroup') / control_group.lstrip('/') / 'cgroup.procs'
+        try:
+            pids = {line for line in processes.read_text(encoding='ascii').splitlines() if line}
+        except FileNotFoundError:
+            return True
+        if not pids:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
 def profile_source(role):
     proc_rules = ''
     if role == 'helper':
@@ -321,6 +342,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 import os
                 import select
                 import subprocess
+                import tempfile
                 import time
 
                 API_UNIT = {api_unit!r}
@@ -381,10 +403,14 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary = {{"aggregate_gate": "HOLD", "helper_state": "HOLD", "errors": []}}
                 summary["aggregate_pending_gates"] = [
                     "native production helper and controller integration",
-                    "same-UID peer, startup alias, descendant, and adversarial request isolation",
-                    "stale-process/current-profile mismatch negative case",
-                    "malformed, replayed, oversized, and timeout helper output cases",
-                    "all production API lifecycle actors and shared stop lock",
+                    "API /proc/self and /proc/thread-self access under the exact profile",
+                    "same-UID API-to-helper isolation before/after helper dumpability changes",
+                    "helper-to-unrelated-same-UID-peer status-read denial",
+                    "proc PID/TID/root aliases, descendants, and API exec/exit/PID-reuse races",
+                    "foreign-controller rejection and exact listener ambiguity cases",
+                    "stale profile/receipt mismatch and loaded-policy freshness negatives",
+                    "malformed, duplicate, replayed, oversized, and timeout helper records",
+                    "inventory/test of all lifecycle actors, shared lock, and direct manager bypass",
                     "replacement invocation at stop-job acceptance boundary",
                     "required production controller sandbox/context matrix",
                 ]
@@ -536,8 +562,17 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     print("API_PRE_HELPER_GATE=HOLD HELPER_LAUNCH=REFUSED", flush=True)
                     print(json.dumps(summary, sort_keys=True), flush=True)
                     raise SystemExit(0)
+                helper_cursor_result = subprocess.run(
+                    ["/usr/bin/journalctl", "--no-pager", "--show-cursor", "-n", "0"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                helper_journal_cursor = next(
+                    (line.removeprefix("-- cursor: ") for line in helper_cursor_result.stdout.splitlines()
+                     if line.startswith("-- cursor: ")),
+                    None,
+                )
                 launch = [
-                    "/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect",
+                    "/usr/bin/systemd-run", "--quiet", "--pipe", "--wait",
                     "--unit", HELPER_UNIT,
                     "--property=Type=oneshot", "--property=User=fg-index", "--property=Group=fg-index",
                     "--property=AppArmorProfile=" + HELPER_PROFILE,
@@ -549,8 +584,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     "--property=RuntimeMaxSec=20s", {PYTHON!r}, "-S", HELPER_SCRIPT,
                 ]
                 print("API_PRE_HELPER_GATE=PASS HELPER_LAUNCH=ALLOWED", flush=True)
+                helper_stderr_file = tempfile.TemporaryFile()
                 child = subprocess.Popen(launch, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, bufsize=0)
+                                         stderr=helper_stderr_file, bufsize=0)
                 data = bytearray()
                 deadline = time.monotonic() + 10
                 while b"\\n" not in data and len(data) <= 4096:
@@ -579,6 +615,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 else:
                     summary["errors"].append("helper output is oversized or not one record")
 
+                helper_pidfd = None
                 try:
                     helper = show(HELPER_UNIT, "MainPID", "InvocationID", "ControlGroup", "LoadState",
                                   "User", "Group", "AppArmorProfile", "CapabilityBoundingSet",
@@ -587,6 +624,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                   "ProtectHome", "PrivateTmp",
                                   "FragmentPath")
                     helper_pid = int(helper.get("MainPID", "0"))
+                    summary["helper_main_pid_valid"] = helper_pid > 0
                     helper_syscall_filter = helper.get("SystemCallFilter", "")
                     helper_denied_syscalls = set(helper_syscall_filter.lstrip("~").split())
                     summary["helper_unit_ok"] = (
@@ -607,17 +645,27 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         and "/run/systemd/transient/" in helper.get("FragmentPath", "")
                         and HELPER_SCRIPT in helper.get("ExecStart", "")
                     )
-                    helper_caps = capabilities(helper_pid)
-                    summary["helper_capabilities"] = helper_caps
-                    summary["helper_capabilities_zero"] = all(value == "0000000000000000" for value in helper_caps.values())
-                    label_path = f"/proc/{{helper_pid}}/attr/current"
-                    try:
-                        helper_label = open(label_path, encoding="ascii").read().strip()
-                        summary["helper_live_label"] = helper_label
-                        summary["helper_live_label_ok"] = helper_label == HELPER_PROFILE + " (enforce)"
-                    except OSError as exc:
-                        summary["helper_live_label_errno"] = errno.errorcode.get(exc.errno, str(exc.errno))
+                    if helper_pid > 0:
+                        helper_caps = capabilities(helper_pid)
+                        summary["helper_capabilities"] = helper_caps
+                        summary["helper_capabilities_zero"] = all(value == "0000000000000000" for value in helper_caps.values())
+                        label_path = f"/proc/{{helper_pid}}/attr/current"
+                        try:
+                            helper_label = open(label_path, encoding="ascii").read().strip()
+                            summary["helper_live_label"] = helper_label
+                            summary["helper_live_label_ok"] = helper_label == HELPER_PROFILE + " (enforce)"
+                        except OSError as exc:
+                            summary["helper_live_label_errno"] = errno.errorcode.get(exc.errno, str(exc.errno))
+                            summary["helper_live_label_ok"] = False
+                        helper_pidfd = os.pidfd_open(helper_pid, 0)
+                        helper_poll = select.poll()
+                        helper_poll.register(helper_pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+                        summary["helper_pidfd_live"] = helper_poll.poll(0) == []
+                    else:
+                        summary["helper_capabilities"] = {{}}
+                        summary["helper_capabilities_zero"] = False
                         summary["helper_live_label_ok"] = False
+                        summary["helper_pidfd_live"] = False
                     profiles = live_profiles()
                     summary["helper_profile_enforcing"] = HELPER_PROFILE + " (enforce)" in profiles
                     summary["api_profile_enforcing"] = API_PROFILE + " (enforce)" in profiles
@@ -644,10 +692,6 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
                             == HELPER_FIXTURE_SHA256
                     )
-                    helper_pidfd = os.pidfd_open(helper_pid, 0)
-                    helper_poll = select.poll()
-                    helper_poll.register(helper_pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
-                    summary["helper_pidfd_live"] = helper_poll.poll(0) == []
                     if record is not None:
                         expected_fields = {{
                             "schema", "helper_invocation_id", "api_pid", "api_invocation_id",
@@ -725,6 +769,55 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     ))
                     if not summary["helper_live_checks_ok"]:
                         summary["errors"].append("helper live identity/profile/result validation failed")
+                    if not summary.get("helper_main_pid_valid") or not summary.get("one_record_ok"):
+                        diagnostic_args = ["/usr/bin/journalctl", "--no-pager"]
+                        if helper_journal_cursor:
+                            diagnostic_args.append("--after-cursor=" + helper_journal_cursor)
+                        helper_status = subprocess.run(
+                            ["/usr/bin/systemctl", "status", "--no-pager", "--full", HELPER_UNIT],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        helper_properties = subprocess.run(
+                            ["/usr/bin/systemctl", "show", HELPER_UNIT,
+                             "--property=LoadState", "--property=ActiveState", "--property=SubState",
+                             "--property=Result", "--property=ExecMainCode", "--property=ExecMainStatus",
+                             "--property=StatusText", "--property=MainPID", "--property=ControlPID",
+                             "--property=InvocationID", "--property=ControlGroup", "--property=ExecStart"],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        helper_unit_journal = subprocess.run(
+                            [*diagnostic_args, "--unit=" + HELPER_UNIT, "-n", "100"],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        kernel_args = list(diagnostic_args)
+                        kernel_args.extend(["-k", "-n", "200"])
+                        helper_kernel_journal = subprocess.run(
+                            kernel_args, capture_output=True, text=True, timeout=10,
+                        )
+                        helper_audit_lines = [
+                            line for line in helper_kernel_journal.stdout.splitlines()
+                            if "apparmor=" in line.lower()
+                            or API_PROFILE in line
+                            or HELPER_PROFILE in line
+                        ]
+                        helper_stderr_file.seek(0, 2)
+                        stderr_size = helper_stderr_file.tell()
+                        helper_stderr_file.seek(max(0, stderr_size - 8000))
+                        helper_stderr = helper_stderr_file.read(8000).decode("utf-8", "replace")
+                        summary["helper_diagnostics"] = (
+                            "SYSTEMD_RUN_STDERR:\\n" + helper_stderr
+                            + "\\nHELPER_UNIT_PROPERTIES:\\n" + helper_properties.stdout[-8000:]
+                            + "\\nHELPER_UNIT_STATUS:\\n" + helper_status.stdout[-8000:]
+                            + helper_status.stderr[-1000:]
+                            + "\\nHELPER_UNIT_JOURNAL:\\n" + helper_unit_journal.stdout[-8000:]
+                            + "\\nAPPARMOR_KERNEL_AUDIT:\\n"
+                            + ("\\n".join(helper_audit_lines)[-8000:] if helper_audit_lines else
+                               "no matching AppArmor/kernel audit lines since helper launch")
+                            + "\\nJOURNAL_ERRORS:\\n"
+                            + helper_cursor_result.stderr[-1000:]
+                            + helper_unit_journal.stderr[-1000:]
+                            + helper_kernel_journal.stderr[-1000:]
+                        )
                 except (OSError, KeyError, ValueError, subprocess.SubprocessError) as exc:
                     summary["errors"].append("controller helper validation failed: " + str(exc))
                     summary["helper_live_checks_ok"] = False
@@ -765,6 +858,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     summary["controller_final_snapshot_stable"] = False
                     summary["errors"].append("API final snapshot failed: " + str(exc))
                 os.close(api_pidfd)
+                if helper_pidfd is not None:
+                    os.close(helper_pidfd)
+                helper_stderr_file.close()
                 summary["helper_state"] = (
                     "PASS" if summary.get("helper_live_checks_ok") and summary.get("helper_exit_zero")
                     and summary.get("api_final_snapshot_stable")
@@ -917,6 +1013,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 self.assertTrue(summary.get('helper_required'), summary)
                 self.assertEqual('HOLD', summary.get('aggregate_gate'), summary)
             finally:
+                fixture_cgroups_empty = True
                 for unit in (helper_unit, controller_unit, api_unit):
                     try:
                         if load_state(unit) == 'loaded':
@@ -926,11 +1023,15 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                     ['/usr/bin/systemctl', 'stop', unit],
                                     check=True, capture_output=True, timeout=15,
                                 )
+                            if not wait_for_unit_cgroup_empty(unit):
+                                fixture_cgroups_empty = False
+                                cleanup_errors.append(f'fixture cgroup did not empty: {unit}')
                             subprocess.run(
                                 ['/usr/bin/systemctl', 'reset-failed', unit],
                                 check=True, capture_output=True, timeout=15,
                             )
                     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                        fixture_cgroups_empty = False
                         cleanup_errors.append(f'stop {unit}: {exc}')
                 for role, path in reversed(loaded_profiles):
                     try:
@@ -940,7 +1041,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         )
                     except (OSError, subprocess.SubprocessError) as exc:
                         cleanup_errors.append(f'unload AppArmor {role} profile: {exc}')
-                if api_created:
+                if api_created and fixture_cgroups_empty:
                     try:
                         subprocess.run(
                             ['/usr/sbin/userdel', 'fg-index'], check=True,
@@ -948,7 +1049,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         )
                     except (OSError, subprocess.SubprocessError) as exc:
                         cleanup_errors.append(f'userdel fg-index: {exc}')
-                if group_created:
+                if group_created and fixture_cgroups_empty:
                     try:
                         grp.getgrnam('fg-index')
                     except KeyError:
