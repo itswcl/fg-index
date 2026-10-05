@@ -18,6 +18,7 @@ import textwrap
 import time
 import unittest
 import uuid
+from unittest import mock
 
 
 SYSTEMD = Path('/run/systemd/system')
@@ -160,6 +161,56 @@ def profile_name_and_source(role):
     generated = profile_source(role).replace('fg-index-identity-policy-placeholder', name)
     source_digest = hashlib.sha256(generated.encode('utf-8')).hexdigest()
     return name, policy_digest, source_digest, generated
+
+
+class ProcessIdentityHelperCleanupTests(unittest.TestCase):
+    def test_missing_unexpected_unit_is_clean(self):
+        with mock.patch(__name__ + '.load_state', return_value='not-found'):
+            self.assertTrue(wait_for_unit_cgroup_empty('fixture.service'))
+
+    def test_missing_expected_unit_without_cgroup_fails_closed(self):
+        with (
+            mock.patch(__name__ + '.load_state', return_value='not-found'),
+            mock.patch(__name__ + '.time.monotonic', side_effect=[0, 2]),
+            mock.patch(__name__ + '.time.sleep'),
+        ):
+            self.assertFalse(wait_for_unit_cgroup_empty('fixture.service', expected=True, timeout=1))
+
+    def test_missing_unit_polls_captured_cgroup_until_empty(self):
+        with (
+            mock.patch(__name__ + '.load_state', side_effect=['not-found', 'not-found']),
+            mock.patch.object(Path, 'read_text', side_effect=['123\n', '']),
+            mock.patch(__name__ + '.time.monotonic', side_effect=[0, 0, 0]),
+            mock.patch(__name__ + '.time.sleep') as sleep,
+        ):
+            self.assertTrue(wait_for_unit_cgroup_empty(
+                'fixture.service', expected=True, known_control_group='/system.slice/fixture.service'
+            ))
+        sleep.assert_called_once_with(0.05)
+
+    def test_loaded_unit_requires_stopped_pids_and_empty_cgroup(self):
+        with (
+            mock.patch(__name__ + '.load_state', return_value='loaded'),
+            mock.patch(__name__ + '.systemctl_show', return_value={
+                'ActiveState': 'inactive', 'MainPID': '0', 'ControlPID': '0',
+                'ControlGroup': '/system.slice/fixture.service',
+            }),
+            mock.patch.object(Path, 'read_text', return_value=''),
+        ):
+            self.assertTrue(wait_for_unit_cgroup_empty('fixture.service', expected=True))
+
+    def test_nonempty_loaded_cgroup_times_out(self):
+        with (
+            mock.patch(__name__ + '.load_state', return_value='loaded'),
+            mock.patch(__name__ + '.systemctl_show', return_value={
+                'ActiveState': 'inactive', 'MainPID': '0', 'ControlPID': '0',
+                'ControlGroup': '/system.slice/fixture.service',
+            }),
+            mock.patch.object(Path, 'read_text', return_value='123\n'),
+            mock.patch(__name__ + '.time.monotonic', side_effect=[0, 0, 2]),
+            mock.patch(__name__ + '.time.sleep'),
+        ):
+            self.assertFalse(wait_for_unit_cgroup_empty('fixture.service', expected=True, timeout=1))
 
 
 class ProcessIdentityHelperLinuxTest(unittest.TestCase):
