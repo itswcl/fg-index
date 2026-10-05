@@ -325,6 +325,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 HELPER_SCRIPT = {str(helper_script)!r}
                 EXPECTED_EXE = {PYTHON!r}
                 EXPECTED_CWD = {directory!r}
+                API_POLICY_PATH = {str(api_policy_path)!r}
+                API_POLICY_SOURCE_SHA256 = {api_source_digest!r}
                 API_PROFILE = {api_profile!r}
                 HELPER_PROFILE = {helper_profile!r}
                 RECEIPT_PATH = {str(receipt_path)!r}
@@ -336,6 +338,13 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 def readlink(path):
                     try:
                         return {{"value": os.readlink(path)}}
+                    except OSError as exc:
+                        return {{"errno": errno.errorcode.get(exc.errno, str(exc.errno))}}
+
+                def readtext(path):
+                    try:
+                        with open(path, encoding="ascii") as reader:
+                            return {{"value": reader.read().strip()}}
                     except OSError as exc:
                         return {{"errno": errno.errorcode.get(exc.errno, str(exc.errno))}}
 
@@ -387,21 +396,74 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                   "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile")
                 api_pid = int(api_before["MainPID"])
                 direct_api = {{"exe": readlink(f"/proc/{{api_pid}}/exe"),
-                               "cwd": readlink(f"/proc/{{api_pid}}/cwd"), "fd_errors": []}}
+                               "cwd": readlink(f"/proc/{{api_pid}}/cwd"),
+                               "profile_label": readtext(f"/proc/{{api_pid}}/attr/current"),
+                               "fd_errors": []}}
                 try:
                     for fd in os.listdir(f"/proc/{{api_pid}}/fd"):
                         os.readlink(f"/proc/{{api_pid}}/fd/{{fd}}")
                 except OSError as exc:
                     direct_api["fd_errors"].append(errno.errorcode.get(exc.errno, str(exc.errno)))
                 summary["direct_api"] = direct_api
-                summary["helper_required"] = any(
-                    value.get("errno") == "EACCES"
-                    for value in (direct_api["exe"], direct_api["cwd"])
-                ) or "EACCES" in direct_api["fd_errors"]
+                direct_proc_errors = [
+                    (name, value.get("errno"))
+                    for name, value in (("exe", direct_api["exe"]), ("cwd", direct_api["cwd"]),
+                                        ("attr_current", direct_api["profile_label"]))
+                    if value.get("errno")
+                ] + [("fd", code) for code in direct_api["fd_errors"]]
+                direct_proc_denials = [item for item in direct_proc_errors if item[1] == "EACCES"]
+                direct_proc_hard_holds = [item for item in direct_proc_errors if item[1] != "EACCES"]
+                summary["direct_a_errors"] = direct_proc_errors
+                summary["helper_required"] = bool(direct_proc_denials)
+                summary["helper_fallback_selected"] = (
+                    summary["helper_required"] and not direct_proc_hard_holds
+                )
                 summary["api_profile_property_ok"] = api_before.get("AppArmorProfile") == API_PROFILE
+                summary["api_live_profile_label_pre_helper_ok"] = (
+                    direct_api["profile_label"] == {{"value": API_PROFILE + " (enforce)"}}
+                )
+                profiles_before_helper = live_profiles()
+                summary["api_profile_enforcing_pre_helper"] = API_PROFILE + " (enforce)" in profiles_before_helper
+                summary["helper_profile_enforcing_pre_helper"] = HELPER_PROFILE + " (enforce)" in profiles_before_helper
+                pre_helper_receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
+                summary["api_profile_receipt_pre_helper_ok"] = (
+                    pre_helper_receipt["api"]["profile"] == API_PROFILE
+                    and pre_helper_receipt["api"]["source_sha256"] == API_POLICY_SOURCE_SHA256
+                    and os.stat(RECEIPT_PATH).st_uid == 0
+                    and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o600
+                    and hashlib.sha256(open(API_POLICY_PATH, "rb").read()).hexdigest()
+                        == API_POLICY_SOURCE_SHA256
+                )
                 api_pidfd = os.pidfd_open(api_pid, 0)
                 api_poll = select.poll()
                 api_poll.register(api_pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+                api_confirm_before_helper = show(
+                    API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
+                    "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile",
+                )
+                summary["api_snapshot_pre_helper_ok"] = (
+                    api_confirm_before_helper == api_before
+                    and
+                    api_before.get("ActiveState") == "active"
+                    and api_before.get("SubState") == "running"
+                    and api_before.get("ControlPID") == "0"
+                    and api_before.get("NRestarts") == "0"
+                    and bool(api_before.get("InvocationID"))
+                    and bool(api_before.get("ControlGroup"))
+                    and api_pid > 0 and api_poll.poll(0) == []
+                )
+                summary["api_pre_helper_trust_ok"] = all(summary.get(key, False) for key in (
+                    "api_profile_property_ok", "api_live_profile_label_pre_helper_ok",
+                    "api_profile_enforcing_pre_helper", "helper_profile_enforcing_pre_helper",
+                    "api_profile_receipt_pre_helper_ok", "api_snapshot_pre_helper_ok",
+                )) and summary["helper_fallback_selected"]
+                if not summary["api_pre_helper_trust_ok"]:
+                    summary["helper_launch_refused"] = True
+                    summary["errors"].append(
+                        "HOLD: live API identity/profile trust gates or direct-denial fallback are incomplete"
+                    )
+                    print(json.dumps(summary, sort_keys=True), flush=True)
+                    raise SystemExit(0)
                 launch = [
                     "/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect",
                     "--unit", HELPER_UNIT,
@@ -534,10 +596,16 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     api_after = show(API_UNIT, "ActiveState", "SubState", "MainPID", "ControlPID",
                                      "NRestarts", "InvocationID", "ControlGroup", "AppArmorProfile")
                     summary["api_snapshot_stable"] = api_after == api_before and api_poll.poll(0) == []
+                    api_label_after = readtext(f"/proc/{{api_pid}}/attr/current")
+                    summary["api_profile_label_stable"] = (
+                        api_label_after == direct_api["profile_label"]
+                        and api_label_after == {{"value": API_PROFILE + " (enforce)"}}
+                    )
                     summary["helper_live_checks_ok"] = all(summary.get(key, False) for key in (
                         "helper_unit_ok", "helper_capabilities_zero", "helper_live_label_ok",
                         "helper_profile_enforcing", "api_profile_enforcing", "api_profile_property_ok",
                         "api_live_profile_label_ok", "profile_receipt_ok",
+                        "api_pre_helper_trust_ok", "api_profile_label_stable",
                         "helper_pidfd_live", "schema_ok", "invocation_binding_ok",
                         "api_snapshot_binding_ok", "api_identity_ok", "helper_interface_ok",
                         "helper_capability_record_ok", "extra_output_absent", "api_snapshot_stable",
@@ -618,7 +686,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 self.assertIn(helper_profile + ' (enforce)', profiles, 'HOLD: helper profile not enforcing')
 
                 start_api = [
-                    '/usr/bin/systemd-run', '--quiet', '--collect', '--unit', api_unit,
+                    '/usr/bin/systemd-run', '--quiet', '--unit', api_unit,
                     '--property=Type=simple', '--property=User=fg-index', '--property=Group=fg-index',
                     '--property=WorkingDirectory=' + directory,
                     '--property=AppArmorProfile=' + api_profile,
@@ -629,7 +697,21 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
                     '--property=RuntimeMaxSec=30s', PYTHON, str(api_script),
                 ]
-                subprocess.run(start_api, check=True, capture_output=True, timeout=15)
+                cursor_result = subprocess.run(
+                    ['/usr/bin/journalctl', '--no-pager', '--show-cursor', '-n', '0'],
+                    capture_output=True, text=True, timeout=10,
+                )
+                journal_cursor = next(
+                    (line.removeprefix('-- cursor: ') for line in cursor_result.stdout.splitlines()
+                     if line.startswith('-- cursor: ')),
+                    None,
+                )
+                api_launch = subprocess.run(start_api, capture_output=True, text=True, timeout=15)
+                self.assertEqual(
+                    0, api_launch.returncode,
+                    'HOLD: systemd rejected the AppArmor API fixture\n'
+                    + api_launch.stdout + api_launch.stderr,
+                )
                 api_capabilities = None
                 deadline = time.monotonic() + 10
                 while api_capabilities is None:
@@ -649,8 +731,40 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                 ['/usr/bin/systemctl', 'status', '--no-pager', api_unit],
                                 capture_output=True, text=True, timeout=10,
                             )
+                            unit_properties = subprocess.run(
+                                ['/usr/bin/systemctl', 'show', api_unit],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            journal_args = ['/usr/bin/journalctl', '--no-pager']
+                            if journal_cursor:
+                                journal_args.append('--after-cursor=' + journal_cursor)
+                            unit_journal = subprocess.run(
+                                [*journal_args, '--unit=' + api_unit, '-n', '100'],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            kernel_journal = subprocess.run(
+                                [*journal_args, '--kernel', '-n', '200'],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            audit_lines = [
+                                line for line in kernel_journal.stdout.splitlines()
+                                if 'apparmor=' in line.lower()
+                                or api_profile in line
+                                or helper_profile in line
+                            ]
+                            diagnostics = (
+                                '\nAPI_UNIT_PROPERTIES:\n' + unit_properties.stdout[-8000:]
+                                + '\nAPI_UNIT_STATUS:\n' + status.stdout[-8000:] + status.stderr[-2000:]
+                                + '\nAPI_UNIT_JOURNAL:\n' + unit_journal.stdout[-8000:]
+                                + '\nAPPARMOR_KERNEL_AUDIT:\n'
+                                + ('\n'.join(audit_lines)[-8000:] if audit_lines else
+                                   'no matching AppArmor/kernel audit lines since fixture start')
+                                + '\nJOURNAL_ERRORS:\n'
+                                + cursor_result.stderr[-1000:] + unit_journal.stderr[-1000:]
+                                + kernel_journal.stderr[-1000:]
+                            )
                             self.fail('HOLD: API fixture failed under enforcing AppArmor\n'
-                                      + status.stdout + status.stderr)
+                                      + diagnostics)
                         time.sleep(0.1)
                 self.assertEqual(
                     {key: '0000000000000000' for key in CAPABILITY_FIELDS}, api_capabilities,
@@ -688,8 +802,14 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 for unit in (helper_unit, controller_unit, api_unit):
                     try:
                         if load_state(unit) == 'loaded':
+                            active = systemctl_show(unit, 'ActiveState').get('ActiveState')
+                            if active in ('active', 'activating', 'reloading', 'deactivating'):
+                                subprocess.run(
+                                    ['/usr/bin/systemctl', 'stop', unit],
+                                    check=True, capture_output=True, timeout=15,
+                                )
                             subprocess.run(
-                                ['/usr/bin/systemctl', 'stop', unit],
+                                ['/usr/bin/systemctl', 'reset-failed', unit],
                                 check=True, capture_output=True, timeout=15,
                             )
                     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
