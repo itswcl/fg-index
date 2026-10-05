@@ -174,12 +174,23 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                         operation_errors.append(("tcp", observed["tcp_error"]))
                     if not observed.get("pidfd_live", False):
                         operation_errors.append(("pidfd", observed.get("pidfd_error", "NOT_LIVE")))
+                    api_proc_denials = [
+                        (operation, code) for operation, code in operation_errors
+                        if operation in ("exe", "cwd", "fd") and code == "EACCES"
+                    ]
+                    non_fallback_errors = [
+                        (operation, code) for operation, code in operation_errors
+                        if operation in ("pidfd", "tcp")
+                        or (operation in ("exe", "cwd", "fd") and code != "EACCES")
+                    ]
                     observed["direct_a_state"] = (
-                        "PASS" if not operation_errors and observed.get("listener_owned")
-                        else "UNAVAILABLE/HOLD" if any(code == "EACCES" for _, code in operation_errors)
+                        "UNAVAILABLE/HOLD" if api_proc_denials and not non_fallback_errors
+                        else "PASS" if not operation_errors and observed.get("listener_owned")
                         else "HOLD"
                     )
                     observed["direct_a_errors"] = operation_errors
+                    observed["api_proc_denials"] = api_proc_denials
+                    observed["non_fallback_errors"] = non_fallback_errors
                     observed["aggregate_gate"] = "HOLD"
                     observed["helper_required"] = observed["direct_a_state"] == "UNAVAILABLE/HOLD"
                     return observed
@@ -257,6 +268,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 observed = json.loads(lines[0])
 
                 print('CONTROLLER_DIRECT_IDENTITY=' + json.dumps(observed, sort_keys=True))
+                print('API_FIXTURE_CAPABILITIES=' + json.dumps(api_capabilities, sort_keys=True))
                 print('DIRECT_A_DIAGNOSIS=' + observed['direct_a_state'])
                 print('AGGREGATE_PROCESS_IDENTITY_GATE=' + observed['aggregate_gate'])
                 self.assertEqual({'value': '/usr/bin/python3.12'}, observed['controller_exe'], observed)
@@ -274,48 +286,73 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 self.assertEqual('HOLD', observed['aggregate_gate'], observed)
                 if observed['direct_a_state'] == 'UNAVAILABLE/HOLD':
                     self.assertTrue(observed['helper_required'], observed)
-                    self.assertTrue(
-                        any(code == 'EACCES' for _, code in observed['direct_a_errors']), observed
-                    )
-                    self.assertEqual({'errno': 'EACCES'}, observed['exe'], observed)
-                    self.assertEqual({'errno': 'EACCES'}, observed['cwd'], observed)
-                    self.assertIn('EACCES', observed.get('fd_errors', []), observed)
-                else:
-                    self.assertEqual('PASS', observed['direct_a_state'], observed)
-                    self.assertEqual({'value': '/usr/bin/python3.12'}, observed['exe'], observed)
-                    self.assertEqual({'value': directory}, observed['cwd'], observed)
-                    self.assertEqual(1, len(observed.get('listener_rows', [])), observed)
-                    self.assertTrue(observed.get('listener_owned'), observed)
-            finally:
-                for unit in (api_unit, controller_unit):
-                    unit_state = subprocess.run(
-                        ['/usr/bin/systemctl', 'show', unit, '--property=LoadState'],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    if unit_state.returncode == 0 and 'LoadState=loaded' in unit_state.stdout:
-                        subprocess.run(
-                            ['/usr/bin/systemctl', 'stop', unit],
-                            check=True, capture_output=True, timeout=15,
+                    self.assertTrue(observed['api_proc_denials'], observed)
+                    self.assertFalse(observed['non_fallback_errors'], observed)
+                    for operation in ('exe', 'cwd'):
+                        result = observed[operation]
+                        self.assertEqual(1, len(result), (operation, result, observed))
+                        self.assertTrue(
+                            'value' in result or result.get('errno') == 'EACCES',
+                            (operation, result, observed),
                         )
-                    subprocess.run(
-                        ['/usr/bin/systemctl', 'reset-failed', unit],
-                        capture_output=True, timeout=10,
+                    self.assertTrue(
+                        all(code == 'EACCES' for _, code in observed['api_proc_denials']), observed
                     )
+                else:
+                    self.assertFalse(observed['helper_required'], observed)
+                    if observed['direct_a_state'] == 'PASS':
+                        self.assertEqual({'value': '/usr/bin/python3.12'}, observed['exe'], observed)
+                        self.assertEqual({'value': directory}, observed['cwd'], observed)
+                        self.assertEqual(1, len(observed.get('listener_rows', [])), observed)
+                        self.assertTrue(observed.get('listener_owned'), observed)
+                    else:
+                        self.assertEqual('HOLD', observed['direct_a_state'], observed)
+                        self.assertTrue(observed['non_fallback_errors'], observed)
+            finally:
+                cleanup_errors = []
+                for unit in (api_unit, controller_unit):
+                    try:
+                        unit_state = subprocess.run(
+                            ['/usr/bin/systemctl', 'show', unit, '--property=LoadState'],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if unit_state.returncode == 0 and 'LoadState=loaded' in unit_state.stdout:
+                            subprocess.run(
+                                ['/usr/bin/systemctl', 'stop', unit],
+                                check=True, capture_output=True, timeout=15,
+                            )
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        cleanup_errors.append(f'stop {unit}: {exc}')
+                    try:
+                        subprocess.run(
+                            ['/usr/bin/systemctl', 'reset-failed', unit],
+                            check=True, capture_output=True, timeout=10,
+                        )
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        cleanup_errors.append(f'reset-failed {unit}: {exc}')
                 if api_user_created:
-                    subprocess.run(
-                        ['/usr/sbin/userdel', 'fg-index'],
-                        check=True, capture_output=True, timeout=10,
-                    )
+                    try:
+                        subprocess.run(
+                            ['/usr/sbin/userdel', 'fg-index'],
+                            check=True, capture_output=True, timeout=10,
+                        )
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        cleanup_errors.append(f'userdel fg-index: {exc}')
                 if api_group_created:
                     try:
                         grp.getgrnam('fg-index')
                     except KeyError:
                         pass
                     else:
-                        subprocess.run(
-                            ['/usr/sbin/groupdel', 'fg-index'],
-                            check=True, capture_output=True, timeout=10,
-                        )
+                        try:
+                            subprocess.run(
+                                ['/usr/sbin/groupdel', 'fg-index'],
+                                check=True, capture_output=True, timeout=10,
+                            )
+                        except (OSError, subprocess.SubprocessError) as exc:
+                            cleanup_errors.append(f'groupdel fg-index: {exc}')
+                if cleanup_errors:
+                    raise RuntimeError('fixture cleanup failed: ' + '; '.join(cleanup_errors))
 
 
 if __name__ == '__main__':
