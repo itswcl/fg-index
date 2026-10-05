@@ -193,6 +193,16 @@ jobs:
         # tsc -b picking up hoisted vite v7 types from api-server.
         run: npx vite build
 
+      # The direct-A diagnostic can be green only as an observation result.
+      # This explicit aggregate HOLD keeps the overall identity gate red until
+      # the approved helper E2E and remaining v11 context/race matrix are proven.
+      - name: Aggregate no-capability identity gate (HOLD pending v11 matrix)
+        if: always()
+        run: |
+          echo 'AGGREGATE_PROCESS_IDENTITY_GATE=HOLD'
+          echo 'Required helper E2E, production controller context matrix, AppArmor containment, lifecycle lock, and stop-boundary race proof are incomplete.'
+          exit 1
+
   attest-api-release:
     name: Attest trusted API release artifact
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
