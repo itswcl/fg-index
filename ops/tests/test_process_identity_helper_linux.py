@@ -85,7 +85,7 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
         control_group = properties.get('ControlGroup', '') or known_control_group
         cgroup_empty = False
         if not control_group:
-            cgroup_empty = stopped and not expected
+            cgroup_empty = stopped
         else:
             processes = Path('/sys/fs/cgroup') / control_group.lstrip('/') / 'cgroup.procs'
             try:
@@ -243,6 +243,15 @@ class ProcessIdentityHelperCleanupTests(unittest.TestCase):
                 'ControlGroup': '/system.slice/fixture.service',
             }),
             mock.patch.object(Path, 'read_text', return_value=''),
+        ):
+            self.assertTrue(wait_for_unit_cgroup_empty('fixture.service', expected=True))
+
+    def test_loaded_stopped_unit_with_no_control_group_proves_drain(self):
+        with (
+            mock.patch(__name__ + '.load_state', return_value='loaded'),
+            mock.patch(__name__ + '.systemctl_show', return_value={
+                'ActiveState': 'failed', 'MainPID': '0', 'ControlPID': '0', 'ControlGroup': '',
+            }),
         ):
             self.assertTrue(wait_for_unit_cgroup_empty('fixture.service', expected=True))
 
