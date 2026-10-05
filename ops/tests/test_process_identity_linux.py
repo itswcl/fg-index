@@ -316,20 +316,20 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                             ['/usr/bin/systemctl', 'show', unit, '--property=LoadState'],
                             capture_output=True, text=True, timeout=10,
                         )
-                        if unit_state.returncode == 0 and 'LoadState=loaded' in unit_state.stdout:
+                        unit_loaded = (
+                            unit_state.returncode == 0 and 'LoadState=loaded' in unit_state.stdout
+                        )
+                        if unit_loaded:
                             subprocess.run(
                                 ['/usr/bin/systemctl', 'stop', unit],
                                 check=True, capture_output=True, timeout=15,
                             )
+                            subprocess.run(
+                                ['/usr/bin/systemctl', 'reset-failed', unit],
+                                check=True, capture_output=True, timeout=10,
+                            )
                     except (OSError, subprocess.SubprocessError) as exc:
                         cleanup_errors.append(f'stop {unit}: {exc}')
-                    try:
-                        subprocess.run(
-                            ['/usr/bin/systemctl', 'reset-failed', unit],
-                            check=True, capture_output=True, timeout=10,
-                        )
-                    except (OSError, subprocess.SubprocessError) as exc:
-                        cleanup_errors.append(f'reset-failed {unit}: {exc}')
                 if api_user_created:
                     try:
                         subprocess.run(
