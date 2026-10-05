@@ -276,6 +276,7 @@ def validate_loaded_guard(props):
             props['RestrictAddressFamilies'] == 'AF_UNIX' and
             props['SystemCallArchitectures'] == 'native' and
             props['ProtectSystem'] == 'strict' and
+            props['ReadOnlyPaths'] == str(STATE) and
             props['ReadWritePaths'] == str(API_LIFECYCLE_LOCK) and
             props['TimeoutStartUSec'] == '2min' and
             props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
@@ -421,7 +422,7 @@ class Host:
                 'DropInPaths', 'ExecStart', 'NoNewPrivileges',
                 'CapabilityBoundingSet', 'AmbientCapabilities',
                 'RestrictAddressFamilies', 'SystemCallArchitectures',
-                'ProtectSystem', 'ReadWritePaths',
+                'ProtectSystem', 'ReadOnlyPaths', 'ReadWritePaths',
             ])
             validate_loaded_guard(props)
         trusted(Path('/etc/fg-index/api.env'))

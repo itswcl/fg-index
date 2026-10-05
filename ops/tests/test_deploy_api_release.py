@@ -804,12 +804,17 @@ class LoadedContractTest(unittest.TestCase):
                  'NoNewPrivileges': 'yes', 'CapabilityBoundingSet': '',
                  'AmbientCapabilities': '', 'RestrictAddressFamilies': 'AF_UNIX',
                  'SystemCallArchitectures': 'native', 'ProtectSystem': 'strict',
+                 'ReadOnlyPaths': '/var/lib/fg-index-deployment',
                  'ReadWritePaths': '/var/lib/fg-index-deployment/api-lifecycle.lock',
                  'TimeoutStartUSec': '2min',
                  'FragmentPath': '/etc/systemd/system/fg-index-api-boot-guard.service',
                  'DropInPaths': '',
                  'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --boot-guard ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
         validate_loaded_guard(props)
+        props['ReadOnlyPaths'] = '/var/lib'
+        with self.assertRaises(Hold):
+            validate_loaded_guard(props)
+        props['ReadOnlyPaths'] = '/var/lib/fg-index-deployment'
         props['ReadWritePaths'] = '/var/lib/fg-index-deployment'
         with self.assertRaises(Hold):
             validate_loaded_guard(props)

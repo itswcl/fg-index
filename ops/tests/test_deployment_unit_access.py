@@ -45,6 +45,7 @@ class UnitAccessTest(unittest.TestCase):
         self.assertEqual('oneshot', guard['Service']['Type'])
         self.assertEqual('2min', guard['Service']['TimeoutStartSec'])
         self.assertNotIn('RemainAfterExit', guard['Service'])
+        self.assertEqual(str(STATE), guard['Service']['ReadOnlyPaths'])
         self.assertEqual(str(API_LIFECYCLE_LOCK), guard['Service']['ReadWritePaths'])
         self.assertIn('--boot-guard', guard['Service']['ExecStart'])
         recovery = configparser.ConfigParser(interpolation=None)
@@ -130,7 +131,8 @@ else: raise AssertionError('BootGate created sibling state')
             result = subprocess.run([
                 '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
                 '--property=User=root', '--property=Group=root',
-                '--property=ProtectSystem=strict', '--property=ReadWritePaths=' + str(lock),
+                '--property=ProtectSystem=strict', '--property=ReadOnlyPaths=' + str(root),
+                '--property=ReadWritePaths=' + str(lock),
                 '--property=RuntimeMaxSec=10', '/usr/bin/python3.12', '-c', script,
                 str(lock), str(sibling),
             ], capture_output=True, timeout=20)

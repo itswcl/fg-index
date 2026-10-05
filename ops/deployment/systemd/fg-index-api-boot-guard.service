@@ -17,6 +17,7 @@ SyslogIdentifier=fg-index-api-boot-guard
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ReadOnlyPaths=/var/lib/fg-index-deployment
 ReadWritePaths=/var/lib/fg-index-deployment/api-lifecycle.lock
 ProtectHome=read-only
 ProtectKernelTunables=yes
