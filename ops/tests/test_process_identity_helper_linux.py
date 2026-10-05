@@ -327,9 +327,14 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 EXPECTED_CWD = {directory!r}
                 API_POLICY_PATH = {str(api_policy_path)!r}
                 API_POLICY_SOURCE_SHA256 = {api_source_digest!r}
+                API_POLICY_SHA256 = {api_policy_digest!r}
                 API_PROFILE = {api_profile!r}
+                HELPER_POLICY_SHA256 = {helper_policy_digest!r}
                 HELPER_PROFILE = {helper_profile!r}
                 RECEIPT_PATH = {str(receipt_path)!r}
+                APPARMOR_PARSER = {parser!r}
+                APPARMOR_PARSER_VERSION = {parser_version!r}
+                KERNEL_RELEASE = {os.uname().release!r}
                 HELPER_POLICY_PATH = {str(helper_policy_path)!r}
                 HELPER_SOURCE_SHA256 = {helper_source_digest!r}
                 HELPER_FIXTURE_SHA256 = {helper_fixture_digest!r}
@@ -428,11 +433,30 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 pre_helper_receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
                 summary["api_profile_receipt_pre_helper_ok"] = (
                     pre_helper_receipt["api"]["profile"] == API_PROFILE
+                    and pre_helper_receipt["api"]["policy_sha256"] == API_POLICY_SHA256
                     and pre_helper_receipt["api"]["source_sha256"] == API_POLICY_SOURCE_SHA256
+                    and API_PROFILE == "fg-index-api-" + pre_helper_receipt["api"]["policy_sha256"]
+                    and pre_helper_receipt["helper"]["profile"] == HELPER_PROFILE
+                    and pre_helper_receipt["helper"]["policy_sha256"] == HELPER_POLICY_SHA256
+                    and HELPER_PROFILE == "fg-index-helper-" + pre_helper_receipt["helper"]["policy_sha256"]
+                    and pre_helper_receipt["parser"] == APPARMOR_PARSER_VERSION
+                    and subprocess.run(
+                        [APPARMOR_PARSER, "--version"], check=True, capture_output=True,
+                        text=True, timeout=10,
+                    ).stdout.strip() == APPARMOR_PARSER_VERSION
+                    and pre_helper_receipt["kernel"] == KERNEL_RELEASE
+                    and pre_helper_receipt["includes"] == []
+                    and pre_helper_receipt["tunables"] == []
                     and os.stat(RECEIPT_PATH).st_uid == 0
                     and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o600
                     and hashlib.sha256(open(API_POLICY_PATH, "rb").read()).hexdigest()
                         == API_POLICY_SOURCE_SHA256
+                    and hashlib.sha256(open(HELPER_POLICY_PATH, "rb").read()).hexdigest()
+                        == pre_helper_receipt["helper"]["source_sha256"]
+                    and pre_helper_receipt["helper"]["source_sha256"] == HELPER_SOURCE_SHA256
+                    and pre_helper_receipt["helper"]["fixture_sha256"] == HELPER_FIXTURE_SHA256
+                    and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
+                        == HELPER_FIXTURE_SHA256
                 )
                 api_pidfd = os.pidfd_open(api_pid, 0)
                 api_poll = select.poll()
@@ -443,8 +467,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 )
                 summary["api_snapshot_pre_helper_ok"] = (
                     api_confirm_before_helper == api_before
-                    and
-                    api_before.get("ActiveState") == "active"
+                    and api_before.get("ActiveState") == "active"
                     and api_before.get("SubState") == "running"
                     and api_before.get("ControlPID") == "0"
                     and api_before.get("NRestarts") == "0"
@@ -537,7 +560,18 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
                     summary["profile_receipt_ok"] = (
                         receipt["helper"]["profile"] == HELPER_PROFILE
+                        and receipt["helper"]["policy_sha256"] == HELPER_POLICY_SHA256
+                        and HELPER_PROFILE == "fg-index-helper-" + receipt["helper"]["policy_sha256"]
                         and receipt["helper"]["source_sha256"] == HELPER_SOURCE_SHA256
+                        and receipt["api"]["policy_sha256"] == API_POLICY_SHA256
+                        and receipt["parser"] == APPARMOR_PARSER_VERSION
+                        and receipt["kernel"] == KERNEL_RELEASE
+                        and receipt["includes"] == []
+                        and receipt["tunables"] == []
+                        and subprocess.run(
+                            [APPARMOR_PARSER, "--version"], check=True, capture_output=True,
+                            text=True, timeout=10,
+                        ).stdout.strip() == APPARMOR_PARSER_VERSION
                         and receipt["helper"]["fixture_sha256"] == HELPER_FIXTURE_SHA256
                         and os.stat(RECEIPT_PATH).st_uid == 0
                         and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o600
@@ -743,7 +777,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10,
                             )
                             kernel_journal = subprocess.run(
-                                [*journal_args, '--kernel', '-n', '200'],
+                                [*journal_args, '-k', '-n', '200'],
                                 capture_output=True, text=True, timeout=10,
                             )
                             audit_lines = [
@@ -753,7 +787,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                 or helper_profile in line
                             ]
                             diagnostics = (
-                                '\nAPI_UNIT_PROPERTIES:\n' + unit_properties.stdout[-8000:]
+                                '\nSYSTEMD_RUN_STDOUT:\n' + api_launch.stdout[-4000:]
+                                + '\nSYSTEMD_RUN_STDERR:\n' + api_launch.stderr[-4000:]
+                                + '\nAPI_UNIT_PROPERTIES:\n' + unit_properties.stdout[-8000:]
                                 + '\nAPI_UNIT_STATUS:\n' + status.stdout[-8000:] + status.stderr[-2000:]
                                 + '\nAPI_UNIT_JOURNAL:\n' + unit_journal.stdout[-8000:]
                                 + '\nAPPARMOR_KERNEL_AUDIT:\n'
