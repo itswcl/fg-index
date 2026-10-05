@@ -59,15 +59,20 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
     while True:
         state = load_state(unit)
         if state == 'not-found':
+            cgroup_empty = not expected and not known_control_group
             if known_control_group:
                 processes = Path('/sys/fs/cgroup') / known_control_group.lstrip('/') / 'cgroup.procs'
                 try:
                     pids = {line for line in processes.read_text(encoding='ascii').splitlines() if line}
                 except FileNotFoundError:
                     return True
-                if not pids:
-                    return True
-            return not expected
+                cgroup_empty = not pids
+            if cgroup_empty:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+            continue
         properties = systemctl_show(
             unit, 'ActiveState', 'MainPID', 'ControlPID', 'ControlGroup'
         )
@@ -1087,14 +1092,19 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
                         fixture_cgroups_empty = False
                         cleanup_errors.append(f'stop {unit}: {exc}')
-                for role, path in reversed(loaded_profiles):
-                    try:
-                        subprocess.run(
-                            [parser, '-R', str(path)], check=True,
-                            capture_output=True, timeout=15,
-                        )
-                    except (OSError, subprocess.SubprocessError) as exc:
-                        cleanup_errors.append(f'unload AppArmor {role} profile: {exc}')
+                if fixture_cgroups_empty:
+                    for role, path in reversed(loaded_profiles):
+                        try:
+                            subprocess.run(
+                                [parser, '-R', str(path)], check=True,
+                                capture_output=True, timeout=15,
+                            )
+                        except (OSError, subprocess.SubprocessError) as exc:
+                            cleanup_errors.append(f'unload AppArmor {role} profile: {exc}')
+                elif loaded_profiles:
+                    cleanup_errors.append(
+                        'retained AppArmor fixture profiles because a fixture cgroup is not proven empty'
+                    )
                 if api_created and fixture_cgroups_empty:
                     try:
                         subprocess.run(
