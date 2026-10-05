@@ -760,7 +760,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     helper = show(HELPER_UNIT, "MainPID", "InvocationID", "ControlGroup", "LoadState",
                                   "User", "Group", "AppArmorProfile", "CapabilityBoundingSet",
                                   "AmbientCapabilities", "NoNewPrivileges", "Restart", "ExecStart",
-                                  "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                                  "TimeoutStartUSec", "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
                                   "ProtectHome", "PrivateTmp",
                                   "FragmentPath")
                     helper_pid = int(helper.get("MainPID", "0"))
@@ -776,6 +776,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         and helper.get("AmbientCapabilities", "") == ""
                         and helper.get("NoNewPrivileges") == "yes"
                         and helper.get("Restart") == "no"
+                        and helper.get("TimeoutStartUSec") == "20s"
                         and helper.get("RestrictAddressFamilies") == "AF_UNIX"
                         and helper_syscall_filter.startswith("~")
                         and {{"ptrace", "process_vm_readv", "process_vm_writev",
