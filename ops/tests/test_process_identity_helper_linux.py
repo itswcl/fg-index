@@ -81,6 +81,9 @@ def profile_source(role):
     body = '''\
 profile PROFILE_NAME flags=(attach_disconnected) {
     /usr/bin/python3.12 rix,
+    /usr/lib/python3.12/ r,
+    /usr/lib/python3.12/encodings/ r,
+    /usr/lib/python3.12/encodings/** r,
     /usr/lib/python3.12/** r,
     /usr/lib/python3.12/lib-dynload/** mr,
     /usr/lib/x86_64-linux-gnu/** mr,
@@ -89,6 +92,10 @@ profile PROFILE_NAME flags=(attach_disconnected) {
     /etc/passwd r,
     /etc/group r,
     /etc/nsswitch.conf r,
+    /etc/locale.alias r,
+    /usr/lib/locale/locale-archive r,
+    /usr/lib/locale/C.utf8/LC_CTYPE r,
+    /usr/share/zoneinfo/Etc/UTC r,
     /opt/fg-index-identity-helper-*/** r,
     /proc/self/status r,
     network unix stream,
@@ -533,14 +540,27 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     helper = show(HELPER_UNIT, "MainPID", "InvocationID", "ControlGroup", "LoadState",
                                   "User", "Group", "AppArmorProfile", "CapabilityBoundingSet",
                                   "AmbientCapabilities", "NoNewPrivileges", "Restart", "ExecStart",
+                                  "RestrictAddressFamilies", "SystemCallFilter", "ProtectSystem",
+                                  "ProtectHome", "PrivateTmp",
                                   "FragmentPath")
                     helper_pid = int(helper.get("MainPID", "0"))
+                    helper_syscall_filter = helper.get("SystemCallFilter", "")
+                    helper_denied_syscalls = set(helper_syscall_filter.lstrip("~").split())
                     summary["helper_unit_ok"] = (
                         helper_pid > 0 and helper.get("User") == "fg-index"
                         and helper.get("Group") == "fg-index"
                         and helper.get("AppArmorProfile") == HELPER_PROFILE
+                        and helper.get("CapabilityBoundingSet", "") == ""
+                        and helper.get("AmbientCapabilities", "") == ""
                         and helper.get("NoNewPrivileges") == "yes"
                         and helper.get("Restart") == "no"
+                        and helper.get("RestrictAddressFamilies") == "AF_UNIX"
+                        and helper_syscall_filter.startswith("~")
+                        and {{"ptrace", "process_vm_readv", "process_vm_writev",
+                             "process_madvise", "pidfd_getfd"}} <= helper_denied_syscalls
+                        and helper.get("ProtectSystem") == "strict"
+                        and helper.get("ProtectHome") == "yes"
+                        and helper.get("PrivateTmp") == "yes"
                         and "/run/systemd/transient/" in helper.get("FragmentPath", "")
                         and HELPER_SCRIPT in helper.get("ExecStart", "")
                     )
