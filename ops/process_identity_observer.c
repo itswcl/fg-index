@@ -408,7 +408,15 @@ static int run(void) {
         if (!listener) { close(first.pidfd); close(procfd); close(api_pidfd); return fail("API listener inode is not owned by its FD set"); }
     } else if (count1) { close(first.pidfd); close(procfd); close(api_pidfd); return fail("API TCP listener is ambiguous or unexpected"); }
     if (read_unit(&after) || memcmp(&before,&after,sizeof(before)) || snapshot_process(pid,procfd,api_pidfd,&second) || read_rows(procfd,rows2,&count2)) {
-        if (first.pidfd >= 0) close(first.pidfd); if (second.pidfd >= 0) close(second.pidfd); close(procfd); close(api_pidfd); return fail("API identity changed during observation");
+        if (first.pidfd >= 0) {
+            close(first.pidfd);
+        }
+        if (second.pidfd >= 0) {
+            close(second.pidfd);
+        }
+        close(procfd);
+        close(api_pidfd);
+        return fail("API identity changed during observation");
     }
     if (strcmp(first.cgroup,second.cgroup) || !same_process(&first,&second) || !same_rows(rows1,count1,rows2,count2)) {
         close(first.pidfd); close(second.pidfd); close(procfd); close(api_pidfd); return fail("API process changed during observation");
