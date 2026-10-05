@@ -7,7 +7,9 @@ Real-time market dashboard for sentiment, volatility, crypto, indices, and custo
 | App | URL |
 |-----|-----|
 | Web dashboard | https://itswcl.github.io/fg-index/ |
-| API | https://fg-index.onrender.com |
+| API | https://fg-index-api.duckdns.org |
+
+The API URL is the OCI endpoint; it does not imply the service is currently healthy. See [Deployment and CI](#deployment-and-ci) for the last recorded migration state.
 
 ---
 
@@ -71,7 +73,7 @@ graph TD
         CG["CoinGecko BTC quotes"]
     end
 
-    subgraph Backend["API Server - Render"]
+    subgraph Backend["API Server - OCI VM (Node.js 24 behind Caddy)"]
         API["Express REST API"]
         WS["WebSocket Hub"]
         SCHED["Default indicator schedulers"]
@@ -167,7 +169,7 @@ Scraping remains the highest operational risk. Parser tests cover known Google/Y
 
 ### Prerequisites
 
-- Node.js 20 recommended. The workspace declares `>=18`, but CI and runtime checks use Node 20.
+- Node.js 24 recommended. The workspace declares `>=18`; CI and the production OCI API use Node 24, while the GitHub Pages workflow builds with Node 20.
 - npm 10 recommended.
 - Supabase project for auth and persistence.
 - Postgres connection strings for Prisma migrations.
@@ -410,11 +412,13 @@ npx prisma migrate deploy   # production
 
 | Area | Platform | Trigger / Notes |
 |------|----------|-----------------|
-| API server | Render | Deployed from `main` |
+| API server | OCI Always Free VM | Node.js 24 under systemd behind Caddy; production recovery is incomplete |
 | Web app | GitHub Pages | `.github/workflows/deploy-frontend.yml` on push to `main` or manual dispatch |
 | Database | Supabase Postgres | Prisma migrations from API workspace |
 | CI | GitHub Actions | Type-checks API/web, runs API tests, builds web |
-| Uptime | External monitor | Render keep-awake is handled outside this repo; the old GitHub cron workflow was removed |
+| Uptime | External monitor | Render is suspended; no tested standby or automatic fallback is configured |
+
+At the last migration checkpoint (October 5, 2026), GitHub Pages served the OCI-configured frontend, while the OCI API service was stopped and its health endpoint returned HTTP 502. The deployment transaction remained held for recovery and deployment timers were disabled. These are checkpoint observations, not a live status check. Supabase Postgres remains the existing database; the deployment controller does not run schema migrations or downgrade the database. Render is not an accepted standby or automatic failover target.
 
 Useful verification commands:
 
