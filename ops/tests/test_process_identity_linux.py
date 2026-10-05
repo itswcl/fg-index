@@ -47,7 +47,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
         api_unit = f'fg-index-identity-api-{suffix}.service'
         controller_unit = f'fg-index-identity-controller-{suffix}.service'
 
-        with tempfile.TemporaryDirectory(prefix='fg-index-identity-ci-', dir='/var/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='fg-index-identity-ci-', dir='/opt') as directory:
             fixture = Path(directory)
             fixture.chmod(0o755)
             api_user_created = False
@@ -175,7 +175,14 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                             break
                     except OSError:
                         if time.monotonic() >= deadline:
-                            self.fail('API fixture did not bind 127.0.0.1:8080')
+                            status = subprocess.run(
+                                ['/usr/bin/systemctl', 'status', '--no-pager', api_unit],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            self.fail(
+                                'API fixture did not bind 127.0.0.1:8080\n'
+                                + status.stdout + status.stderr
+                            )
                         time.sleep(0.1)
 
                 api = systemctl_show(api_unit, 'MainPID', 'InvocationID')
