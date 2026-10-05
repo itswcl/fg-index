@@ -41,6 +41,9 @@ jobs:
       - name: Measure zero-capability process identity reads
         run: sudo /usr/bin/env FG_INDEX_REQUIRE_PROCESS_IDENTITY_TEST=1 /usr/bin/python3.12 -m unittest ops.tests.test_process_identity_linux -v
 
+      - name: Verify test-only process identity helper fallback
+        run: sudo /usr/bin/env FG_INDEX_REQUIRE_PROCESS_IDENTITY_TEST=1 /usr/bin/python3.12 -m unittest ops.tests.test_process_identity_helper_linux -v
+
       - name: Validate disabled deployment units
         run: systemd-analyze verify ops/deployment/systemd/*.service ops/deployment/systemd/*.timer
 

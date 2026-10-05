@@ -26,6 +26,28 @@ import uuid
 SYSTEMD = Path('/run/systemd/system')
 PYTHON = '/usr/bin/python3.12'
 CAPABILITY_STATUS_FIELDS = ('CapEff', 'CapPrm', 'CapBnd', 'CapAmb')
+DIRECT_A_CLASSIFIER_SOURCE = '''\
+def classify_direct_a(operation_errors, listener_owned):
+    api_proc_denials = [
+        (operation, code) for operation, code in operation_errors
+        if operation in ("exe", "cwd", "fd") and code == "EACCES"
+    ]
+    non_fallback_errors = [
+        (operation, code) for operation, code in operation_errors
+        if operation in ("pidfd", "tcp")
+        or (operation in ("exe", "cwd", "fd") and code != "EACCES")
+    ]
+    if non_fallback_errors:
+        direct_a_state = "HOLD"
+    elif api_proc_denials:
+        direct_a_state = "UNAVAILABLE/HOLD"
+    elif not operation_errors and listener_owned:
+        direct_a_state = "PASS"
+    else:
+        direct_a_state = "HOLD"
+    return direct_a_state, bool(api_proc_denials), api_proc_denials, non_fallback_errors
+'''
+exec(DIRECT_A_CLASSIFIER_SOURCE, globals())
 
 
 def systemctl_show(unit, *properties):
@@ -54,6 +76,26 @@ def systemctl_unit_loaded(unit):
 
 
 class ProcessIdentityLinuxTest(unittest.TestCase):
+    def test_direct_a_classifier_keeps_helper_trigger_with_independent_hold(self):
+        state, helper_required, denials, hard_holds = classify_direct_a(
+            [('exe', 'EACCES'), ('pidfd', 'ENOSYS'), ('tcp', 'EACCES')],
+            listener_owned=False,
+        )
+        self.assertEqual('HOLD', state)
+        self.assertTrue(helper_required)
+        self.assertEqual([('exe', 'EACCES')], denials)
+        self.assertEqual([('pidfd', 'ENOSYS'), ('tcp', 'EACCES')], hard_holds)
+
+    def test_direct_a_classifier_marks_proc_eacces_as_helper_fallback(self):
+        state, helper_required, denials, hard_holds = classify_direct_a(
+            [('cwd', 'EACCES')],
+            listener_owned=False,
+        )
+        self.assertEqual('UNAVAILABLE/HOLD', state)
+        self.assertTrue(helper_required)
+        self.assertEqual([('cwd', 'EACCES')], denials)
+        self.assertEqual([], hard_holds)
+
     @unittest.skipUnless(
         os.geteuid() == 0 and SYSTEMD.is_dir()
         and os.environ.get('FG_INDEX_REQUIRE_PROCESS_IDENTITY_TEST') == '1',
@@ -103,6 +145,8 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 API_UNIT = {api_unit!r}
                 CONTROLLER_UNIT = {controller_unit!r}
                 CAPABILITY_FIELDS = {CAPABILITY_STATUS_FIELDS!r}
+                CLASSIFIER_SOURCE = {DIRECT_A_CLASSIFIER_SOURCE!r}
+                exec(CLASSIFIER_SOURCE, globals())
 
                 def readlink(path):
                     try:
@@ -206,28 +250,12 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                         operation_errors.append(("tcp", observed["tcp_error"]))
                     if not observed.get("pidfd_live", False):
                         operation_errors.append(("pidfd", observed.get("pidfd_error", "NOT_LIVE")))
-                    api_proc_denials = [
-                        (operation, code) for operation, code in operation_errors
-                        if operation in ("exe", "cwd", "fd") and code == "EACCES"
-                    ]
-                    non_fallback_errors = [
-                        (operation, code) for operation, code in operation_errors
-                        if operation in ("pidfd", "tcp")
-                        or (operation in ("exe", "cwd", "fd") and code != "EACCES")
-                    ]
-                    if non_fallback_errors:
-                        observed["direct_a_state"] = "HOLD"
-                    elif api_proc_denials:
-                        observed["direct_a_state"] = "UNAVAILABLE/HOLD"
-                    elif not operation_errors and observed.get("listener_owned"):
-                        observed["direct_a_state"] = "PASS"
-                    else:
-                        observed["direct_a_state"] = "HOLD"
+                    (observed["direct_a_state"], observed["helper_required"],
+                     observed["api_proc_denials"], observed["non_fallback_errors"]) = (
+                        classify_direct_a(operation_errors, observed.get("listener_owned", False))
+                    )
                     observed["direct_a_errors"] = operation_errors
-                    observed["api_proc_denials"] = api_proc_denials
-                    observed["non_fallback_errors"] = non_fallback_errors
                     observed["aggregate_gate"] = "HOLD"
-                    observed["helper_required"] = bool(api_proc_denials)
                     observed["aggregate_pending_gates"] = [
                         "fixed-helper E2E and enforcing API/helper AppArmor identity",
                         "C fixed-unit MainPID/InvocationID/cgroup/starttime and before/after snapshots",
