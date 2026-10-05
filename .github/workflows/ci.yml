@@ -179,6 +179,10 @@ jobs:
         working-directory: apps/web
         run: npm run lint
 
+      - name: Test WebSocket auth probe
+        working-directory: apps/web
+        run: npm run test:ws-auth-probe
+
       - name: Build web (smoke test)
         working-directory: apps/web
         env:

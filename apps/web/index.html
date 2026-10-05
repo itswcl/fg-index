@@ -2,6 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script id="ws-probe-callback-scrub">
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const codes = params.getAll('code');
+        const hasProviderError = params.has('error') || params.has('error_description');
+
+        if (params.has('code') || hasProviderError) {
+          window.__FG_INDEX_WS_AUTH_PROBE_CALLBACK__ = {
+            code: codes.length === 1 && codes[0] !== '' ? codes[0] : null,
+            failed: hasProviderError || codes.length !== 1 || codes[0] === '',
+          };
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/fg-index/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
