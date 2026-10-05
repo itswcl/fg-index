@@ -61,7 +61,7 @@ def profile_source(role):
             /proc/[0-9]*/cwd r,
             /proc/[0-9]*/stat r,
             /proc/[0-9]*/cgroup r,
-            /proc/[0-9]*/status r,
+            owner /proc/[0-9]*/status r,
             /proc/[0-9]*/attr/current r,
             /proc/[0-9]*/fd/ r,
             /proc/[0-9]*/fd/** r,
@@ -72,7 +72,6 @@ def profile_source(role):
 '''
     elif role == 'api':
         proc_rules = '''\
-            /proc/self/status r,
             network inet stream,
 '''
     else:
@@ -96,8 +95,8 @@ profile PROFILE_NAME flags=(attach_disconnected) {
     /usr/lib/locale/locale-archive r,
     /usr/lib/locale/C.utf8/LC_CTYPE r,
     /usr/share/zoneinfo/Etc/UTC r,
+    /opt/fg-index-identity-helper-*/ r,
     /opt/fg-index-identity-helper-*/** r,
-    /proc/self/status r,
     network unix stream,
 PROFILE_RULES
 }
@@ -182,21 +181,15 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             self.assertEqual(helper_source_digest, hashlib.sha256(helper_policy_path.read_bytes()).hexdigest())
 
             api_script.write_text(textwrap.dedent(f'''\
-                import json
-                import os
                 import socket
 
-                with open("/proc/self/status", encoding="ascii") as reader:
-                    status = dict(line.split(":", 1) for line in reader if ":" in line)
-                fields = {CAPABILITY_FIELDS!r}
-                report = json.dumps({{key: status[key].strip() for key in fields}}, sort_keys=True).encode("ascii")
                 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind(("127.0.0.1", 8080))
                 listener.listen(8)
                 while True:
                     connection, _ = listener.accept()
-                    connection.sendall(report)
+                    connection.sendall(b"fixture-ready\\n")
                     connection.close()
             '''), encoding='utf-8')
             api_script.chmod(0o644)
@@ -243,17 +236,20 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                             or pid <= 0 or before.get("ControlPID") != "0"
                             or before.get("NRestarts") != "0" or not before.get("InvocationID")):
                         raise RuntimeError("API unit snapshot is not an accepted active invocation")
+                    pidfd = os.pidfd_open(pid, 0)
+                    poller = select.poll()
+                    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+                    if poller.poll(0):
+                        raise RuntimeError("API pidfd is not live")
                     cgroup = before["ControlGroup"]
                     start_before = starttime(pid)
                     with open(f"/proc/{{pid}}/cgroup", encoding="ascii") as reader:
                         cgroup_rows = reader.read().splitlines()
                     if not any(row.endswith(cgroup) for row in cgroup_rows):
                         raise RuntimeError("API cgroup does not match the unit snapshot")
-                    pidfd = os.pidfd_open(pid, 0)
-                    poller = select.poll()
-                    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
-                    if poller.poll(0):
-                        raise RuntimeError("API pidfd is not live")
+                    with open(f"/proc/{{pid}}/status", encoding="ascii") as reader:
+                        api_status = dict(line.split(":", 1) for line in reader if ":" in line)
+                    api_capabilities = {{key: api_status[key].strip() for key in FIELDS}}
                     exe = os.readlink(f"/proc/{{pid}}/exe")
                     cwd = os.readlink(f"/proc/{{pid}}/cwd")
                     with open(f"/proc/{{pid}}/attr/current", encoding="ascii") as reader:
@@ -285,7 +281,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     os.close(pidfd)
                     with open("/proc/self/status", encoding="ascii") as reader:
                         self_status = dict(line.split(":", 1) for line in reader if ":" in line)
-                    capabilities = {{key: self_status[key].strip() for key in FIELDS}}
+                    helper_capabilities = {{key: self_status[key].strip() for key in FIELDS}}
                     record = {{
                         "schema": "fg-index.process-identity.helper.v1",
                         "helper_invocation_id": os.environ["INVOCATION_ID"],
@@ -296,10 +292,11 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         "api_exe": exe,
                         "api_cwd": cwd,
                         "api_profile_label": api_profile_label,
+                        "api_capabilities": api_capabilities,
                         "api_fd_inodes": sorted(fd_inodes),
                         "listener": matching[0],
                         "pidfd_live": True,
-                        "capabilities": capabilities,
+                        "helper_capabilities": helper_capabilities,
                         "argv_ok": len(sys.argv) == 1,
                         "caller_parameters_absent": not any(key.startswith("FG_INDEX_API_") for key in os.environ),
                     }}
@@ -382,6 +379,21 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         return reader.read().rsplit(")", 1)[1].split()[19]
 
                 summary = {{"aggregate_gate": "HOLD", "helper_state": "HOLD", "errors": []}}
+                summary["aggregate_pending_gates"] = [
+                    "native production helper and controller integration",
+                    "same-UID peer, startup alias, descendant, and adversarial request isolation",
+                    "stale-process/current-profile mismatch negative case",
+                    "malformed, replayed, oversized, and timeout helper output cases",
+                    "all production API lifecycle actors and shared stop lock",
+                    "replacement invocation at stop-job acceptance boundary",
+                    "required production controller sandbox/context matrix",
+                ]
+                summary["api_profile_name"] = API_PROFILE
+                summary["api_policy_sha256"] = API_POLICY_SHA256
+                summary["helper_profile_name"] = HELPER_PROFILE
+                summary["helper_policy_sha256"] = HELPER_POLICY_SHA256
+                summary["apparmor_parser_version"] = APPARMOR_PARSER_VERSION
+                summary["kernel_release"] = KERNEL_RELEASE
                 controller_before = show(CONTROLLER_UNIT, "ActiveState", "SubState", "MainPID",
                                          "ControlPID", "NRestarts", "InvocationID", "ControlGroup")
                 controller_starttime = starttime(os.getpid())
@@ -434,6 +446,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary["api_live_profile_label_pre_helper_ok"] = (
                     direct_api["profile_label"] == {{"value": API_PROFILE + " (enforce)"}}
                 )
+                summary["api_live_profile_label_pre_helper"] = direct_api["profile_label"]
                 profiles_before_helper = live_profiles()
                 summary["api_profile_enforcing_pre_helper"] = API_PROFILE + " (enforce)" in profiles_before_helper
                 summary["helper_profile_enforcing_pre_helper"] = HELPER_PROFILE + " (enforce)" in profiles_before_helper
@@ -492,6 +505,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     summary["errors"].append(
                         "HOLD: live API identity/profile trust gates or direct-denial fallback are incomplete"
                     )
+                    print("API_PRE_HELPER_GATE=HOLD HELPER_LAUNCH=REFUSED", flush=True)
                     print(json.dumps(summary, sort_keys=True), flush=True)
                     raise SystemExit(0)
                 launch = [
@@ -504,8 +518,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     "--property=ProtectHome=yes", "--property=PrivateTmp=yes",
                     "--property=RestrictAddressFamilies=AF_UNIX", "--property=Restart=no",
                     "--property=SystemCallFilter=~ptrace process_vm_readv process_vm_writev process_madvise pidfd_getfd",
-                    "--property=RuntimeMaxSec=20s", {PYTHON!r}, HELPER_SCRIPT,
+                    "--property=RuntimeMaxSec=20s", {PYTHON!r}, "-S", HELPER_SCRIPT,
                 ]
+                print("API_PRE_HELPER_GATE=PASS HELPER_LAUNCH=ALLOWED", flush=True)
                 child = subprocess.Popen(launch, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.DEVNULL, bufsize=0)
                 data = bytearray()
@@ -570,6 +585,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     label_path = f"/proc/{{helper_pid}}/attr/current"
                     try:
                         helper_label = open(label_path, encoding="ascii").read().strip()
+                        summary["helper_live_label"] = helper_label
                         summary["helper_live_label_ok"] = helper_label == HELPER_PROFILE + " (enforce)"
                     except OSError as exc:
                         summary["helper_live_label_errno"] = errno.errorcode.get(exc.errno, str(exc.errno))
@@ -608,7 +624,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         expected_fields = {{
                             "schema", "helper_invocation_id", "api_pid", "api_invocation_id",
                             "api_control_group", "api_starttime", "api_exe", "api_cwd",
-                            "api_profile_label", "api_fd_inodes", "listener", "pidfd_live", "capabilities",
+                            "api_profile_label", "api_capabilities", "api_fd_inodes", "listener",
+                            "pidfd_live", "helper_capabilities",
                             "argv_ok", "caller_parameters_absent",
                         }}
                         summary["schema_ok"] = set(record) == expected_fields
@@ -619,6 +636,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                             record.get("api_pid") == api_pid
                             and record.get("api_invocation_id") == api_before.get("InvocationID")
                             and record.get("api_control_group") == api_before.get("ControlGroup")
+                            and isinstance(record.get("api_starttime"), str)
+                            and record["api_starttime"].isdecimal()
+                            and record.get("pidfd_live") is True
                         )
                         summary["api_identity_ok"] = (
                             record.get("api_exe") == EXPECTED_EXE
@@ -632,8 +652,12 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                             record.get("api_profile_label") == API_PROFILE + " (enforce)"
                         )
                         summary["helper_interface_ok"] = record.get("argv_ok") is True and record.get("caller_parameters_absent") is True
-                        summary["helper_capability_record_ok"] = all(
-                            record.get("capabilities", {{}}).get(key) == "0000000000000000"
+                        summary["helper_self_capability_record_ok"] = all(
+                            record.get("helper_capabilities", {{}}).get(key) == "0000000000000000"
+                            for key in CAPABILITY_FIELDS
+                        )
+                        summary["api_capability_record_ok"] = all(
+                            record.get("api_capabilities", {{}}).get(key) == "0000000000000000"
                             for key in CAPABILITY_FIELDS
                         )
                     else:
@@ -643,7 +667,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         summary["api_identity_ok"] = False
                         summary["api_live_profile_label_ok"] = False
                         summary["helper_interface_ok"] = False
-                        summary["helper_capability_record_ok"] = False
+                        summary["helper_self_capability_record_ok"] = False
+                        summary["api_capability_record_ok"] = False
 
                     extra_ready, _, _ = select.select([child.stdout], [], [], 0.05)
                     summary["extra_output_absent"] = not extra_ready
@@ -662,7 +687,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         "api_pre_helper_trust_ok", "api_profile_label_stable",
                         "helper_pidfd_live", "schema_ok", "invocation_binding_ok",
                         "api_snapshot_binding_ok", "api_identity_ok", "helper_interface_ok",
-                        "helper_capability_record_ok", "extra_output_absent", "api_snapshot_stable",
+                        "helper_self_capability_record_ok", "extra_output_absent", "api_snapshot_stable",
+                        "api_capability_record_ok",
                         "controller_unit_identity_ok",
                     ))
                     if not summary["helper_live_checks_ok"]:
@@ -749,7 +775,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     '--property=ProtectSystem=strict', '--property=ProtectHome=yes',
                     '--property=PrivateDevices=yes', '--property=PrivateTmp=yes',
                     '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
-                    '--property=RuntimeMaxSec=30s', PYTHON, str(api_script),
+                    '--property=RuntimeMaxSec=30s', PYTHON, '-S', str(api_script),
                 ]
                 cursor_result = subprocess.run(
                     ['/usr/bin/journalctl', '--no-pager', '--show-cursor', '-n', '0'],
@@ -766,20 +792,22 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     'HOLD: systemd rejected the AppArmor API fixture\n'
                     + api_launch.stdout + api_launch.stderr,
                 )
-                api_capabilities = None
+                api_ready = False
                 deadline = time.monotonic() + 10
-                while api_capabilities is None:
+                while not api_ready:
                     try:
                         with socket.create_connection(('127.0.0.1', 8080), timeout=0.25) as connection:
                             connection.settimeout(1)
-                            chunks = []
-                            while True:
-                                chunk = connection.recv(4096)
+                            response = bytearray()
+                            while len(response) <= 64 and not response.endswith(b'\n'):
+                                chunk = connection.recv(65 - len(response))
                                 if not chunk:
                                     break
-                                chunks.append(chunk)
-                            api_capabilities = json.loads(b''.join(chunks).decode('ascii'))
+                                response.extend(chunk)
+                            api_ready = bytes(response) == b'fixture-ready\n'
                     except OSError:
+                        pass
+                    if not api_ready:
                         if time.monotonic() >= deadline:
                             status = subprocess.run(
                                 ['/usr/bin/systemctl', 'status', '--no-pager', api_unit],
@@ -822,10 +850,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                             self.fail('HOLD: API fixture failed under enforcing AppArmor\n'
                                       + diagnostics)
                         time.sleep(0.1)
-                self.assertEqual(
-                    {key: '0000000000000000' for key in CAPABILITY_FIELDS}, api_capabilities,
-                    'API fixture must have empty effective/permitted/bounding/ambient capabilities',
-                )
+                self.assertTrue(api_ready, 'HOLD: API fixture readiness marker was not received')
 
                 controller = [
                     '/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
@@ -835,14 +860,15 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     '--property=NoNewPrivileges=yes', '--property=WorkingDirectory=' + directory,
                     '--property=ProtectHome=read-only', '--property=PrivateTmp=yes',
                     '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
-                    '--property=RuntimeMaxSec=45s', PYTHON, str(controller_script),
+                    '--property=RuntimeMaxSec=45s', PYTHON, '-S', str(controller_script),
                 ]
                 result = subprocess.run(controller, stdin=subprocess.DEVNULL, capture_output=True,
                                         text=True, timeout=55)
                 lines = [line for line in result.stdout.splitlines() if line.strip()]
                 self.assertEqual(0, result.returncode, result.stderr + result.stdout)
-                self.assertEqual(1, len(lines), result.stdout)
-                summary = json.loads(lines[0])
+                self.assertEqual(2, len(lines), result.stdout)
+                summary = json.loads(lines[-1])
+                self.assertEqual('API_PRE_HELPER_GATE=PASS HELPER_LAUNCH=ALLOWED', lines[0], result.stdout)
                 print('HELPER_E2E_SUMMARY=' + json.dumps(summary, sort_keys=True))
                 print('HELPER_E2E_AGGREGATE_GATE=' + summary.get('aggregate_gate', 'HOLD'))
                 self.assertTrue(summary.get('controller_exe_ok'), summary)
