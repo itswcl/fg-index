@@ -391,8 +391,23 @@ class ProcessIdentityDumpabilityLinuxTest(unittest.TestCase):
                     subprocess.run(['/usr/sbin/userdel', API_USER], check=True,
                                    capture_output=True, timeout=10)
                 if created_group:
-                    subprocess.run(['/usr/sbin/groupdel', API_GROUP], check=True,
-                                   capture_output=True, timeout=10)
+                    try:
+                        grp.getgrnam(API_GROUP)
+                    except KeyError:
+                        pass  # userdel may already have removed the now-empty group.
+                    else:
+                        try:
+                            subprocess.run(['/usr/sbin/groupdel', API_GROUP], check=True,
+                                           capture_output=True, timeout=10)
+                        except subprocess.CalledProcessError as exc:
+                            try:
+                                grp.getgrnam(API_GROUP)
+                            except KeyError:
+                                pass  # Treat a concurrent/automatic removal as successful cleanup.
+                            else:
+                                failures.append(RuntimeError(
+                                    f'cleanup failed to remove fixture group: {exc}'
+                                ))
             else:
                 failures.append(RuntimeError(
                     f'fixture cgroup not proven empty; retained artifacts at {directory}'
