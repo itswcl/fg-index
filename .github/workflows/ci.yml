@@ -18,6 +18,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compile native process identity observer (Linux)
+        run: |
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+            -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
+            ops/process_identity_observer.c -o "$output"
+
+      - name: Probe non-dumpable helper access (kernel boundary only)
+        run: sudo /usr/bin/env FG_INDEX_REQUIRE_PROCESS_IDENTITY_BOUNDARY_TEST=1 FG_INDEX_TEST_HELPER_PROFILE=unconfined FG_INDEX_TEST_CONTROLLER_PROFILE=unconfined /usr/bin/python3.12 -m unittest ops.tests.test_process_identity_dumpability_linux -v
+
       - name: Setup Python (release poller)
         uses: actions/setup-python@v5
         with:
