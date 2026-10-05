@@ -333,13 +333,35 @@ def load_state(unit):
     )
 
 
-def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', timeout=10):
-    """Wait for only this fixture unit's systemd cgroup to contain no PIDs."""
+def wait_for_unit_cgroup_empty(
+    unit, expected=False, known_control_group='', timeout=10, diagnostics=None,
+):
+    """Wait for only this fixture unit's systemd cgroup to contain no PIDs.
+
+    On timeout, retain a bounded snapshot of the unit properties and the exact
+    captured cgroup's current process IDs so cleanup failures are diagnosable.
+    """
+    if diagnostics is not None and not isinstance(diagnostics, list):
+        raise TypeError('diagnostics must be a list when provided')
+
+    def record_timeout(state, properties=None, control_group='', processes=None, error=''):
+        if diagnostics is None:
+            return
+        diagnostics.append({
+            'unit': unit,
+            'load_state': state,
+            'properties': properties or {},
+            'control_group': control_group or known_control_group,
+            'cgroup_procs': processes,
+            'read_error': error,
+        })
+
     deadline = time.monotonic() + timeout
     while True:
         state = load_state(unit)
         if state == 'not-found':
             cgroup_empty = not expected and not known_control_group
+            pids = None
             if known_control_group:
                 processes = Path('/sys/fs/cgroup') / known_control_group.lstrip('/') / 'cgroup.procs'
                 try:
@@ -350,6 +372,7 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
             if cgroup_empty:
                 return True
             if time.monotonic() >= deadline:
+                record_timeout(state, control_group=known_control_group, processes=sorted(pids or []))
                 return False
             time.sleep(0.05)
             continue
@@ -363,6 +386,7 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
         )
         control_group = properties.get('ControlGroup', '') or known_control_group
         cgroup_empty = False
+        pids = None
         if not control_group:
             cgroup_empty = stopped
         else:
@@ -376,6 +400,7 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
         if stopped and cgroup_empty:
             return True
         if time.monotonic() >= deadline:
+            record_timeout(state, properties, control_group, sorted(pids or []))
             return False
         time.sleep(0.05)
 
@@ -403,6 +428,7 @@ def profile_source(role, api_unit=None, peer_profile=PEER_PROFILE_PLACEHOLDER):
             owner /proc/[0-9]*/mounts r,
             /proc/net/tcp r,
             /usr/lib/locale/C.utf8/LC_MEASUREMENT r,
+            /usr/lib/locale/C.utf8/LC_TELEPHONE r,
             ptrace (read) peer=PEER_PROFILE,
             /run/dbus/system_bus_socket rw,
             /usr/bin/systemctl ix,
@@ -780,6 +806,7 @@ class ProcessIdentityHelperCleanupTests(unittest.TestCase):
         self.assertIn(f'ptrace (read) peer={api_profile},', policy)
         self.assertIn(f'ptrace (readby) peer={helper_profile},', api_policy)
         self.assertIn('/usr/lib/locale/C.utf8/LC_MEASUREMENT r,', policy)
+        self.assertIn('/usr/lib/locale/C.utf8/LC_TELEPHONE r,', policy)
         self.assertNotIn('/usr/lib/locale/C.utf8/LC_MEASUREMENT r,', api_policy)
         self.assertEqual(
             bundle['api_source_sha256'], hashlib.sha256(api_policy.encode('utf-8')).hexdigest()
@@ -987,6 +1014,7 @@ class ProcessIdentityHelperCleanupTests(unittest.TestCase):
             self.assertTrue(wait_for_unit_cgroup_empty('fixture.service', expected=True))
 
     def test_nonempty_loaded_cgroup_times_out(self):
+        diagnostics = []
         with (
             mock.patch(__name__ + '.load_state', return_value='loaded'),
             mock.patch(__name__ + '.systemctl_show', return_value={
@@ -997,7 +1025,12 @@ class ProcessIdentityHelperCleanupTests(unittest.TestCase):
             mock.patch(__name__ + '.time.monotonic', side_effect=[0, 0, 2]),
             mock.patch(__name__ + '.time.sleep'),
         ):
-            self.assertFalse(wait_for_unit_cgroup_empty('fixture.service', expected=True, timeout=1))
+            self.assertFalse(wait_for_unit_cgroup_empty(
+                'fixture.service', expected=True, timeout=1, diagnostics=diagnostics,
+            ))
+        self.assertEqual('fixture.service', diagnostics[-1]['unit'])
+        self.assertEqual('/system.slice/fixture.service', diagnostics[-1]['control_group'])
+        self.assertEqual(['123'], diagnostics[-1]['cgroup_procs'])
 
 
 class ProcessIdentityHelperLinuxTest(unittest.TestCase):
@@ -1988,13 +2021,18 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         elif state != 'not-found':
                             fixture_cgroups_empty = False
                             cleanup_errors.append(f'fixture unit state is unknown: {unit} ({state})')
+                        cgroup_diagnostics = []
                         if not wait_for_unit_cgroup_empty(
                             unit,
                             expected=unit in expected_units,
                             known_control_group=captured_control_groups.get(unit, ''),
+                            diagnostics=cgroup_diagnostics,
                         ):
                             fixture_cgroups_empty = False
-                            cleanup_errors.append(f'fixture cgroup did not empty: {unit}')
+                            cleanup_errors.append(
+                                f'fixture cgroup did not empty: {unit}; '
+                                + json.dumps(cgroup_diagnostics[-1] if cgroup_diagnostics else {}, sort_keys=True)
+                            )
                         if state == 'loaded':
                             subprocess.run(
                                 ['/usr/bin/systemctl', 'reset-failed', unit],

@@ -188,7 +188,7 @@ jobs:
       - name: Build web (smoke test)
         working-directory: apps/web
         env:
-          VITE_API_URL: https://fg-index.onrender.com
+          VITE_API_URL: https://fg-index-api.duckdns.org
           VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
