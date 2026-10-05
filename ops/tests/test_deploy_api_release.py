@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch, Mock
 
 from ops.deploy_api_release import BootGate, Controller, DependencyDegraded, Hold, Host, PersistenceError, Store, atomic_json, node_target, validate_loaded_unit, validate_loaded_controller, validate_loaded_poller, validate_policy_shape
+from ops.process_identity import IdentityRecordError
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -592,9 +593,8 @@ class ProbeTest(unittest.TestCase):
         with self.assertRaises(Hold):
             host.runtime(image(A))
         props['NRestarts'] = '0'
-        host.command = Mock(return_value='LISTEN 0 511 0.0.0.0:8080 0.0.0.0:* users:(("node",pid=101,fd=20))')
-        expected = [host.targets(image(A))[1] + '/bin/node', host.targets(image(A))[0] + '/apps/api-server']
-        with patch('ops.deploy_api_release.os.readlink', side_effect=expected):
+        with patch('ops.deploy_api_release.process_identity.observe_api',
+                   side_effect=IdentityRecordError('listener is not owned by API FD')):
             with self.assertRaises(Hold):
                 host.runtime(image(A))
 
@@ -603,9 +603,8 @@ class ProbeTest(unittest.TestCase):
         host.preflight = Mock()
         host.links = Mock(return_value=host.targets(image(A)))
         host.properties = Mock(return_value={'ActiveState': 'active', 'MainPID': '101', 'NRestarts': '0', 'ControlPID': '0'})
-        host.command = Mock(return_value='LISTEN 0 511 127.0.0.1:8080 0.0.0.0:* users:(("node",pid=101,fd=20))')
-        expected = [host.targets(image(A))[1] + '/bin/node', host.targets(image(A))[0] + '/apps/api-server']
-        with patch('ops.deploy_api_release.os.readlink', side_effect=expected):
+        with patch('ops.deploy_api_release.process_identity.observe_api',
+                   return_value={'pid': 101, 'invocation_id': '1' * 32}):
             self.assertEqual('101', host.runtime(image(A)))
 
     def test_public_release_requires_immutable_direct_exact_main(self):
@@ -663,8 +662,12 @@ class LoadedContractTest(unittest.TestCase):
                 ('fg-index-deployment-watchdog.service', '--watchdog', '10min'),
                 ('fg-index-deployment-recovery.service', '--recover', '10min')):
             argv = '/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py ' + action
-            props = {'User': 'root', 'Type': 'oneshot', 'TimeoutStartUSec': timeout,
+            props = {'User': 'root', 'Group': 'root', 'Type': 'oneshot', 'TimeoutStartUSec': timeout,
                      'FragmentPath': '/etc/systemd/system/' + unit, 'DropInPaths': '',
+                     'NoNewPrivileges': 'yes', 'CapabilityBoundingSet': '',
+                     'AmbientCapabilities': '',
+                     'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6',
+                     'SystemCallArchitectures': 'native',
                      'ExecStart': '{ path=/usr/bin/python3.12 ; argv[]=' + argv + ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=0 ; code=(null) ; status=0/0 }'}
             validate_loaded_controller(props, unit, action)
             props['TimeoutStartUSec'] = '5min'

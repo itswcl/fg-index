@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from contextlib import contextmanager
 import copy
 import fcntl
@@ -18,6 +19,11 @@ import tempfile
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+if __package__:
+    from . import process_identity
+else:
+    import process_identity
 
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -54,6 +60,14 @@ ROLE_OVERRIDE = Path("/etc/systemd/system/fg-index-api.service.d/10-scheduler-ow
 ROLE_OVERRIDE_SHA = "32452cac8814231866521e8e5af192f7aa4df9b12573309ac071e499b8bcef64"
 RETENTION = Path("/etc/fg-index-release-poller/retention-policy.json")
 STAGED = Path("/var/lib/fg-index-release-poller/staged")
+IDENTITY_ROOT = Path('/etc/fg-index/process-identity')
+IDENTITY_RECEIPT = IDENTITY_ROOT / 'pair-receipt.json'
+IDENTITY_API_PROFILE = IDENTITY_ROOT / 'api.profile'
+IDENTITY_HELPER_PROFILE = IDENTITY_ROOT / 'helper.profile'
+IDENTITY_UNIT_DROPIN = Path('/etc/systemd/system/fg-index-api.service.d/30-process-identity.conf')
+IDENTITY_OBSERVER = Path('/usr/local/libexec/fg-index-deployment/process_identity_observer')
+IDENTITY_CONTROLLER_MODULE = Path('/usr/local/libexec/fg-index-deployment/process_identity.py')
+API_LIFECYCLE_LOCK = STATE / 'api-lifecycle.lock'
 
 
 class PersistenceError(RuntimeError):
@@ -198,7 +212,7 @@ def node_target(version):
     return NODE_RELEASES / ('node-' + version)
 
 
-def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_requires=(), automatic_mount_after=()):
+def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_requires=(), automatic_mount_after=(), identity_enabled=False):
     require(props['User'] == props['Group'] == 'fg-index' and props['ControlPID'] == '0', 'unit identity/control process drift')
     require(props['FragmentPath'] == '/etc/systemd/system/' + API, 'unit fragment drift')
     require(props['WorkingDirectory'] == API_WORKING_DIRECTORY, 'loaded working directory drift')
@@ -211,7 +225,8 @@ def validate_loaded_unit(props, role, boot_guard_enabled=False, automatic_mount_
             loaded_after == expected_after,
             'boot authorization dependency drift')
     drops = ' '.join(str(p) for p in (([ROLE_OVERRIDE] if role['enabled'] else []) +
-                                      ([BOOT_GUARD_DROPIN] if boot_guard_enabled else [])))
+                                      ([BOOT_GUARD_DROPIN] if boot_guard_enabled else []) +
+                                      ([IDENTITY_UNIT_DROPIN] if identity_enabled else [])))
     require(props['DropInPaths'] == drops, 'unknown or duplicate unit drop-ins')
     enabled = str(role['enabled']).lower()
     argv = '/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=' + enabled + ' /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js'
@@ -232,6 +247,11 @@ def validate_loaded_poller(props):
 
 def validate_loaded_controller(props, unit, action):
     require(props['User'] == 'root' and props['Type'] == 'oneshot' and
+            props['Group'] == 'root' and props['NoNewPrivileges'] == 'yes' and
+            props['CapabilityBoundingSet'] in ('', '~') and
+            props['AmbientCapabilities'] == '' and
+            props['RestrictAddressFamilies'] == 'AF_UNIX AF_INET AF_INET6' and
+            props['SystemCallArchitectures'] == 'native' and
             props['TimeoutStartUSec'] == CONTROLLER_TIMEOUTS[unit] and
             props['FragmentPath'] == '/etc/systemd/system/' + unit and props['DropInPaths'] == '',
             'loaded controller unit drift')
@@ -243,6 +263,11 @@ def validate_loaded_controller(props, unit, action):
 
 def validate_loaded_guard(props):
     require(props['User'] == props['Group'] == 'root' and props['Type'] == 'oneshot' and
+            props['NoNewPrivileges'] == 'yes' and
+            props['CapabilityBoundingSet'] in ('', '~') and
+            props['AmbientCapabilities'] == '' and
+            props['RestrictAddressFamilies'] == 'AF_UNIX' and
+            props['SystemCallArchitectures'] == 'native' and
             props['TimeoutStartUSec'] == '2min' and
             props['FragmentPath'] == '/etc/systemd/system/' + BOOT_GUARD and props['DropInPaths'] == '',
             'loaded boot guard unit drift')
@@ -322,6 +347,15 @@ class Host:
                                  '/etc/systemd/system/fg-index-deployment-watchdog.service',
                                  '/etc/systemd/system/' + BOOT_GUARD,
                                  '/etc/systemd/system/' + RECOVERY}
+        identity_paths = set()
+        if self.boot_guard_enabled:
+            identity_paths = {
+                str(IDENTITY_RECEIPT), str(IDENTITY_API_PROFILE),
+                str(IDENTITY_HELPER_PROFILE), str(IDENTITY_UNIT_DROPIN),
+                str(IDENTITY_OBSERVER), str(IDENTITY_CONTROLLER_MODULE),
+            }
+            identity_paths |= self.identity_closure_paths()
+            expected |= identity_paths
         attached_unit_pins = controller_unit_paths & set(self.policy['pins'])
         require(not attached_unit_pins or attached_unit_pins == controller_unit_paths,
                 'partial deployment guard unit pin set')
@@ -365,9 +399,19 @@ class Host:
             for unit, action in (('fg-index-deployment.service', '--once'),
                                  ('fg-index-deployment-watchdog.service', '--watchdog'),
                                  (RECOVERY, '--recover')):
-                props = self.properties(unit, ['User', 'Type', 'TimeoutStartUSec', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+                props = self.properties(unit, [
+                    'User', 'Group', 'Type', 'TimeoutStartUSec', 'FragmentPath',
+                    'DropInPaths', 'ExecStart', 'NoNewPrivileges',
+                    'CapabilityBoundingSet', 'AmbientCapabilities',
+                    'RestrictAddressFamilies', 'SystemCallArchitectures',
+                ])
                 validate_loaded_controller(props, unit, action)
-            props = self.properties(BOOT_GUARD, ['User', 'Group', 'Type', 'TimeoutStartUSec', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+            props = self.properties(BOOT_GUARD, [
+                'User', 'Group', 'Type', 'TimeoutStartUSec', 'FragmentPath',
+                'DropInPaths', 'ExecStart', 'NoNewPrivileges',
+                'CapabilityBoundingSet', 'AmbientCapabilities',
+                'RestrictAddressFamilies', 'SystemCallArchitectures',
+            ])
             validate_loaded_guard(props)
         trusted(Path('/etc/fg-index/api.env'))
         require(stat.S_IMODE(Path('/etc/fg-index/api.env').stat().st_mode) == 0o640 and Path('/etc/fg-index/api.env').stat().st_gid == self.gid, 'environment permission drift')
@@ -377,11 +421,202 @@ class Host:
             require(props['UnitFileState'] == expected_enabled, 'unaccepted unit enablement')
             if name.endswith('.timer'):
                 require(props['ActiveState'] == 'inactive', 'competing poller timer')
-        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
+        props = self.properties(API, [
+            'User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart',
+            'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires',
+            'After', 'AppArmorProfile', 'SystemCallFilter', 'Type', 'Restart',
+            'KillMode', 'Delegate', 'NoNewPrivileges', 'CapabilityBoundingSet',
+            'AmbientCapabilities', 'RestrictAddressFamilies', 'PrivateNetwork',
+            'PrivateUsers', 'ProtectProc', 'ProcSubset', 'ProtectSystem',
+            'ProtectHome', 'ProtectControlGroups', 'NetworkNamespacePath',
+            'JoinsNamespaceOf',
+        ])
         mount_requires, mount_after = self.automatic_api_mount_dependencies(props['Requires'], props['After'])
         validate_loaded_unit(props, self.role, self.boot_guard_enabled,
-                             mount_requires, mount_after)
+                             mount_requires, mount_after, self.boot_guard_enabled)
+        if self.boot_guard_enabled:
+            bundle = self.process_identity_bundle()
+            require(props['AppArmorProfile'] == bundle['profiles']['api']['label'],
+                    'loaded API AppArmor profile differs from the accepted pair')
+            require({
+                'Type': props['Type'], 'Restart': props['Restart'],
+                'KillMode': props['KillMode'], 'Delegate': props['Delegate'],
+                'NoNewPrivileges': props['NoNewPrivileges'],
+                'CapabilityBoundingSet': props['CapabilityBoundingSet'],
+                'AmbientCapabilities': props['AmbientCapabilities'],
+                'RestrictAddressFamilies': props['RestrictAddressFamilies'],
+                'PrivateNetwork': props['PrivateNetwork'],
+                'NetworkNamespacePath': props['NetworkNamespacePath'],
+                'JoinsNamespaceOf': props['JoinsNamespaceOf'],
+                'PrivateUsers': props['PrivateUsers'],
+                'ProtectProc': props['ProtectProc'], 'ProcSubset': props['ProcSubset'],
+                'ProtectSystem': props['ProtectSystem'], 'ProtectHome': props['ProtectHome'],
+                'ProtectControlGroups': props['ProtectControlGroups'],
+            } == {
+                'Type': 'simple', 'Restart': 'no', 'KillMode': 'control-group',
+                'Delegate': 'no', 'NoNewPrivileges': 'yes',
+                'CapabilityBoundingSet': props['CapabilityBoundingSet'],
+                'AmbientCapabilities': '', 'RestrictAddressFamilies': 'AF_UNIX AF_INET AF_INET6',
+                'PrivateNetwork': 'no', 'PrivateUsers': 'no', 'ProtectProc': 'default',
+                'NetworkNamespacePath': '', 'JoinsNamespaceOf': '',
+                'ProcSubset': 'all', 'ProtectSystem': 'strict', 'ProtectHome': 'yes',
+                'ProtectControlGroups': 'yes',
+            } and props['CapabilityBoundingSet'] in ('', '~'),
+                    'loaded API sandbox settings differ from the reviewed zero-capability contract')
+            required_syscalls = {'ptrace', 'process_vm_readv', 'process_vm_writev',
+                                 'process_madvise', 'pidfd_getfd'}
+            blocked_syscalls = set(props['SystemCallFilter'].lstrip('~').split())
+            require(props['SystemCallFilter'].startswith('~') and
+                    required_syscalls <= blocked_syscalls,
+                    'API process inspection syscall filter is incomplete')
+            require(self.loaded_process_profile(bundle['profiles']['api']['label']) and
+                    self.loaded_process_profile(bundle['profiles']['helper']['label']),
+                    'accepted process identity profiles are not both enforcing')
         self.poller_contract()
+
+    def identity_closure_paths(self):
+        """Read only the pinned closure list; full digest checks follow in bundle validation."""
+        trusted(IDENTITY_ROOT, directory=True)
+        trusted(IDENTITY_RECEIPT, private=True)
+        receipt = read_json(IDENTITY_RECEIPT)
+        require(isinstance(receipt, dict) and isinstance(receipt.get('manifest'), dict),
+                'process identity receipt is malformed')
+        closure = receipt['manifest'].get('source_closure')
+        require(isinstance(closure, list) and closure, 'process identity closure is missing')
+        paths = set()
+        for entry in closure:
+            require(isinstance(entry, dict) and set(entry) == {'path', 'sha256'} and
+                    isinstance(entry['path'], str) and DIGEST.fullmatch(entry['sha256']),
+                    'process identity closure entry is malformed')
+            path = Path(entry['path'])
+            apparmor_root = Path('/etc/apparmor.d')
+            require(path.is_absolute() and
+                    (path == IDENTITY_ROOT or IDENTITY_ROOT in path.parents or
+                     path == apparmor_root or apparmor_root in path.parents),
+                    'process identity closure escapes its fixed root')
+            paths.add(str(path))
+        require(len(paths) == len(closure), 'process identity closure repeats a path')
+        return paths
+
+    def process_identity_bundle(self):
+        """Verify the content-addressed API/helper policy pair and live kernel state."""
+        trusted(IDENTITY_ROOT, directory=True)
+        trusted(IDENTITY_RECEIPT, private=True)
+        receipt = read_json(IDENTITY_RECEIPT)
+        require(isinstance(receipt, dict) and
+                set(receipt) == {'schema', 'bundle_sha256', 'manifest', 'profiles'} and
+                receipt['schema'] == 'fg-index.process-identity.pair.v1',
+                'process identity pair receipt shape is invalid')
+        manifest = receipt['manifest']
+        require(isinstance(manifest, dict) and manifest.get('schema_version') == 1 and
+                set(manifest) == {'schema_version', 'source_closure', 'api_normalized_sha256',
+                                  'helper_normalized_sha256', 'parser_version',
+                                  'apparmor_feature_tree_sha256', 'kernel_release',
+                                  'peer_rules'},
+                'process identity normalized manifest shape is invalid')
+        canonical = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        bundle_sha = hashlib.sha256(canonical).hexdigest()
+        require(receipt['bundle_sha256'] == bundle_sha and DIGEST.fullmatch(bundle_sha),
+                'process identity bundle digest mismatch')
+        expected_profiles = {
+            'api': {'label': 'fg-index-api-' + bundle_sha,
+                    'path': str(IDENTITY_API_PROFILE),
+                    'normalized_sha256': manifest['api_normalized_sha256']},
+            'helper': {'label': 'fg-index-helper-' + bundle_sha,
+                       'path': str(IDENTITY_HELPER_PROFILE),
+                       'normalized_sha256': manifest['helper_normalized_sha256']},
+        }
+        closure = manifest['source_closure']
+        require(isinstance(closure, list) and closure, 'process identity closure is empty')
+        closure_hashes = {entry.get('path'): entry.get('sha256')
+                          for entry in closure if isinstance(entry, dict)}
+        for role in ('api', 'helper'):
+            expected_profiles[role]['source_sha256'] = closure_hashes.get(expected_profiles[role]['path'])
+        require(all(DIGEST.fullmatch(expected_profiles[role]['source_sha256'] or '')
+                    for role in ('api', 'helper')) and receipt['profiles'] == expected_profiles,
+                'process identity profile labels or paths mismatch')
+        closure_paths = set()
+        for entry in closure:
+            require(isinstance(entry, dict) and set(entry) == {'path', 'sha256'} and
+                    isinstance(entry['path'], str) and DIGEST.fullmatch(entry['sha256']),
+                    'process identity closure entry is malformed')
+            path = Path(entry['path'])
+            apparmor_root = Path('/etc/apparmor.d')
+            require(path.is_absolute() and
+                    (path == IDENTITY_ROOT or IDENTITY_ROOT in path.parents or
+                     path == apparmor_root or apparmor_root in path.parents),
+                    'process identity closure path is outside its fixed root')
+            trusted(path)
+            require(digest_file(path) == entry['sha256'], 'process identity closure source drift')
+            closure_paths.add(str(path))
+        require(len(closure_paths) == len(closure), 'process identity closure repeats a path')
+        for role, path in (('api', IDENTITY_API_PROFILE), ('helper', IDENTITY_HELPER_PROFILE)):
+            trusted(path)
+            raw = path.read_bytes()
+            require(hashlib.sha256(raw).hexdigest() == receipt['profiles'][role]['source_sha256'],
+                    'process identity profile source hash mismatch')
+            normalized = raw.decode('utf-8')
+            for target_role in ('api', 'helper'):
+                token = '@' + target_role.upper() + '_PROFILE@'
+                label = receipt['profiles'][target_role]['label'].encode()
+                normalized = normalized.replace(label.decode(), token)
+            require(hashlib.sha256(normalized.encode('utf-8')).hexdigest() ==
+                    receipt['profiles'][role]['normalized_sha256'],
+                    'process identity normalized profile hash mismatch')
+            expected_decl = 'profile ' + receipt['profiles'][role]['label']
+            require(expected_decl in raw.decode('utf-8'),
+                    'process identity profile declaration does not match its label')
+        api_text = IDENTITY_API_PROFILE.read_text(encoding='utf-8')
+        helper_text = IDENTITY_HELPER_PROFILE.read_text(encoding='utf-8')
+        require('ptrace (readby) peer=' + receipt['profiles']['helper']['label'] in api_text and
+                'ptrace (read) peer=' + receipt['profiles']['api']['label'] in helper_text,
+                'process identity profiles do not contain the exact approved peer rules')
+        require('peer=**' not in api_text and 'peer=**' not in helper_text,
+                'process identity profiles contain wildcard peer access')
+        require(manifest['kernel_release'] == os.uname().release,
+                'process identity kernel release differs from its receipt')
+        feature_root = Path('/sys/kernel/security/apparmor/features')
+        trusted(feature_root, directory=True)
+        feature_hash = process_identity.digest_tree(feature_root)
+        require(feature_hash == manifest['apparmor_feature_tree_sha256'],
+                'AppArmor feature tree differs from its receipt')
+        parser = subprocess.run(['/sbin/apparmor_parser', '--version'],
+                                capture_output=True, timeout=5,
+                                env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
+        require(parser.returncode == 0 and parser.stdout.decode('utf-8').strip() ==
+                manifest['parser_version'], 'AppArmor parser version differs from its receipt')
+        require(manifest['peer_rules'] == {
+            'api_to_helper': 'ptrace (readby) peer=@HELPER_PROFILE@',
+            'helper_to_api': 'ptrace (read) peer=@API_PROFILE@',
+        }, 'process identity peer policy differs from the accepted narrow pair')
+        return receipt
+
+    @staticmethod
+    def loaded_process_profile(label):
+        lsm = Path('/sys/kernel/security/lsm').read_text(encoding='ascii').strip().split(',')
+        if 'apparmor' not in lsm:
+            return False
+        profiles = Path('/sys/kernel/security/apparmor/profiles').read_text(encoding='utf-8').splitlines()
+        return label + ' (enforce)' in profiles
+
+    @staticmethod
+    def process_profile(pid, *, proc_fd=None):
+        if proc_fd is None:
+            path = Path(f'/proc/{pid}/attr/current')
+            label = path.read_text(encoding='ascii').strip()
+        else:
+            attr_fd = os.open('attr', os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC,
+                              dir_fd=proc_fd)
+            try:
+                current_fd = os.open('current', os.O_RDONLY | os.O_CLOEXEC,
+                                     dir_fd=attr_fd)
+                with os.fdopen(current_fd, encoding='ascii') as reader:
+                    label = reader.read(512).strip()
+            finally:
+                os.close(attr_fd)
+        if not label.endswith(' (enforce)'):
+            raise Hold('process profile is missing or not enforcing')
+        return label[:-len(' (enforce)')]
 
     def retention(self, store):
         if __package__:
@@ -576,28 +811,103 @@ class Host:
         return self.image(sha)
 
     def stopped(self):
-        p = self.properties(API, ['ActiveState', 'MainPID', 'ControlPID'])
-        require(p['ActiveState'] in ('inactive', 'failed') and p['MainPID'] == p['ControlPID'] == '0', 'API stop is ambiguous')
-        listeners = self.command(['/usr/bin/ss', '-H', '-ltnp', 'sport = :8080'], 5)
-        require(not listeners.strip(), 'API listener survives stop')
+        p = self.properties(API, ['ActiveState', 'SubState', 'MainPID', 'ControlPID'])
+        require(p == {'ActiveState': 'inactive', 'SubState': 'dead',
+                      'MainPID': '0', 'ControlPID': '0'}, 'API stop is ambiguous')
+        require(not process_identity.listener_rows(), 'API listener survives stop')
 
-    def stop_owned(self, previous, candidate):
-        links = self.links()
-        require(all(v in {a, b} for v, a, b in zip(links, self.targets(previous), self.targets(candidate))), 'unknown links; cannot stop unowned process')
-        props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After'])
-        mount_requires, mount_after = self.automatic_api_mount_dependencies(props['Requires'], props['After'])
-        validate_loaded_unit(props, self.role, self.boot_guard_enabled,
-                             mount_requires, mount_after)
-        pid = self.properties(API, ['MainPID'])['MainPID']
-        if pid != '0':
-            require(pid.isdigit(), 'invalid owned PID')
-            require(os.readlink('/proc/' + pid + '/exe') in {self.targets(r)[1] + '/bin/node' for r in (previous, candidate)}, 'unowned runtime executable')
-            require(os.readlink('/proc/' + pid + '/cwd') in {self.targets(r)[0] + '/apps/api-server' for r in (previous, candidate)}, 'unowned runtime working directory')
-        self.stop()
+    @contextlib.contextmanager
+    def lifecycle_lock(self):
+        """Serialize every installed controller API lifecycle operation."""
+        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+        fd = os.open(API_LIFECYCLE_LOCK, flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+                    stat.S_IMODE(info.st_mode) == 0o600,
+                    'API lifecycle lock identity or mode drift')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise Hold('API lifecycle operation is already in progress') from error
+            yield
+        finally:
+            os.close(fd)
 
-    def stop(self):
+    def _stop_locked(self):
+        self._require_no_api_lifecycle_job()
         self.command(['/usr/bin/systemctl', 'stop', API], 35)
         self.stopped()
+
+    def _require_no_api_lifecycle_job(self):
+        text = self.command(['/usr/bin/systemctl', 'list-jobs', '--no-legend', '--no-pager'], 5)
+        for line in text.splitlines():
+            fields = line.split()
+            require(len(fields) >= 4 and fields[0].isdecimal(),
+                    'systemd lifecycle job listing is malformed')
+            require(API not in fields[1:2],
+                    'API already has a queued or running lifecycle job')
+
+    def stop_owned(self, previous, candidate):
+        with self.lifecycle_lock():
+            self._require_no_api_lifecycle_job()
+            links = self.links()
+            require(all(v in {a, b} for v, a, b in zip(links, self.targets(previous), self.targets(candidate))), 'unknown links; cannot stop unowned process')
+            props = self.properties(API, ['User', 'Group', 'FragmentPath', 'DropInPaths', 'ExecStart', 'ControlPID', 'WorkingDirectory', 'EnvironmentFiles', 'Requires', 'After', 'AppArmorProfile', 'SystemCallFilter'])
+            mount_requires, mount_after = self.automatic_api_mount_dependencies(props['Requires'], props['After'])
+            validate_loaded_unit(props, self.role, self.boot_guard_enabled,
+                                 mount_requires, mount_after, self.boot_guard_enabled)
+            if self.boot_guard_enabled:
+                bundle = self.process_identity_bundle()
+                required_syscalls = {'ptrace', 'process_vm_readv', 'process_vm_writev',
+                                     'process_madvise', 'pidfd_getfd'}
+                require(props['AppArmorProfile'] == bundle['profiles']['api']['label'] and
+                        props['SystemCallFilter'].startswith('~') and
+                        required_syscalls <= set(props['SystemCallFilter'].lstrip('~').split()),
+                        'API identity sandbox changed before stop')
+            snapshot_keys = ['ActiveState', 'SubState', 'MainPID', 'ControlPID',
+                             'NRestarts', 'InvocationID', 'ControlGroup']
+            snapshot = self.properties(API, snapshot_keys)
+            pid = snapshot['MainPID']
+            pidfd = -1
+            starttime = cgroup = None
+            if pid != '0':
+                require(pid.isdigit() and int(pid) > 0 and snapshot['ActiveState'] == 'active' and
+                        snapshot['ControlPID'] == '0' and snapshot['NRestarts'] == '0' and
+                        re.fullmatch(r'[0-9a-f]{32}', snapshot['InvocationID']),
+                        'API invocation is not stable before stop')
+                active = next((receipt for receipt in (previous, candidate)
+                               if self.links() == self.targets(receipt)), None)
+                require(active is not None, 'API process links do not identify a transaction image')
+                observed = process_identity.observe_api(self, active, listener_required=False)
+                require(observed['pid'] == int(pid) and
+                        observed['invocation_id'] == snapshot['InvocationID'],
+                        'API identity changed before stop authorization')
+                starttime, cgroup = observed['starttime'], observed['cgroup']
+                require(cgroup == snapshot['ControlGroup'], 'API cgroup changed before stop authorization')
+                pidfd = os.pidfd_open(int(pid), 0)
+                require(process_identity.pidfd_is_live(pidfd), 'API process exited before stop authorization')
+            try:
+                if pid != '0':
+                    require(self.properties(API, snapshot_keys) == snapshot and
+                            process_identity.process_starttime(int(pid)) == starttime and
+                            process_identity.process_cgroup(int(pid)) == cgroup and
+                            process_identity.pidfd_is_live(pidfd),
+                            'API invocation changed immediately before stop')
+                self._stop_locked()
+                if pidfd >= 0:
+                    require(not process_identity.pidfd_is_live(pidfd) and
+                            process_identity.cgroup_is_empty(cgroup),
+                            'original API process or cgroup survived the stop')
+            finally:
+                if pidfd >= 0:
+                    os.close(pidfd)
+
+    def stop(self):
+        with self.lifecycle_lock():
+            require(self.properties(API, ['MainPID'])['MainPID'] == '0',
+                    'active API requires a receipt-bound stop authorization')
+            self._stop_locked()
 
     def switch(self, old, new):
         require(self.links() == self.targets(old), 'links changed outside transaction')
@@ -626,30 +936,55 @@ class Host:
             sync_directory(path.parent)
 
     def start(self):
-        BootGate(self, Store()).authorize_start()
-        self.command(['/usr/bin/systemctl', 'start', API], 135)
+        with self.lifecycle_lock():
+            BootGate(self, Store()).authorize_start()
+            self.command(['/usr/bin/systemctl', 'start', API], 135)
 
     def active_controller(self):
         """Return the one live, fixed controller activation context, if any."""
         names = ('fg-index-deployment.service', 'fg-index-deployment-watchdog.service', RECOVERY)
         active = []
         for name in names:
-            props = self.properties(name, ['ActiveState', 'MainPID', 'NRestarts', 'InvocationID', 'FragmentPath', 'DropInPaths', 'User', 'Type', 'TimeoutStartUSec', 'ExecStart'])
+            props = self.properties(name, [
+                'ActiveState', 'SubState', 'MainPID', 'ControlPID', 'NRestarts',
+                'InvocationID', 'ControlGroup', 'FragmentPath', 'DropInPaths',
+                'User', 'Group', 'Type', 'TimeoutStartUSec', 'ExecStart',
+                'NoNewPrivileges', 'CapabilityBoundingSet',
+                'AmbientCapabilities', 'RestrictAddressFamilies',
+                'SystemCallArchitectures',
+            ])
             action = {'fg-index-deployment.service': '--once',
                       'fg-index-deployment-watchdog.service': '--watchdog',
                       RECOVERY: '--recover'}[name]
             validate_loaded_controller(props, name, action)
             if props['ActiveState'] == 'activating':
                 require(props['MainPID'].isdigit() and int(props['MainPID']) > 0 and
-                        props['NRestarts'] == '0' and re.fullmatch(r'[0-9a-f]{32}', props['InvocationID']) and
+                        props['ControlPID'] == '0' and props['NRestarts'] == '0' and re.fullmatch(r'[0-9a-f]{32}', props['InvocationID']) and
                         props['FragmentPath'] == '/etc/systemd/system/' + name and props['DropInPaths'] == '',
                         'controller invocation is restarting or unidentified')
-                pid = props['MainPID']
-                require(os.readlink('/proc/' + pid + '/exe') == '/usr/bin/python3.12', 'controller executable drift')
-                argv = Path('/proc/' + pid + '/cmdline').read_bytes().split(b'\0')[:-1]
-                require(argv == [b'/usr/bin/python3.12', b'/usr/local/libexec/fg-index-deployment/deploy_api_release.py', action.encode()],
-                        'controller command line drift')
-                active.append({'unit': name, 'pid': pid, 'invocation': props['InvocationID'], 'restarts': 0})
+                pid = int(props['MainPID'])
+                starttime = process_identity.process_starttime(pid)
+                cgroup = process_identity.process_cgroup(pid)
+                require(cgroup == props['ControlGroup'], 'controller process cgroup mismatch')
+                pidfd = os.pidfd_open(pid, 0)
+                require(process_identity.pidfd_is_live(pidfd), 'controller process exited during inspection')
+                try:
+                    require(process_identity.capability_masks(pid) ==
+                            {key: '0000000000000000' for key in process_identity.CAPABILITY_FIELDS},
+                            'controller process capabilities are not empty')
+                    require(os.readlink('/proc/' + str(pid) + '/exe') == '/usr/bin/python3.12', 'controller executable drift')
+                    require(os.readlink('/proc/' + str(pid) + '/cwd') == '/', 'controller working directory drift')
+                    argv = Path('/proc/' + str(pid) + '/cmdline').read_bytes().split(b'\0')[:-1]
+                    require(argv == [b'/usr/bin/python3.12', b'/usr/local/libexec/fg-index-deployment/deploy_api_release.py', action.encode()],
+                            'controller command line drift')
+                    after = self.properties(name, ['ActiveState', 'SubState', 'MainPID', 'ControlPID', 'NRestarts', 'InvocationID', 'ControlGroup'])
+                    require(after == {key: props[key] for key in after}, 'controller unit changed during identity inspection')
+                    require(process_identity.process_starttime(pid) == starttime and
+                            process_identity.process_cgroup(pid) == cgroup and
+                            process_identity.pidfd_is_live(pidfd), 'controller changed during identity inspection')
+                finally:
+                    os.close(pidfd)
+                active.append({'unit': name, 'pid': str(pid), 'invocation': props['InvocationID'], 'restarts': 0})
         require(len(active) <= 1, 'multiple controller invocations are active')
         return active[0] if active else None
 
@@ -664,15 +999,12 @@ class Host:
         p = self.properties(API, ['ActiveState', 'MainPID', 'NRestarts', 'ControlPID'])
         require(p['ActiveState'] == 'active' and p['NRestarts'] == p['ControlPID'] == '0', 'API failed or restarted')
         require(p['MainPID'].isdigit() and int(p['MainPID']) > 0, 'no stable positive API PID')
-        pid = p['MainPID']
-        require(os.readlink('/proc/' + pid + '/exe') == self.targets(receipt)[1] + '/bin/node', 'running executable mismatch')
-        require(os.readlink('/proc/' + pid + '/cwd') == self.targets(receipt)[0] + '/apps/api-server', 'running working directory mismatch')
-        listeners = self.command(['/usr/bin/ss', '-H', '-ltnp'], 5).splitlines()
-        own = [line for line in listeners if 'pid=' + pid + ',' in line]
-        require(not own or (len(own) == 1 and '127.0.0.1:8080' in own[0]), 'API listener identity/address mismatch')
-        if listener_required:
-            require(len(own) == 1, 'API listener missing')
-        return pid
+        try:
+            observation = process_identity.observe_api(self, receipt, listener_required=listener_required)
+        except process_identity.IdentityRecordError as error:
+            raise Hold('API process identity observation failed') from error
+        require(observation['pid'] == int(p['MainPID']), 'API identity PID changed')
+        return p['MainPID']
 
     def probe(self, receipt):
         pid = self.runtime(receipt, listener_required=False)
@@ -825,7 +1157,7 @@ class Controller:
                 require(self.host.links() == self.host.targets(state['current']), 'links drifted before activation')
                 state['transaction'].update(stage='intent', next=candidate)
                 self.store.save(state)
-                self.host.stop()
+                self.host.stop_owned(state['current'], candidate)
                 self.stage(state, 'stopped')
                 self.stage(state, 'switching')
                 self.host.switch(state['current'], candidate)
@@ -924,7 +1256,7 @@ class Controller:
                     state['hold'] = 'previous image failed after promotion recovery'
                     self.store.save(state)
                     try:
-                        self.host.stop()
+                        self.host.stop_owned(state['current'], state['current'])
                     except Exception:
                         pass
                     raise Hold(state['hold']) from None

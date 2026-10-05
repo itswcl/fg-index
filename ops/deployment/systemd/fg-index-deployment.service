@@ -6,6 +6,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=root
+Group=root
 UMask=0077
 TimeoutStartSec=30min
 ExecStart=/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --once
@@ -15,3 +16,8 @@ StandardError=journal
 ProtectHome=read-only
 ReadWritePaths=/root/fg-index-api-activation-fa654555b1692111af882f45
 PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
