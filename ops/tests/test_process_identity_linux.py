@@ -39,6 +39,20 @@ def systemctl_show(unit, *properties):
     return dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
 
 
+def systemctl_unit_loaded(unit):
+    result = subprocess.run(
+        ['/usr/bin/systemctl', 'show', unit, '--property=LoadState'],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        if 'could not be found' in result.stderr.lower() or 'not loaded' in result.stderr.lower():
+            return False
+        raise RuntimeError(f'cannot inspect transient unit {unit}: {result.stderr.strip()}')
+    return 'LoadState=loaded' in result.stdout
+
+
 class ProcessIdentityLinuxTest(unittest.TestCase):
     @unittest.skipUnless(
         os.geteuid() == 0 and SYSTEMD.is_dir()
@@ -358,24 +372,27 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 cleanup_errors = []
                 for unit in (api_unit, controller_unit):
                     try:
-                        unit_state = subprocess.run(
-                            ['/usr/bin/systemctl', 'show', unit, '--property=LoadState'],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                        unit_loaded = (
-                            unit_state.returncode == 0 and 'LoadState=loaded' in unit_state.stdout
-                        )
-                        if unit_loaded:
+                        if systemctl_unit_loaded(unit):
                             subprocess.run(
                                 ['/usr/bin/systemctl', 'stop', unit],
                                 check=True, capture_output=True, timeout=15,
                             )
-                            subprocess.run(
-                                ['/usr/bin/systemctl', 'reset-failed', unit],
-                                check=True, capture_output=True, timeout=10,
-                            )
                     except (OSError, subprocess.SubprocessError) as exc:
                         cleanup_errors.append(f'stop {unit}: {exc}')
+                    except RuntimeError as exc:
+                        cleanup_errors.append(str(exc))
+                    try:
+                        if systemctl_unit_loaded(unit):
+                            reset = subprocess.run(
+                                ['/usr/bin/systemctl', 'reset-failed', unit],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            if reset.returncode != 0 and systemctl_unit_loaded(unit):
+                                cleanup_errors.append(
+                                    f'reset-failed {unit}: {reset.stderr.strip()}'
+                                )
+                    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+                        cleanup_errors.append(f'reset-failed {unit}: {exc}')
                 if api_user_created:
                     try:
                         subprocess.run(
