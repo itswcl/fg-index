@@ -4,6 +4,7 @@ This is a disposable Python fixture, not the production helper. It proves the
 zero-capability systemd/AppArmor observation path and stream binding in CI. The
 aggregate gate remains HOLD for the native helper and remaining v11 matrix.
 """
+import errno
 import hashlib
 import json
 import os
@@ -13,7 +14,9 @@ import grp
 import inspect
 import shutil
 import socket
+import stat
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -26,6 +29,8 @@ SYSTEMD = Path('/run/systemd/system')
 PYTHON = '/usr/bin/python3.12'
 CAPABILITY_FIELDS = ('CapEff', 'CapPrm', 'CapBnd', 'CapAmb')
 APPARMOR_PROFILES = Path('/sys/kernel/security/apparmor/profiles')
+APPARMOR_FEATURES = Path('/sys/kernel/security/apparmor/features')
+PEER_PROFILE_PLACEHOLDER = 'fg-index-peer-profile-placeholder'
 HELPER_RECORD_FIELDS = frozenset({
     'schema', 'helper_invocation_id', 'api_pid', 'api_invocation_id',
     'api_control_group', 'api_starttime', 'api_exe', 'api_cwd',
@@ -376,7 +381,7 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
         time.sleep(0.05)
 
 
-def profile_source(role, api_unit=None):
+def profile_source(role, api_unit=None, peer_profile=PEER_PROFILE_PLACEHOLDER):
     proc_rules = ''
     dbus_rules = ''
     if role == 'helper':
@@ -398,18 +403,22 @@ def profile_source(role, api_unit=None):
             /proc/filesystems r,
             owner /proc/[0-9]*/mounts r,
             /proc/net/tcp r,
+            /usr/lib/locale/C.utf8/LC_MEASUREMENT r,
+            ptrace (read) peer=PEER_PROFILE,
             /run/dbus/system_bus_socket rw,
             /usr/bin/systemctl ix,
             network unix stream,
 '''
+        proc_rules = proc_rules.replace('PEER_PROFILE', peer_profile)
         dbus_rules = f'''\
             dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus member=Hello peer=(name=org.freedesktop.DBus),
             dbus send bus=system path=/org/freedesktop/systemd1 interface=org.freedesktop.systemd1.Manager member=GetUnit peer=(name=org.freedesktop.systemd1),
             dbus send bus=system path=/org/freedesktop/systemd1/unit/{api_object} interface=org.freedesktop.DBus.Properties member=GetAll peer=(name=org.freedesktop.systemd1),
 '''
     elif role == 'api':
-        proc_rules = '''\
+        proc_rules = f'''\
             network inet stream,
+            ptrace (readby) peer={peer_profile},
 '''
     else:
         raise ValueError(role)
@@ -445,25 +454,313 @@ PROFILE_DBUS_RULES
     )
 
 
-def profile_name_and_source(role, api_unit=None):
-    canonical = profile_source(role, api_unit).encode('utf-8')
-    policy_digest = hashlib.sha256(canonical).hexdigest()
-    name = f'fg-index-{role}-{policy_digest}'
-    generated = profile_source(role, api_unit).replace('fg-index-identity-policy-placeholder', name)
-    source_digest = hashlib.sha256(generated.encode('utf-8')).hexdigest()
-    return name, policy_digest, source_digest, generated
+def apparmor_feature_manifest(root):
+    if not root.is_dir():
+        raise RuntimeError('AppArmor kernel feature tree is unavailable')
+    features = {}
+    for path in sorted(root.rglob('*')):
+        if path.is_file():
+            features[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if not features:
+        raise RuntimeError('AppArmor kernel feature tree is empty')
+    return features
+
+
+def apparmor_parser_identity(parser):
+    resolved = Path(parser).resolve(strict=True)
+    version = subprocess.run(
+        [str(resolved), '--version'], check=True, capture_output=True,
+        text=True, timeout=10,
+    ).stdout.strip()
+    return {
+        'path': str(resolved),
+        'version': version,
+        'sha256': hashlib.sha256(resolved.read_bytes()).hexdigest(),
+    }
+
+
+def policy_closure(source):
+    include_directives = [
+        line.strip() for line in source.splitlines()
+        if line.strip().startswith('#include')
+    ]
+    tunable_names = sorted(set(
+        chunk.split('}', 1)[0] for chunk in source.split('@{')[1:]
+    ))
+    if include_directives or tunable_names:
+        raise ValueError('fixture policy requires unsupported include/tunable expansion')
+    return {'includes': [], 'tunables': []}
+
+
+def canonical_profile_pair_manifest(api_unit, parser_identity, kernel_release, features):
+    api_source = profile_source(
+        'api', peer_profile='@HELPER_PROFILE@'
+    ).replace('fg-index-identity-policy-placeholder', '@API_PROFILE@')
+    helper_source = profile_source(
+        'helper', api_unit, peer_profile='@API_PROFILE@'
+    ).replace('fg-index-identity-policy-placeholder', '@HELPER_PROFILE@')
+    return {
+        'schema': 'fg-index.apparmor-policy-pair.v1',
+        'api_unit': api_unit,
+        'parser_identity': parser_identity,
+        'kernel_release': kernel_release,
+        'apparmor_features': features,
+        'roles': {
+            'api': {
+                'canonical_source': api_source,
+                **policy_closure(api_source),
+                'peer_rule': 'ptrace (readby) peer=@HELPER_PROFILE@,',
+            },
+            'helper': {
+                'canonical_source': helper_source,
+                **policy_closure(helper_source),
+                'peer_rule': 'ptrace (read) peer=@API_PROFILE@,',
+            },
+        },
+    }
+
+
+def policy_pair_digest(manifest):
+    canonical = json.dumps(manifest, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode('ascii')).hexdigest()
+
+
+def build_profile_pair(api_unit, parser_identity, kernel_release, features):
+    manifest = canonical_profile_pair_manifest(
+        api_unit, parser_identity, kernel_release, features
+    )
+    bundle_digest = policy_pair_digest(manifest)
+    api_profile = f'fg-index-api-{bundle_digest}'
+    helper_profile = f'fg-index-helper-{bundle_digest}'
+    api_policy = profile_source('api', peer_profile=helper_profile).replace(
+        'fg-index-identity-policy-placeholder', api_profile
+    )
+    helper_policy = profile_source('helper', api_unit, peer_profile=api_profile).replace(
+        'fg-index-identity-policy-placeholder', helper_profile
+    )
+    return {
+        'manifest': manifest,
+        'bundle_sha256': bundle_digest,
+        'api_profile': api_profile,
+        'helper_profile': helper_profile,
+        'api_policy': api_policy,
+        'helper_policy': helper_policy,
+        'api_source_sha256': hashlib.sha256(api_policy.encode('utf-8')).hexdigest(),
+        'helper_source_sha256': hashlib.sha256(helper_policy.encode('utf-8')).hexdigest(),
+    }
+
+
+def require_fresh_profile_labels(live_profiles, api_profile, helper_profile):
+    loaded_names = {line.split(' (', 1)[0] for line in live_profiles}
+    reused = sorted({api_profile, helper_profile} & loaded_names)
+    if reused:
+        raise RuntimeError('refusing to reuse already-loaded AppArmor profile label(s): ' + ', '.join(reused))
+
+
+def private_receipt_matches(path, payload):
+    flags = os.O_RDONLY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o400
+            or metadata.st_nlink not in (1, 2)
+        ):
+            return False
+        if hasattr(os, 'getxattr') and sys.platform.startswith('linux'):
+            try:
+                os.getxattr(descriptor, 'system.posix_acl_access')
+            except OSError as exc:
+                if exc.errno not in (errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)):
+                    raise
+            else:
+                return False
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if b''.join(chunks) != payload:
+            return False
+        os.fsync(descriptor)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return True
+    finally:
+        os.close(descriptor)
+
+
+def write_private_receipt(path, receipt):
+    parent = path.parent.stat()
+    if parent.st_uid != os.geteuid() or parent.st_mode & 0o077:
+        raise PermissionError('receipt parent is not loader-owned and private from group/other')
+    if hasattr(os, 'getxattr') and sys.platform.startswith('linux'):
+        for attribute in ('system.posix_acl_access', 'system.posix_acl_default'):
+            try:
+                os.getxattr(path.parent, attribute, follow_symlinks=False)
+            except OSError as exc:
+                if exc.errno not in (errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)):
+                    raise
+            else:
+                raise PermissionError('receipt parent has an extended POSIX ACL')
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    payload = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode('ascii')
+    if private_receipt_matches(path, payload):
+        return
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, 'wb') as writer:
+            writer.write(payload)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(temporary, 0o400)
+        mode_fd = os.open(temporary, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            os.fsync(mode_fd)
+        finally:
+            os.close(mode_fd)
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            if private_receipt_matches(path, payload):
+                temporary.unlink()
+                directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                return
+            raise FileExistsError('refusing to replace a non-matching AppArmor policy receipt')
+        temporary.unlink()
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def verify_profile_pair(bundle):
+    digest = policy_pair_digest(bundle['manifest'])
+    if digest != bundle.get('bundle_sha256'):
+        raise ValueError('AppArmor pair manifest digest mismatch')
+    if bundle.get('api_profile') != f'fg-index-api-{digest}':
+        raise ValueError('API profile label is not bound to the pair digest')
+    if bundle.get('helper_profile') != f'fg-index-helper-{digest}':
+        raise ValueError('helper profile label is not bound to the pair digest')
+    expanded_sources = {
+        'api': bundle['manifest']['roles']['api']['canonical_source'].replace(
+            '@API_PROFILE@', bundle['api_profile']
+        ).replace('@HELPER_PROFILE@', bundle['helper_profile']),
+        'helper': bundle['manifest']['roles']['helper']['canonical_source'].replace(
+            '@API_PROFILE@', bundle['api_profile']
+        ).replace('@HELPER_PROFILE@', bundle['helper_profile']),
+    }
+    for role, expanded in expanded_sources.items():
+        source = bundle[f'{role}_policy']
+        if source != expanded:
+            raise ValueError(f'{role} expanded source does not match the canonical pair manifest')
+        if hashlib.sha256(source.encode('utf-8')).hexdigest() != bundle.get(f'{role}_source_sha256'):
+            raise ValueError(f'{role} expanded source digest mismatch')
+    if f'ptrace (readby) peer={bundle["helper_profile"]},' not in bundle['api_policy']:
+        raise ValueError('API-to-helper peer rule does not bind the exact helper label')
+    if f'ptrace (read) peer={bundle["api_profile"]},' not in bundle['helper_policy']:
+        raise ValueError('helper-to-API peer rule does not bind the exact API label')
+    return True
+
+
+def build_profile_pair_receipt(bundle, helper_fixture_sha256):
+    manifest = bundle['manifest']
+    return {
+        'schema': 'fg-index.apparmor-policy-pair-receipt.v1',
+        'bundle': {
+            'sha256': bundle['bundle_sha256'],
+            'manifest': manifest,
+        },
+        'api': {
+            'profile': bundle['api_profile'],
+            'policy_sha256': bundle['bundle_sha256'],
+            'source_sha256': bundle['api_source_sha256'],
+        },
+        'helper': {
+            'profile': bundle['helper_profile'],
+            'policy_sha256': bundle['bundle_sha256'],
+            'source_sha256': bundle['helper_source_sha256'],
+            'fixture_sha256': helper_fixture_sha256,
+        },
+        'parser': manifest['parser_identity'],
+        'kernel': manifest['kernel_release'],
+    }
+
+
+def verify_profile_pair_receipt(receipt, bundle, helper_fixture_sha256):
+    return (
+        type(receipt) is dict
+        and verify_profile_pair(bundle)
+        and receipt == build_profile_pair_receipt(bundle, helper_fixture_sha256)
+    )
+
+
+def policy_validation_source():
+    return '\n\n'.join(
+        inspect.getsource(function) for function in (
+            apparmor_feature_manifest, apparmor_parser_identity,
+            policy_pair_digest, verify_profile_pair,
+            build_profile_pair_receipt, verify_profile_pair_receipt,
+        )
+    )
 
 
 class ProcessIdentityHelperCleanupTests(unittest.TestCase):
     def test_helper_policy_scopes_dbus_to_reading_the_fixed_api_unit(self):
         api_unit = 'fg-index-identity-helper-api-0123456789ab.service'
-        _, _, source_digest, policy = profile_name_and_source('helper', api_unit)
+        bundle = build_profile_pair(
+            api_unit, 'AppArmor parser 4.0.1', '6.17.0-test', {'ptrace/read': 'feature-hash'}
+        )
+        api_profile = bundle['api_profile']
+        helper_profile = bundle['helper_profile']
+        policy = bundle['helper_policy']
+        api_policy = bundle['api_policy']
         object_path = '/org/freedesktop/systemd1/unit/' + ''.join(
             character if character.isalnum() else f'_{ord(character):02x}'
             for character in api_unit
         )
 
-        self.assertEqual(source_digest, hashlib.sha256(policy.encode('utf-8')).hexdigest())
+        self.assertTrue(verify_profile_pair(bundle))
+        self.assertEqual(f'fg-index-api-{bundle["bundle_sha256"]}', api_profile)
+        self.assertEqual(f'fg-index-helper-{bundle["bundle_sha256"]}', helper_profile)
+        self.assertIn(f'ptrace (read) peer={api_profile},', policy)
+        self.assertIn(f'ptrace (readby) peer={helper_profile},', api_policy)
+        self.assertIn('/usr/lib/locale/C.utf8/LC_MEASUREMENT r,', policy)
+        self.assertNotIn('/usr/lib/locale/C.utf8/LC_MEASUREMENT r,', api_policy)
+        self.assertEqual(
+            bundle['api_source_sha256'], hashlib.sha256(api_policy.encode('utf-8')).hexdigest()
+        )
+        self.assertEqual(
+            bundle['helper_source_sha256'], hashlib.sha256(policy.encode('utf-8')).hexdigest()
+        )
+        for forbidden in ('ptrace,', 'ptrace (trace)', 'ptrace (tracedby)'):
+            self.assertNotIn(forbidden, policy)
+            self.assertNotIn(forbidden, api_policy)
         self.assertIn(
             'dbus send bus=system path=/org/freedesktop/DBus '
             'interface=org.freedesktop.DBus member=Hello '
@@ -485,6 +782,136 @@ class ProcessIdentityHelperCleanupTests(unittest.TestCase):
         for forbidden in ('dbus send bus=system,', 'member=StartUnit', 'member=StopUnit',
                           'member=RestartUnit'):
             self.assertNotIn(forbidden, policy)
+
+    def test_either_role_or_runtime_abi_change_rotates_both_profile_labels(self):
+        bundle = build_profile_pair(
+            'api.service', 'parser 4.0.1', 'kernel-test', {'ptrace/read': 'enabled'}
+        )
+        original_digest = bundle['bundle_sha256']
+        for role in ('api', 'helper'):
+            changed = json.loads(json.dumps(bundle['manifest']))
+            changed['roles'][role]['canonical_source'] += '\n# changed policy bytes'
+            digest = policy_pair_digest(changed)
+            self.assertNotEqual(original_digest, digest)
+            self.assertNotEqual(bundle['api_profile'], f'fg-index-api-{digest}')
+            self.assertNotEqual(bundle['helper_profile'], f'fg-index-helper-{digest}')
+        changed = json.loads(json.dumps(bundle['manifest']))
+        changed['roles']['api']['peer_rule'] = 'ptrace (readby) peer=@OTHER_PROFILE@,'
+        digest = policy_pair_digest(changed)
+        self.assertNotEqual(original_digest, digest)
+        self.assertNotEqual(bundle['api_profile'], f'fg-index-api-{digest}')
+        self.assertNotEqual(bundle['helper_profile'], f'fg-index-helper-{digest}')
+        for key, value in (
+            ('parser_identity', 'parser 4.0.2'),
+            ('kernel_release', 'kernel-other'),
+            ('apparmor_features', {'ptrace/read': 'disabled'}),
+        ):
+            changed = dict(bundle['manifest'])
+            changed[key] = value
+            digest = policy_pair_digest(changed)
+            self.assertNotEqual(original_digest, digest, key)
+
+    def test_profile_pair_verifier_rejects_mutated_expanded_source(self):
+        bundle = build_profile_pair(
+            'api.service', 'parser 4.0.1', 'kernel-test', {'ptrace/read': 'enabled'}
+        )
+        altered_source = bundle['api_policy'] + '# changed'
+        altered = dict(
+            bundle,
+            api_policy=altered_source,
+            api_source_sha256=hashlib.sha256(altered_source.encode('utf-8')).hexdigest(),
+        )
+        with self.assertRaisesRegex(ValueError, 'source does not match'):
+            verify_profile_pair(altered)
+
+    def test_pair_receipt_binds_manifest_names_and_final_sources(self):
+        bundle = build_profile_pair(
+            'api.service', 'parser 4.0.1', 'kernel-test', {'ptrace/read': 'enabled'}
+        )
+        fixture_digest = hashlib.sha256(b'fixture').hexdigest()
+        receipt = build_profile_pair_receipt(bundle, fixture_digest)
+        self.assertTrue(verify_profile_pair_receipt(receipt, bundle, fixture_digest))
+        namespace = {}
+        validation_source = (
+            'import hashlib, json, os\nfrom pathlib import Path\n'
+            + policy_validation_source()
+        )
+        exec(compile(validation_source, '<embedded-policy-validation>', 'exec'), namespace)
+        self.assertTrue(namespace['verify_profile_pair_receipt'](
+            receipt, bundle, fixture_digest
+        ))
+        altered = dict(receipt)
+        altered['helper'] = dict(receipt['helper'], source_sha256='stale')
+        self.assertFalse(verify_profile_pair_receipt(altered, bundle, fixture_digest))
+
+    def test_loader_refuses_any_existing_pair_label(self):
+        bundle = build_profile_pair(
+            'api.service', 'parser 4.0.1', 'kernel-test', {'ptrace/read': 'enabled'}
+        )
+        require_fresh_profile_labels(
+            ['other (enforce)'], bundle['api_profile'], bundle['helper_profile']
+        )
+        with self.assertRaisesRegex(RuntimeError, 'refusing to reuse'):
+            require_fresh_profile_labels(
+                [bundle['helper_profile'] + ' (complain)'],
+                bundle['api_profile'], bundle['helper_profile'],
+            )
+
+    def test_receipt_publication_is_atomic_read_only_and_no_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / 'receipt.json'
+            receipt = {'schema': 'test', 'bundle': {'sha256': 'abc'}}
+            write_private_receipt(receipt_path, receipt)
+            self.assertEqual(0o400, receipt_path.stat().st_mode & 0o777)
+            self.assertEqual(json.dumps(receipt, sort_keys=True, separators=(',', ':')),
+                             receipt_path.read_text(encoding='ascii'))
+
+    def test_existing_exact_private_receipt_is_reused_without_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / 'receipt.json'
+            receipt = {'schema': 'test', 'bundle': {'sha256': 'abc'}}
+            write_private_receipt(receipt_path, receipt)
+            original_inode = receipt_path.stat().st_ino
+            original_bytes = receipt_path.read_bytes()
+
+            write_private_receipt(receipt_path, receipt)
+
+            self.assertEqual(original_inode, receipt_path.stat().st_ino)
+            self.assertEqual(original_bytes, receipt_path.read_bytes())
+
+    def test_existing_nonmatching_private_receipt_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / 'receipt.json'
+            original = {'schema': 'test', 'bundle': {'sha256': 'abc'}}
+            write_private_receipt(receipt_path, original)
+            original_bytes = receipt_path.read_bytes()
+
+            with self.assertRaisesRegex(FileExistsError, 'non-matching'):
+                write_private_receipt(
+                    receipt_path, {'schema': 'test', 'bundle': {'sha256': 'different'}}
+                )
+
+            self.assertEqual(original_bytes, receipt_path.read_bytes())
+
+    def test_retry_reuses_receipt_after_publication_fsync_interruption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt_path = Path(directory) / 'receipt.json'
+            receipt = {'schema': 'test', 'bundle': {'sha256': 'abc'}}
+            with mock.patch.object(
+                os, 'fsync', side_effect=[None, None, OSError('simulated directory fsync failure')]
+            ):
+                with self.assertRaisesRegex(OSError, 'directory fsync failure'):
+                    write_private_receipt(receipt_path, receipt)
+
+            self.assertTrue(receipt_path.is_file())
+            expected = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode('ascii')
+            self.assertEqual(expected, receipt_path.read_bytes())
+            write_private_receipt(receipt_path, receipt)
+            self.assertEqual(expected, receipt_path.read_bytes())
+            with self.assertRaises(FileExistsError):
+                write_private_receipt(receipt_path, {'schema': 'replaced'})
+            self.assertEqual(json.dumps(receipt, sort_keys=True, separators=(',', ':')),
+                             receipt_path.read_text(encoding='ascii'))
 
     def test_missing_unexpected_unit_is_clean(self):
         with mock.patch(__name__ + '.load_state', return_value='not-found'):
@@ -563,10 +990,22 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
         api_unit = f'fg-index-identity-helper-api-{suffix}.service'
         controller_unit = f'fg-index-identity-helper-controller-{suffix}.service'
         helper_unit = f'fg-index-identity-helper-check-{suffix}.service'
-        api_profile, api_policy_digest, api_source_digest, api_policy = profile_name_and_source('api')
-        helper_profile, helper_policy_digest, helper_source_digest, helper_policy = profile_name_and_source(
-            'helper', api_unit
+        parser_identity = apparmor_parser_identity(parser)
+        parser_version = parser_identity['version']
+        kernel_release = os.uname().release
+        feature_manifest = apparmor_feature_manifest(APPARMOR_FEATURES)
+        profile_pair = build_profile_pair(
+            api_unit, parser_identity, kernel_release, feature_manifest
         )
+        self.assertTrue(verify_profile_pair(profile_pair))
+        api_profile = profile_pair['api_profile']
+        helper_profile = profile_pair['helper_profile']
+        pair_digest = profile_pair['bundle_sha256']
+        pair_manifest = profile_pair['manifest']
+        api_policy = profile_pair['api_policy']
+        helper_policy = profile_pair['helper_policy']
+        api_source_digest = profile_pair['api_source_sha256']
+        helper_source_digest = profile_pair['helper_source_sha256']
 
         with tempfile.TemporaryDirectory(prefix='fg-index-identity-helper-', dir='/opt') as directory:
             fixture = Path(directory)
@@ -582,34 +1021,33 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             controller_script = fixture / 'controller_fixture.py'
             api_policy_path = fixture / 'api.profile'
             helper_policy_path = fixture / 'helper.profile'
-            receipt_path = fixture / 'profile-receipt.json'
+            receipt_directory = fixture / 'private-receipt'
+            receipt_directory.mkdir(mode=0o700)
+            receipt_path = receipt_directory / 'profile-receipt.json'
             api_policy_path.write_text(api_policy, encoding='utf-8')
             helper_policy_path.write_text(helper_policy, encoding='utf-8')
             api_policy_path.chmod(0o600)
             helper_policy_path.chmod(0o600)
 
-            parser_version = subprocess.run(
-                [parser, '--version'], check=True, capture_output=True, text=True, timeout=10,
-            ).stdout.strip()
             receipt = {
+                'schema': 'fg-index.apparmor-policy-pair-receipt.v1',
+                'bundle': {
+                    'sha256': pair_digest,
+                    'manifest': pair_manifest,
+                },
                 'api': {
                     'profile': api_profile,
-                    'policy_sha256': api_policy_digest,
+                    'policy_sha256': pair_digest,
                     'source_sha256': api_source_digest,
                 },
                 'helper': {
                     'profile': helper_profile,
-                    'policy_sha256': helper_policy_digest,
+                    'policy_sha256': pair_digest,
                     'source_sha256': helper_source_digest,
                 },
-                'parser': parser_version,
-                'kernel': os.uname().release,
-                'includes': [],
-                'tunables': [],
+                'parser': parser_identity,
+                'kernel': kernel_release,
             }
-            receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding='ascii')
-            receipt_path.chmod(0o600)
-            self.assertEqual(0, receipt_path.stat().st_uid, 'profile receipt must be root-owned')
             self.assertEqual(api_source_digest, hashlib.sha256(api_policy_path.read_bytes()).hexdigest())
             self.assertEqual(helper_source_digest, hashlib.sha256(helper_policy_path.read_bytes()).hexdigest())
 
@@ -744,8 +1182,13 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             helper_script.chmod(0o644)
             helper_fixture_digest = hashlib.sha256(helper_script.read_bytes()).hexdigest()
             receipt['helper']['fixture_sha256'] = helper_fixture_digest
-            receipt_path.write_text(json.dumps(receipt, sort_keys=True), encoding='ascii')
-            receipt_path.chmod(0o600)
+            write_private_receipt(receipt_path, receipt)
+            saved_receipt = json.loads(receipt_path.read_text(encoding='ascii'))
+            self.assertTrue(verify_profile_pair_receipt(
+                saved_receipt, profile_pair, helper_fixture_digest
+            ), 'HOLD: saved pair receipt does not match the canonical bundle')
+            self.assertEqual(0, receipt_path.stat().st_uid, 'profile receipt must be root-owned')
+            self.assertEqual(0o400, receipt_path.stat().st_mode & 0o777)
 
             controller_script.write_text(textwrap.dedent(f'''\
                 import errno
@@ -756,6 +1199,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 import subprocess
                 import tempfile
                 import time
+                from pathlib import Path
 
                 API_UNIT = {api_unit!r}
                 HELPER_UNIT = {helper_unit!r}
@@ -763,15 +1207,17 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 HELPER_SCRIPT = {str(helper_script)!r}
                 EXPECTED_EXE = {PYTHON!r}
                 EXPECTED_CWD = {directory!r}
+                APPARMOR_FEATURES_PATH = {str(APPARMOR_FEATURES)!r}
+                EXPECTED_POLICY_BUNDLE = {profile_pair!r}
                 API_POLICY_PATH = {str(api_policy_path)!r}
                 API_POLICY_SOURCE_SHA256 = {api_source_digest!r}
-                API_POLICY_SHA256 = {api_policy_digest!r}
+                API_POLICY_SHA256 = {pair_digest!r}
                 API_PROFILE = {api_profile!r}
-                HELPER_POLICY_SHA256 = {helper_policy_digest!r}
+                HELPER_POLICY_SHA256 = {pair_digest!r}
                 HELPER_PROFILE = {helper_profile!r}
                 RECEIPT_PATH = {str(receipt_path)!r}
-                APPARMOR_PARSER = {parser!r}
-                APPARMOR_PARSER_VERSION = {parser_version!r}
+                APPARMOR_PARSER = {str(Path(parser).resolve())!r}
+                APPARMOR_PARSER_IDENTITY = {parser_identity!r}
                 KERNEL_RELEASE = {os.uname().release!r}
                 HELPER_POLICY_PATH = {str(helper_policy_path)!r}
                 HELPER_SOURCE_SHA256 = {helper_source_digest!r}
@@ -779,6 +1225,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 CAPABILITY_FIELDS = {CAPABILITY_FIELDS!r}
                 HELPER_RECORD_FIELDS = {HELPER_RECORD_FIELDS!r}
 
+                POLICY_VALIDATION_SOURCE_PLACEHOLDER
                 PARSER_SOURCE_PLACEHOLDER
 
                 def readlink(path):
@@ -833,7 +1280,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 summary["api_policy_sha256"] = API_POLICY_SHA256
                 summary["helper_profile_name"] = HELPER_PROFILE
                 summary["helper_policy_sha256"] = HELPER_POLICY_SHA256
-                summary["apparmor_parser_version"] = APPARMOR_PARSER_VERSION
+                summary["apparmor_parser_identity"] = APPARMOR_PARSER_IDENTITY
                 summary["kernel_release"] = KERNEL_RELEASE
                 summary["controller_control_group"] = ""
                 summary["helper_control_group"] = ""
@@ -917,34 +1364,28 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 profiles_before_helper = live_profiles()
                 summary["api_profile_enforcing_pre_helper"] = API_PROFILE + " (enforce)" in profiles_before_helper
                 summary["helper_profile_enforcing_pre_helper"] = HELPER_PROFILE + " (enforce)" in profiles_before_helper
-                pre_helper_receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
-                summary["api_profile_receipt_pre_helper_ok"] = (
-                    pre_helper_receipt["api"]["profile"] == API_PROFILE
-                    and pre_helper_receipt["api"]["policy_sha256"] == API_POLICY_SHA256
-                    and pre_helper_receipt["api"]["source_sha256"] == API_POLICY_SOURCE_SHA256
-                    and API_PROFILE == "fg-index-api-" + pre_helper_receipt["api"]["policy_sha256"]
-                    and pre_helper_receipt["helper"]["profile"] == HELPER_PROFILE
-                    and pre_helper_receipt["helper"]["policy_sha256"] == HELPER_POLICY_SHA256
-                    and HELPER_PROFILE == "fg-index-helper-" + pre_helper_receipt["helper"]["policy_sha256"]
-                    and pre_helper_receipt["parser"] == APPARMOR_PARSER_VERSION
-                    and subprocess.run(
-                        [APPARMOR_PARSER, "--version"], check=True, capture_output=True,
-                        text=True, timeout=10,
-                    ).stdout.strip() == APPARMOR_PARSER_VERSION
-                    and pre_helper_receipt["kernel"] == KERNEL_RELEASE
-                    and pre_helper_receipt["includes"] == []
-                    and pre_helper_receipt["tunables"] == []
-                    and os.stat(RECEIPT_PATH).st_uid == 0
-                    and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o600
-                    and hashlib.sha256(open(API_POLICY_PATH, "rb").read()).hexdigest()
-                        == API_POLICY_SOURCE_SHA256
-                    and hashlib.sha256(open(HELPER_POLICY_PATH, "rb").read()).hexdigest()
-                        == pre_helper_receipt["helper"]["source_sha256"]
-                    and pre_helper_receipt["helper"]["source_sha256"] == HELPER_SOURCE_SHA256
-                    and pre_helper_receipt["helper"]["fixture_sha256"] == HELPER_FIXTURE_SHA256
-                    and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
-                        == HELPER_FIXTURE_SHA256
-                )
+                try:
+                    pre_helper_receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
+                    summary["api_profile_receipt_pre_helper_ok"] = (
+                        verify_profile_pair_receipt(
+                            pre_helper_receipt, EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
+                        )
+                        and apparmor_feature_manifest(Path(APPARMOR_FEATURES_PATH))
+                            == EXPECTED_POLICY_BUNDLE["manifest"]["apparmor_features"]
+                        and apparmor_parser_identity(APPARMOR_PARSER)
+                            == APPARMOR_PARSER_IDENTITY
+                        and os.uname().release == KERNEL_RELEASE
+                        and os.stat(RECEIPT_PATH).st_uid == 0
+                        and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o400
+                        and hashlib.sha256(open(API_POLICY_PATH, "rb").read()).hexdigest()
+                            == API_POLICY_SOURCE_SHA256
+                        and hashlib.sha256(open(HELPER_POLICY_PATH, "rb").read()).hexdigest()
+                            == HELPER_SOURCE_SHA256
+                        and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
+                            == HELPER_FIXTURE_SHA256
+                    )
+                except (OSError, KeyError, ValueError, TypeError, subprocess.SubprocessError):
+                    summary["api_profile_receipt_pre_helper_ok"] = False
                 api_pidfd = os.pidfd_open(api_pid, 0)
                 api_poll = select.poll()
                 api_poll.register(api_pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
@@ -1094,29 +1535,28 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     profiles = live_profiles()
                     summary["helper_profile_enforcing"] = HELPER_PROFILE + " (enforce)" in profiles
                     summary["api_profile_enforcing"] = API_PROFILE + " (enforce)" in profiles
-                    receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
-                    summary["profile_receipt_ok"] = (
-                        receipt["helper"]["profile"] == HELPER_PROFILE
-                        and receipt["helper"]["policy_sha256"] == HELPER_POLICY_SHA256
-                        and HELPER_PROFILE == "fg-index-helper-" + receipt["helper"]["policy_sha256"]
-                        and receipt["helper"]["source_sha256"] == HELPER_SOURCE_SHA256
-                        and receipt["api"]["policy_sha256"] == API_POLICY_SHA256
-                        and receipt["parser"] == APPARMOR_PARSER_VERSION
-                        and receipt["kernel"] == KERNEL_RELEASE
-                        and receipt["includes"] == []
-                        and receipt["tunables"] == []
-                        and subprocess.run(
-                            [APPARMOR_PARSER, "--version"], check=True, capture_output=True,
-                            text=True, timeout=10,
-                        ).stdout.strip() == APPARMOR_PARSER_VERSION
-                        and receipt["helper"]["fixture_sha256"] == HELPER_FIXTURE_SHA256
-                        and os.stat(RECEIPT_PATH).st_uid == 0
-                        and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o600
-                        and hashlib.sha256(open(HELPER_POLICY_PATH, "rb").read()).hexdigest()
-                            == HELPER_SOURCE_SHA256
-                        and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
-                            == HELPER_FIXTURE_SHA256
-                    )
+                    try:
+                        receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
+                        summary["profile_receipt_ok"] = (
+                            verify_profile_pair_receipt(
+                                receipt, EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
+                            )
+                            and apparmor_feature_manifest(Path(APPARMOR_FEATURES_PATH))
+                                == EXPECTED_POLICY_BUNDLE["manifest"]["apparmor_features"]
+                            and apparmor_parser_identity(APPARMOR_PARSER)
+                                == APPARMOR_PARSER_IDENTITY
+                            and os.uname().release == KERNEL_RELEASE
+                            and os.stat(RECEIPT_PATH).st_uid == 0
+                            and (os.stat(RECEIPT_PATH).st_mode & 0o777) == 0o400
+                            and hashlib.sha256(open(API_POLICY_PATH, "rb").read()).hexdigest()
+                                == API_POLICY_SOURCE_SHA256
+                            and hashlib.sha256(open(HELPER_POLICY_PATH, "rb").read()).hexdigest()
+                                == HELPER_SOURCE_SHA256
+                            and hashlib.sha256(open(HELPER_SCRIPT, "rb").read()).hexdigest()
+                                == HELPER_FIXTURE_SHA256
+                        )
+                    except (OSError, KeyError, ValueError, TypeError, subprocess.SubprocessError):
+                        summary["profile_receipt_ok"] = False
                     if record is not None:
                         summary["schema_ok"] = set(record) == HELPER_RECORD_FIELDS
                         summary["invocation_binding_ok"] = (
@@ -1288,6 +1728,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 )
                 print(json.dumps(summary, sort_keys=True), flush=True)
             ''').replace(
+                'POLICY_VALIDATION_SOURCE_PLACEHOLDER', policy_validation_source()
+            ).replace(
                 'PARSER_SOURCE_PLACEHOLDER', inspect.getsource(parse_helper_record_output)
             ), encoding='utf-8')
             controller_script.chmod(0o644)
@@ -1305,9 +1747,30 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     api_created = True
                     group_created = True
 
+                current_parser_identity = apparmor_parser_identity(parser)
+                self.assertEqual(parser_identity, current_parser_identity,
+                                 'HOLD: AppArmor parser identity changed before profile load')
+                self.assertEqual(kernel_release, os.uname().release,
+                                 'HOLD: kernel release changed before profile load')
+                self.assertEqual(feature_manifest, apparmor_feature_manifest(APPARMOR_FEATURES),
+                                 'HOLD: AppArmor ABI/features changed before profile load')
+                self.assertTrue(verify_profile_pair(profile_pair),
+                                'HOLD: canonical AppArmor pair no longer verifies')
+                receipt_before_load = json.loads(receipt_path.read_text(encoding='ascii'))
+                self.assertTrue(verify_profile_pair_receipt(
+                    receipt_before_load, profile_pair, helper_fixture_digest
+                ), 'HOLD: saved policy receipt changed before profile load')
+                self.assertEqual(api_source_digest,
+                                 hashlib.sha256(api_policy_path.read_bytes()).hexdigest())
+                self.assertEqual(helper_source_digest,
+                                 hashlib.sha256(helper_policy_path.read_bytes()).hexdigest())
+                require_fresh_profile_labels(
+                    APPARMOR_PROFILES.read_text(encoding='ascii').splitlines(),
+                    api_profile, helper_profile,
+                )
                 for role, path in (('api', api_policy_path), ('helper', helper_policy_path)):
                     loaded = subprocess.run(
-                        [parser, '-r', '-W', str(path)],
+                        [parser_identity['path'], '-W', str(path)],
                         capture_output=True, text=True, timeout=15,
                     )
                     self.assertEqual(0, loaded.returncode,
@@ -1484,7 +1947,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     for role, path in reversed(loaded_profiles):
                         try:
                             subprocess.run(
-                                [parser, '-R', str(path)], check=True,
+                                [parser_identity['path'], '-R', str(path)], check=True,
                                 capture_output=True, timeout=15,
                             )
                         except (OSError, subprocess.SubprocessError) as exc:
