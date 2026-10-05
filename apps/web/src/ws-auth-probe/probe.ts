@@ -2,6 +2,11 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import './probe.css'
 import { createMemoryStorage } from './memory-storage.ts'
 import {
+  createAttemptDeadline,
+  exchangeWithinAttempt,
+  type AttemptDeadline,
+} from './lifecycle.ts'
+import {
   consumeAuthCodeMessage,
   isCallbackReadyMessage,
   makeWebSocketUrl,
@@ -17,6 +22,7 @@ const EXPECTED_MARKET_EVENTS = new Set([
   'BTC_UPDATE',
   'SPX_UPDATE',
 ])
+const PROBE_ATTEMPT_TIMEOUT_MS = 5 * 60_000
 
 function createNonce(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
@@ -100,6 +106,7 @@ export function startWebSocketProbe(): void {
   let messageHandler: ((event: MessageEvent<unknown>) => void) | null = null
   let timeout = 0
   let closePoll = 0
+  let attemptDeadline: AttemptDeadline | null = null
   let popupClosedAt = 0
   let nonceSent = false
   let disposed = false
@@ -107,6 +114,8 @@ export function startWebSocketProbe(): void {
   const clearTransientState = (): void => {
     window.clearTimeout(timeout)
     window.clearInterval(closePoll)
+    attemptDeadline?.clear()
+    attemptDeadline = null
     if (messageHandler) window.removeEventListener('message', messageHandler)
     messageHandler = null
     const memoryStorage = storage
@@ -140,50 +149,55 @@ export function startWebSocketProbe(): void {
   const exchangeAndConnect = async (code: string): Promise<void> => {
     const memoryStorage = storage
     const authClient = client
-    if (!memoryStorage || !authClient) return finish('The sign-in handoff could not be completed.')
+    const deadline = attemptDeadline
+    if (!memoryStorage || !authClient || !deadline) {
+      return finish('The sign-in handoff could not be completed.')
+    }
 
     try {
-      let accessToken = await exchangeCodeForAccessToken(authClient, code)
+      const outcome = await exchangeWithinAttempt(
+        () => exchangeCodeForAccessToken(authClient, code),
+        deadline,
+        (accessToken) => {
+          deadline.clear()
+          attemptDeadline = null
+          let socketUrl = makeWebSocketUrl(accessToken)
+          memoryStorage.clear()
+          client = null
+          storage = null
+          const openedSocket = new WebSocket(socketUrl)
+          socketUrl = ''
+          socket = openedSocket
+          ui.status.textContent = 'WebSocket connecting…'
+          ui.disconnect.disabled = false
+
+          const seen = new Set<string>()
+          openedSocket.onopen = () => {
+            ui.status.textContent = 'WebSocket open. Waiting for market-data events.'
+          }
+          openedSocket.onmessage = (event: MessageEvent<unknown>) => {
+            const type = marketEventType(event.data)
+            if (!type) return
+            seen.add(type)
+            ui.events.textContent = `Market-data events received (${seen.size}): ${[...seen].join(', ')}`
+            if (seen.size === EXPECTED_MARKET_EVENTS.size) {
+              finish('Initial market-data events received. The check has disconnected.')
+            }
+          }
+          openedSocket.onerror = () => finish('The WebSocket check failed. No diagnostic details were retained.')
+          openedSocket.onclose = () => finish('The WebSocket connection is closed.')
+          timeout = window.setTimeout(
+            () => finish('The short WebSocket check timed out and disconnected.'),
+            30_000,
+          )
+        },
+        () => memoryStorage.clear(),
+      )
       code = ''
-      if (disposed) {
-        accessToken = ''
-        memoryStorage.clear()
-        return
-      }
-      if (!accessToken) {
+      if (outcome === 'expired' || disposed) return
+      if (outcome === 'failed') {
         return finish('Sign-in could not be completed. No connection was opened.')
       }
-
-      let socketUrl = makeWebSocketUrl(accessToken)
-      accessToken = ''
-      memoryStorage.clear()
-      client = null
-      storage = null
-      const openedSocket = new WebSocket(socketUrl)
-      socketUrl = ''
-      socket = openedSocket
-      ui.status.textContent = 'WebSocket connecting…'
-      ui.disconnect.disabled = false
-
-      const seen = new Set<string>()
-      openedSocket.onopen = () => {
-        ui.status.textContent = 'WebSocket open. Waiting for market-data events.'
-      }
-      openedSocket.onmessage = (event: MessageEvent<unknown>) => {
-        const type = marketEventType(event.data)
-        if (!type) return
-        seen.add(type)
-        ui.events.textContent = `Market-data events received (${seen.size}): ${[...seen].join(', ')}`
-        if (seen.size === EXPECTED_MARKET_EVENTS.size) {
-          finish('Initial market-data events received. The check has disconnected.')
-        }
-      }
-      openedSocket.onerror = () => finish('The WebSocket check failed. No diagnostic details were retained.')
-      openedSocket.onclose = () => finish('The WebSocket connection is closed.')
-      timeout = window.setTimeout(
-        () => finish('The short WebSocket check timed out and disconnected.'),
-        30_000,
-      )
     } catch {
       code = ''
       finish('Sign-in or the WebSocket check could not be completed.')
@@ -209,7 +223,6 @@ export function startWebSocketProbe(): void {
     )
     if (!code) return
 
-    window.clearTimeout(timeout)
     window.clearInterval(closePoll)
     if (messageHandler) window.removeEventListener('message', messageHandler)
     messageHandler = null
@@ -247,7 +260,14 @@ export function startWebSocketProbe(): void {
           popupClosedAt = 0
         }
       }, 500)
-      timeout = window.setTimeout(() => finish('The sign-in check expired.'), 5 * 60_000)
+      attemptDeadline = createAttemptDeadline(
+        () => finish('The sign-in check expired.'),
+        {
+          setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+          clearTimeout: (handle) => window.clearTimeout(handle),
+        },
+        PROBE_ATTEMPT_TIMEOUT_MS,
+      )
 
       const authClient = createClient(supabaseUrl, anonKey, {
         auth: {

@@ -15,6 +15,7 @@ import {
 import { relayPopupCallback } from '../src/ws-auth-probe/callback-relay.ts'
 import { createMemoryStorage } from '../src/ws-auth-probe/memory-storage.ts'
 import { resolveEntryRoute } from '../src/ws-auth-probe/route.ts'
+import { createAttemptDeadline, exchangeWithinAttempt } from '../src/ws-auth-probe/lifecycle.ts'
 
 const webRoot = new URL('../', import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, webRoot), 'utf8')
@@ -258,4 +259,66 @@ test('PKCE storage is memory-only and can be cleared after the exchange', () => 
   assert.equal(storage.getItem('code-verifier'), 'temporary-test-value')
   storage.clear()
   assert.equal(storage.getItem('code-verifier'), null)
+})
+
+test('a stalled code exchange cannot revive an expired attempt or open its socket', async () => {
+  let expire
+  let acceptCount = 0
+  let transientClearCount = 0
+  let resolveExchange
+  const deadline = createAttemptDeadline(
+    () => { transientClearCount += 1 },
+    {
+      setTimeout(callback, delayMs) {
+        assert.equal(delayMs, 5 * 60_000)
+        expire = callback
+        return 7
+      },
+      clearTimeout() {},
+    },
+    5 * 60_000,
+  )
+  const pending = exchangeWithinAttempt(
+    () => new Promise((resolve) => { resolveExchange = resolve }),
+    deadline,
+    () => { acceptCount += 1 },
+    () => { transientClearCount += 1 },
+  )
+
+  expire()
+  assert.equal(deadline.isActive(), false)
+  assert.equal(transientClearCount, 1)
+  resolveExchange('late-access-token')
+
+  assert.equal(await pending, 'expired')
+  assert.equal(acceptCount, 0)
+  assert.equal(transientClearCount, 2)
+})
+
+test('a code exchange accepted before the deadline clears temporary state', async () => {
+  let timerCleared = 0
+  let acceptedValue = null
+  let transientClearCount = 0
+  const deadline = createAttemptDeadline(
+    () => assert.fail('deadline should not expire'),
+    {
+      setTimeout: () => 9,
+      clearTimeout: (handle) => { timerCleared = handle },
+    },
+    5 * 60_000,
+  )
+
+  assert.equal(
+    await exchangeWithinAttempt(
+      async () => 'short-lived-access-token',
+      deadline,
+      (value) => { acceptedValue = value },
+      () => { transientClearCount += 1 },
+    ),
+    'accepted',
+  )
+  assert.equal(acceptedValue, 'short-lived-access-token')
+  assert.equal(timerCleared, 9)
+  assert.equal(deadline.isActive(), false)
+  assert.equal(transientClearCount, 1)
 })
