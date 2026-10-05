@@ -62,6 +62,7 @@ def profile_source(role):
             /proc/[0-9]*/stat r,
             /proc/[0-9]*/cgroup r,
             /proc/[0-9]*/status r,
+            /proc/[0-9]*/attr/current r,
             /proc/[0-9]*/fd/ r,
             /proc/[0-9]*/fd/** r,
             /proc/net/tcp r,
@@ -248,6 +249,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         raise RuntimeError("API pidfd is not live")
                     exe = os.readlink(f"/proc/{{pid}}/exe")
                     cwd = os.readlink(f"/proc/{{pid}}/cwd")
+                    with open(f"/proc/{{pid}}/attr/current", encoding="ascii") as reader:
+                        api_profile_label = reader.read().strip()
                     fd_inodes = set()
                     for fd in os.listdir(f"/proc/{{pid}}/fd"):
                         target = os.readlink(f"/proc/{{pid}}/fd/{{fd}}")
@@ -285,6 +288,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         "api_starttime": start_before,
                         "api_exe": exe,
                         "api_cwd": cwd,
+                        "api_profile_label": api_profile_label,
                         "api_fd_inodes": sorted(fd_inodes),
                         "listener": matching[0],
                         "pidfd_live": True,
@@ -488,7 +492,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         expected_fields = {{
                             "schema", "helper_invocation_id", "api_pid", "api_invocation_id",
                             "api_control_group", "api_starttime", "api_exe", "api_cwd",
-                            "api_fd_inodes", "listener", "pidfd_live", "capabilities",
+                            "api_profile_label", "api_fd_inodes", "listener", "pidfd_live", "capabilities",
                             "argv_ok", "caller_parameters_absent",
                         }}
                         summary["schema_ok"] = set(record) == expected_fields
@@ -508,6 +512,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                                                               "state": "0A", "inode": record.get("listener", {{}}).get("inode")}}
                             and record.get("listener", {{}}).get("inode") in record.get("api_fd_inodes", [])
                         )
+                        summary["api_live_profile_label_ok"] = (
+                            record.get("api_profile_label") == API_PROFILE + " (enforce)"
+                        )
                         summary["helper_interface_ok"] = record.get("argv_ok") is True and record.get("caller_parameters_absent") is True
                         summary["helper_capability_record_ok"] = all(
                             record.get("capabilities", {{}}).get(key) == "0000000000000000"
@@ -518,6 +525,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                         summary["invocation_binding_ok"] = False
                         summary["api_snapshot_binding_ok"] = False
                         summary["api_identity_ok"] = False
+                        summary["api_live_profile_label_ok"] = False
                         summary["helper_interface_ok"] = False
                         summary["helper_capability_record_ok"] = False
 
@@ -528,7 +536,8 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     summary["api_snapshot_stable"] = api_after == api_before and api_poll.poll(0) == []
                     summary["helper_live_checks_ok"] = all(summary.get(key, False) for key in (
                         "helper_unit_ok", "helper_capabilities_zero", "helper_live_label_ok",
-                        "helper_profile_enforcing", "api_profile_enforcing", "profile_receipt_ok",
+                        "helper_profile_enforcing", "api_profile_enforcing", "api_profile_property_ok",
+                        "api_live_profile_label_ok", "profile_receipt_ok",
                         "helper_pidfd_live", "schema_ok", "invocation_binding_ok",
                         "api_snapshot_binding_ok", "api_identity_ok", "helper_interface_ok",
                         "helper_capability_record_ok", "extra_output_absent", "api_snapshot_stable",
@@ -543,7 +552,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     if child.stdin and not child.stdin.closed:
                         child.stdin.close()
                     try:
-                    child.wait(timeout=20)
+                        child.wait(timeout=20)
                     except subprocess.TimeoutExpired:
                         child.kill()
                         child.wait(timeout=5)
