@@ -87,6 +87,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 import subprocess
 
                 API_UNIT = {api_unit!r}
+                CONTROLLER_UNIT = {controller_unit!r}
                 CAPABILITY_FIELDS = {CAPABILITY_STATUS_FIELDS!r}
 
                 def readlink(path):
@@ -99,19 +100,31 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                     with open("/proc/self/status", encoding="ascii") as reader:
                         status = dict(line.split(":", 1) for line in reader if ":" in line)
                     capabilities = {{key: status[key].strip() for key in CAPABILITY_FIELDS}}
-                    raw = subprocess.run(
+                    api_raw = subprocess.run(
                         ["/usr/bin/systemctl", "show", API_UNIT,
-                         "--property=MainPID", "--property=InvocationID"],
+                         "--property=MainPID", "--property=InvocationID", "--property=ControlGroup"],
                         check=True, capture_output=True, text=True, timeout=10,
                     ).stdout
-                    properties = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
-                    pid = int(properties["MainPID"])
+                    api_properties = dict(line.split("=", 1) for line in api_raw.splitlines() if "=" in line)
+                    controller_raw = subprocess.run(
+                        ["/usr/bin/systemctl", "show", CONTROLLER_UNIT,
+                         "--property=MainPID", "--property=InvocationID", "--property=ControlGroup"],
+                        check=True, capture_output=True, text=True, timeout=10,
+                    ).stdout
+                    controller_properties = dict(
+                        line.split("=", 1) for line in controller_raw.splitlines() if "=" in line
+                    )
+                    pid = int(api_properties["MainPID"])
                     proc = f"/proc/{{pid}}"
                     observed = {{
                         "pid": pid,
-                        "invocation_id": properties.get("InvocationID", ""),
+                        "invocation_id": api_properties.get("InvocationID", ""),
+                        "api_control_group": api_properties.get("ControlGroup", ""),
                         "capabilities": capabilities,
                         "controller_pid": os.getpid(),
+                        "controller_invocation_id": controller_properties.get("InvocationID", ""),
+                        "controller_main_pid": int(controller_properties.get("MainPID", "0")),
+                        "controller_control_group": controller_properties.get("ControlGroup", ""),
                         "controller_exe": readlink("/proc/self/exe"),
                         "controller_cwd": readlink("/proc/self/cwd"),
                         "exe": readlink(proc + "/exe"),
@@ -158,10 +171,15 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                                 address = socket.inet_ntoa(bytes.fromhex(address_hex)[::-1])
                                 port = int(port_hex, 16)
                                 if state == "0A" and address == "127.0.0.1" and port == 8080:
-                                    rows.append(inode)
+                                    rows.append({{
+                                        "local_address": address,
+                                        "port": port,
+                                        "state": state,
+                                        "inode": inode,
+                                    }})
                         observed["listener_rows"] = rows
                         observed["listener_owned"] = (
-                            len(rows) == 1 and rows[0] in observed.get("fd_inodes", [])
+                            len(rows) == 1 and rows[0]["inode"] in observed.get("fd_inodes", [])
                         )
                     except OSError as exc:
                         observed["tcp_error"] = errno.errorcode.get(exc.errno, str(exc.errno))
@@ -183,16 +201,30 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                         if operation in ("pidfd", "tcp")
                         or (operation in ("exe", "cwd", "fd") and code != "EACCES")
                     ]
-                    observed["direct_a_state"] = (
-                        "UNAVAILABLE/HOLD" if api_proc_denials and not non_fallback_errors
-                        else "PASS" if not operation_errors and observed.get("listener_owned")
-                        else "HOLD"
-                    )
+                    if non_fallback_errors:
+                        observed["direct_a_state"] = "HOLD"
+                    elif api_proc_denials:
+                        observed["direct_a_state"] = "UNAVAILABLE/HOLD"
+                    elif not operation_errors and observed.get("listener_owned"):
+                        observed["direct_a_state"] = "PASS"
+                    else:
+                        observed["direct_a_state"] = "HOLD"
                     observed["direct_a_errors"] = operation_errors
                     observed["api_proc_denials"] = api_proc_denials
                     observed["non_fallback_errors"] = non_fallback_errors
                     observed["aggregate_gate"] = "HOLD"
-                    observed["helper_required"] = observed["direct_a_state"] == "UNAVAILABLE/HOLD"
+                    observed["helper_required"] = bool(api_proc_denials)
+                    observed["aggregate_pending_gates"] = [
+                        "fixed-helper E2E and enforcing API/helper AppArmor identity",
+                        "C fixed-unit MainPID/InvocationID/cgroup/starttime and before/after snapshots",
+                        "API unit/cgroup/starttime before/after snapshots and pidfd ordering/binding",
+                        "foreign-controller, PID-reuse, exec-race, and process-exit cases",
+                        "same-UID API-to-helper proc/syscall isolation and descendant escape tests",
+                        "bounded helper output, invocation binding, malformed/replay/oversize/timeout cases",
+                        "all installed API lifecycle actors and shared stop lock",
+                        "replacement invocation at stop-job acceptance boundary",
+                        "required production controller sandbox/context matrix",
+                    ]
                     return observed
 
                 print(json.dumps(inspect(), sort_keys=True), flush=True)
@@ -200,7 +232,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
             probe_script_path.chmod(0o644)
 
             start_api = [
-                '/usr/bin/systemd-run', '--quiet', '--collect', '--unit', api_unit,
+                '/usr/bin/systemd-run', '--quiet', '--unit', api_unit,
                 '--property=Type=simple', '--property=User=fg-index', '--property=Group=fg-index',
                 '--property=WorkingDirectory=' + directory,
                 '--property=CapabilityBoundingSet=', '--property=AmbientCapabilities=',
@@ -271,10 +303,15 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 print('API_FIXTURE_CAPABILITIES=' + json.dumps(api_capabilities, sort_keys=True))
                 print('DIRECT_A_DIAGNOSIS=' + observed['direct_a_state'])
                 print('AGGREGATE_PROCESS_IDENTITY_GATE=' + observed['aggregate_gate'])
+                print('AGGREGATE_PENDING_GATES=' + json.dumps(observed['aggregate_pending_gates']))
                 self.assertEqual({'value': '/usr/bin/python3.12'}, observed['controller_exe'], observed)
                 self.assertEqual({'value': directory}, observed['controller_cwd'], observed)
+                self.assertEqual(observed['controller_pid'], observed['controller_main_pid'], observed)
+                self.assertTrue(observed['controller_invocation_id'], observed)
+                self.assertTrue(observed['controller_control_group'], observed)
                 self.assertEqual(int(api['MainPID']), observed['pid'], observed)
                 self.assertEqual(api['InvocationID'], observed['invocation_id'], observed)
+                self.assertTrue(observed['api_control_group'], observed)
                 self.assertEqual(
                     {key: '0000000000000000' for key in CAPABILITY_STATUS_FIELDS},
                     api_capabilities,
@@ -299,15 +336,24 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                         all(code == 'EACCES' for _, code in observed['api_proc_denials']), observed
                     )
                 else:
-                    self.assertFalse(observed['helper_required'], observed)
                     if observed['direct_a_state'] == 'PASS':
+                        self.assertFalse(observed['helper_required'], observed)
                         self.assertEqual({'value': '/usr/bin/python3.12'}, observed['exe'], observed)
                         self.assertEqual({'value': directory}, observed['cwd'], observed)
                         self.assertEqual(1, len(observed.get('listener_rows', [])), observed)
                         self.assertTrue(observed.get('listener_owned'), observed)
+                        row = observed['listener_rows'][0]
+                        self.assertEqual(
+                            {'local_address': '127.0.0.1', 'port': 8080, 'state': '0A'},
+                            {key: row[key] for key in ('local_address', 'port', 'state')},
+                            observed,
+                        )
+                        self.assertIn(row['inode'], observed['fd_inodes'], observed)
                     else:
                         self.assertEqual('HOLD', observed['direct_a_state'], observed)
-                        self.assertTrue(observed['non_fallback_errors'], observed)
+                        self.assertTrue(
+                            observed['non_fallback_errors'] or observed['helper_required'], observed
+                        )
             finally:
                 cleanup_errors = []
                 for unit in (api_unit, controller_unit):
