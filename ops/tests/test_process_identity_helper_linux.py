@@ -101,9 +101,16 @@ def wait_for_unit_cgroup_empty(unit, expected=False, known_control_group='', tim
         time.sleep(0.05)
 
 
-def profile_source(role):
+def profile_source(role, api_unit=None):
     proc_rules = ''
+    dbus_rules = ''
     if role == 'helper':
+        if not api_unit:
+            raise ValueError('helper profile requires its fixed API unit name')
+        api_object = ''.join(
+            character if character.isalnum() else f'_{ord(character):02x}'
+            for character in api_unit
+        )
         proc_rules = '''\
             /proc/[0-9]*/exe r,
             /proc/[0-9]*/cwd r,
@@ -113,10 +120,17 @@ def profile_source(role):
             /proc/[0-9]*/attr/current r,
             /proc/[0-9]*/fd/ r,
             /proc/[0-9]*/fd/** r,
+            /proc/filesystems r,
+            owner /proc/[0-9]*/mounts r,
             /proc/net/tcp r,
             /run/dbus/system_bus_socket rw,
             /usr/bin/systemctl ix,
             network unix stream,
+'''
+        dbus_rules = f'''\
+            dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus member=Hello peer=(name=org.freedesktop.DBus),
+            dbus send bus=system path=/org/freedesktop/systemd1 interface=org.freedesktop.systemd1.Manager member=GetUnit peer=(name=org.freedesktop.systemd1),
+            dbus send bus=system path=/org/freedesktop/systemd1/unit/{api_object} interface=org.freedesktop.DBus.Properties member=GetAll peer=(name=org.freedesktop.systemd1),
 '''
     elif role == 'api':
         proc_rules = '''\
@@ -142,28 +156,61 @@ profile PROFILE_NAME flags=(attach_disconnected) {
     /etc/locale.alias r,
     /usr/lib/locale/locale-archive r,
     /usr/lib/locale/C.utf8/LC_CTYPE r,
+    /usr/lib/locale/C.utf8/LC_IDENTIFICATION r,
     /usr/share/zoneinfo/Etc/UTC r,
     /opt/fg-index-identity-helper-*/ r,
     /opt/fg-index-identity-helper-*/** r,
     network unix stream,
 PROFILE_RULES
+PROFILE_DBUS_RULES
 }
 '''
-    return textwrap.dedent(body.replace('PROFILE_RULES', proc_rules)).replace(
+    return textwrap.dedent(body.replace('PROFILE_RULES', proc_rules).replace('PROFILE_DBUS_RULES', dbus_rules)).replace(
         'PROFILE_NAME', 'fg-index-identity-policy-placeholder'
     )
 
 
-def profile_name_and_source(role):
-    canonical = profile_source(role).encode('utf-8')
+def profile_name_and_source(role, api_unit=None):
+    canonical = profile_source(role, api_unit).encode('utf-8')
     policy_digest = hashlib.sha256(canonical).hexdigest()
     name = f'fg-index-{role}-{policy_digest}'
-    generated = profile_source(role).replace('fg-index-identity-policy-placeholder', name)
+    generated = profile_source(role, api_unit).replace('fg-index-identity-policy-placeholder', name)
     source_digest = hashlib.sha256(generated.encode('utf-8')).hexdigest()
     return name, policy_digest, source_digest, generated
 
 
 class ProcessIdentityHelperCleanupTests(unittest.TestCase):
+    def test_helper_policy_scopes_dbus_to_reading_the_fixed_api_unit(self):
+        api_unit = 'fg-index-identity-helper-api-0123456789ab.service'
+        _, _, source_digest, policy = profile_name_and_source('helper', api_unit)
+        object_path = '/org/freedesktop/systemd1/unit/' + ''.join(
+            character if character.isalnum() else f'_{ord(character):02x}'
+            for character in api_unit
+        )
+
+        self.assertEqual(source_digest, hashlib.sha256(policy.encode('utf-8')).hexdigest())
+        self.assertIn(
+            'dbus send bus=system path=/org/freedesktop/DBus '
+            'interface=org.freedesktop.DBus member=Hello '
+            'peer=(name=org.freedesktop.DBus)',
+            policy,
+        )
+        self.assertIn(
+            'dbus send bus=system path=/org/freedesktop/systemd1 '
+            'interface=org.freedesktop.systemd1.Manager member=GetUnit '
+            'peer=(name=org.freedesktop.systemd1)',
+            policy,
+        )
+        self.assertIn(
+            f'dbus send bus=system path={object_path} '
+            'interface=org.freedesktop.DBus.Properties member=GetAll '
+            'peer=(name=org.freedesktop.systemd1)',
+            policy,
+        )
+        for forbidden in ('dbus send bus=system,', 'member=StartUnit', 'member=StopUnit',
+                          'member=RestartUnit'):
+            self.assertNotIn(forbidden, policy)
+
     def test_missing_unexpected_unit_is_clean(self):
         with mock.patch(__name__ + '.load_state', return_value='not-found'):
             self.assertTrue(wait_for_unit_cgroup_empty('fixture.service'))
@@ -233,7 +280,9 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
         controller_unit = f'fg-index-identity-helper-controller-{suffix}.service'
         helper_unit = f'fg-index-identity-helper-check-{suffix}.service'
         api_profile, api_policy_digest, api_source_digest, api_policy = profile_name_and_source('api')
-        helper_profile, helper_policy_digest, helper_source_digest, helper_policy = profile_name_and_source('helper')
+        helper_profile, helper_policy_digest, helper_source_digest, helper_policy = profile_name_and_source(
+            'helper', api_unit
+        )
 
         with tempfile.TemporaryDirectory(prefix='fg-index-identity-helper-', dir='/opt') as directory:
             fixture = Path(directory)
@@ -663,7 +712,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     "--property=ProtectHome=yes", "--property=PrivateTmp=yes",
                     "--property=RestrictAddressFamilies=AF_UNIX", "--property=Restart=no",
                     "--property=SystemCallFilter=~ptrace process_vm_readv process_vm_writev process_madvise pidfd_getfd",
-                    "--property=RuntimeMaxSec=20s", {PYTHON!r}, "-S", HELPER_SCRIPT,
+                    "--property=TimeoutStartSec=20s", {PYTHON!r}, "-S", HELPER_SCRIPT,
                 ]
                 print("API_PRE_HELPER_GATE=PASS HELPER_LAUNCH=ALLOWED", flush=True)
                 helper_stderr_file = tempfile.TemporaryFile()
