@@ -1,15 +1,16 @@
 """Linux measurement of zero-capability controller process identity reads.
 
 This test uses disposable systemd units only. It never reads or changes a
-production host. The API fixture runs as the unprivileged `nobody` account; the
-controller fixture mirrors the root, empty-capability service context. CI reports
-whether direct executable, cwd, pidfd, and listener ownership proof is
-available. Access denial is evidence to hold and consider the separately
-reviewed helper.
+production host. The API fixture runs as the unprivileged `fg-index` account;
+controller fixture mirrors the root, empty-capability service context. Direct
+executable, cwd, pidfd, and listener ownership proof is required. The complete
+observation is printed before assertions so access denial is visible in CI and
+keeps the check red until the design is resolved.
 """
 import json
 import os
 from pathlib import Path
+import pwd
 import socket
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ import uuid
 
 SYSTEMD = Path('/run/systemd/system')
 PYTHON = '/usr/bin/python3.12'
+CAPABILITY_STATUS_FIELDS = ('CapEff', 'CapPrm', 'CapBnd', 'CapAmb')
 
 
 def systemctl_show(unit, *properties):
@@ -48,6 +50,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='fg-index-identity-ci-', dir='/var/tmp') as directory:
             fixture = Path(directory)
             fixture.chmod(0o755)
+            api_user_created = False
             api_script_path = fixture / 'api_fixture.py'
             probe_script_path = fixture / 'controller_probe.py'
             api_script_path.write_text(textwrap.dedent('''\
@@ -71,6 +74,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 import subprocess
 
                 API_UNIT = {api_unit!r}
+                CAPABILITY_FIELDS = {CAPABILITY_STATUS_FIELDS!r}
 
                 def readlink(path):
                     try:
@@ -81,8 +85,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 def inspect():
                     with open("/proc/self/status", encoding="ascii") as reader:
                         status = dict(line.split(":", 1) for line in reader if ":" in line)
-                    capabilities = {{key: status[key].strip() for key in
-                                    ("CapEff", "CapPrm", "CapBnd", "CapAmb")}}
+                    capabilities = {{key: status[key].strip() for key in CAPABILITY_FIELDS}}
                     raw = subprocess.run(
                         ["/usr/bin/systemctl", "show", API_UNIT,
                          "--property=MainPID", "--property=InvocationID"],
@@ -146,7 +149,7 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
 
             start_api = [
                 '/usr/bin/systemd-run', '--quiet', '--collect', '--unit', api_unit,
-                '--property=Type=simple', '--property=User=nobody', '--property=Group=nogroup',
+                '--property=Type=simple', '--property=User=fg-index', '--property=Group=fg-index',
                 '--property=WorkingDirectory=' + directory,
                 '--property=CapabilityBoundingSet=', '--property=AmbientCapabilities=',
                 '--property=NoNewPrivileges=yes', '--property=ProtectSystem=strict',
@@ -154,8 +157,17 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 '--property=PrivateTmp=yes', '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
                 '--property=RuntimeMaxSec=30s', PYTHON, str(api_script_path),
             ]
-            subprocess.run(start_api, check=True, capture_output=True, timeout=15)
             try:
+                try:
+                    pwd.getpwnam('fg-index')
+                except KeyError:
+                    subprocess.run(
+                        ['/usr/sbin/useradd', '--system', '--user-group', '--no-create-home',
+                         '--shell', '/usr/sbin/nologin', 'fg-index'],
+                        check=True, capture_output=True, timeout=10,
+                    )
+                    api_user_created = True
+                subprocess.run(start_api, check=True, capture_output=True, timeout=15)
                 deadline = time.monotonic() + 10
                 while True:
                     try:
@@ -186,34 +198,21 @@ class ProcessIdentityLinuxTest(unittest.TestCase):
                 self.assertEqual(1, len(lines), result.stdout)
                 observed = json.loads(lines[0])
 
+                print('CONTROLLER_DIRECT_IDENTITY=' + json.dumps(observed, sort_keys=True))
                 self.assertEqual(int(api['MainPID']), observed['pid'], observed)
                 self.assertEqual(api['InvocationID'], observed['invocation_id'], observed)
-                self.assertEqual({key: '0000000000000000' for key in
-                                  ('CapEff', 'CapPrm', 'CapBnd', 'CapAmb')},
+                self.assertEqual({key: '0000000000000000' for key in CAPABILITY_STATUS_FIELDS},
                                  observed['capabilities'], observed)
+                self.assertEqual({'value': '/usr/bin/python3.12'}, observed['exe'], observed)
+                self.assertEqual({'value': directory}, observed['cwd'], observed)
                 self.assertTrue(observed.get('pidfd_live'), observed)
                 self.assertEqual(1, len(observed.get('listener_rows', [])), observed)
-                for key, expected in (('exe', '/usr/bin/python3.12'), ('cwd', directory)):
-                    value = observed[key]
-                    if value != {'value': expected}:
-                        self.assertIn(value, ({'errno': 'EACCES'}, {'errno': 'EPERM'}), observed)
-                if 'fd_error' in observed:
-                    self.assertIn(observed['fd_error'], ('EACCES', 'EPERM'), observed)
-                else:
-                    self.assertEqual(1, len(observed.get('fd_inodes', [])), observed)
-                    self.assertTrue(observed.get('listener_owned'), observed)
-
-                direct_proof = (
-                    observed['exe'] == {'value': '/usr/bin/python3.12'}
-                    and observed['cwd'] == {'value': directory}
-                    and 'fd_error' not in observed
-                    and observed.get('listener_owned') is True
-                )
-                outcome = 'PROVEN' if direct_proof else 'UNAVAILABLE; HOLD; helper candidate requires review'
-                print('CONTROLLER_DIRECT_IDENTITY=' + outcome + ':' + json.dumps(observed, sort_keys=True))
+                self.assertTrue(observed.get('listener_owned'), observed)
             finally:
                 subprocess.run(['/usr/bin/systemctl', 'stop', api_unit], capture_output=True, timeout=15)
                 subprocess.run(['/usr/bin/systemctl', 'reset-failed', api_unit], capture_output=True, timeout=10)
+                if api_user_created:
+                    subprocess.run(['/usr/sbin/userdel', 'fg-index'], capture_output=True, timeout=10)
 
 
 if __name__ == '__main__':
