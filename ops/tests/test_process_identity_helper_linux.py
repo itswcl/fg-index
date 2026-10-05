@@ -16,7 +16,6 @@ import shutil
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import textwrap
 import time
@@ -574,14 +573,33 @@ def private_receipt_matches(path, payload):
             or metadata.st_nlink not in (1, 2)
         ):
             return False
-        if hasattr(os, 'getxattr') and sys.platform.startswith('linux'):
-            try:
-                os.getxattr(descriptor, 'system.posix_acl_access')
-            except OSError as exc:
-                if exc.errno not in (errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)):
-                    raise
-            else:
+        parent_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+        parent_fd = os.open(path.parent, parent_flags)
+        try:
+            parent_metadata = os.fstat(parent_fd)
+            if (
+                not stat.S_ISDIR(parent_metadata.st_mode)
+                or parent_metadata.st_uid != os.geteuid()
+                or parent_metadata.st_mode & 0o777 != 0o700
+            ):
                 return False
+            if hasattr(os, 'getxattr'):
+                for target, attributes in (
+                    (descriptor, ('system.posix_acl_access',)),
+                    (parent_fd, ('system.posix_acl_access', 'system.posix_acl_default')),
+                ):
+                    for attribute in attributes:
+                        try:
+                            os.getxattr(target, attribute)
+                        except OSError as exc:
+                            if exc.errno not in (
+                                errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)
+                            ):
+                                raise
+                        else:
+                            return False
+        finally:
+            os.close(parent_fd)
         chunks = []
         while True:
             chunk = os.read(descriptor, 65536)
@@ -601,11 +619,22 @@ def private_receipt_matches(path, payload):
         os.close(descriptor)
 
 
+def remove_inherited_posix_acls(path):
+    if not hasattr(os, 'removexattr'):
+        raise RuntimeError('cannot verify and clear inherited POSIX ACLs')
+    for attribute in ('system.posix_acl_access', 'system.posix_acl_default'):
+        try:
+            os.removexattr(path, attribute, follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno not in (errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)):
+                raise
+
+
 def write_private_receipt(path, receipt):
     parent = path.parent.stat()
-    if parent.st_uid != os.geteuid() or parent.st_mode & 0o077:
-        raise PermissionError('receipt parent is not loader-owned and private from group/other')
-    if hasattr(os, 'getxattr') and sys.platform.startswith('linux'):
+    if parent.st_uid != os.geteuid() or parent.st_mode & 0o777 != 0o700:
+        raise PermissionError('receipt parent is not loader-owned with mode 0700')
+    if hasattr(os, 'getxattr'):
         for attribute in ('system.posix_acl_access', 'system.posix_acl_default'):
             try:
                 os.getxattr(path.parent, attribute, follow_symlinks=False)
@@ -724,7 +753,7 @@ def policy_validation_source():
     return '\n\n'.join(
         inspect.getsource(function) for function in (
             apparmor_feature_manifest, apparmor_parser_identity,
-            policy_pair_digest, verify_profile_pair,
+            policy_pair_digest, private_receipt_matches, verify_profile_pair,
             build_profile_pair_receipt, verify_profile_pair_receipt,
         )
     )
@@ -1010,6 +1039,10 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='fg-index-identity-helper-', dir='/opt') as directory:
             fixture = Path(directory)
             fixture.chmod(0o755)
+            remove_inherited_posix_acls(fixture)
+            fixture.chmod(0o755)
+            self.assertEqual(0, fixture.stat().st_uid)
+            self.assertEqual(0o755, fixture.stat().st_mode & 0o777)
             api_created = False
             group_created = False
             loaded_profiles = []
@@ -1028,6 +1061,10 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             helper_policy_path.write_text(helper_policy, encoding='utf-8')
             api_policy_path.chmod(0o600)
             helper_policy_path.chmod(0o600)
+            remove_inherited_posix_acls(receipt_directory)
+            receipt_directory.chmod(0o700)
+            self.assertEqual(0, receipt_directory.stat().st_uid)
+            self.assertEqual(0o700, receipt_directory.stat().st_mode & 0o777)
 
             receipt = {
                 'schema': 'fg-index.apparmor-policy-pair-receipt.v1',
@@ -1189,6 +1226,10 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
             ), 'HOLD: saved pair receipt does not match the canonical bundle')
             self.assertEqual(0, receipt_path.stat().st_uid, 'profile receipt must be root-owned')
             self.assertEqual(0o400, receipt_path.stat().st_mode & 0o777)
+            self.assertTrue(private_receipt_matches(
+                receipt_path,
+                json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode('ascii'),
+            ), 'HOLD: receipt file or parent has unsafe ownership, mode, ACL, or bytes')
 
             controller_script.write_text(textwrap.dedent(f'''\
                 import errno
@@ -1196,6 +1237,7 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 import json
                 import os
                 import select
+                import stat
                 import subprocess
                 import tempfile
                 import time
@@ -1367,6 +1409,15 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                 try:
                     pre_helper_receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
                     summary["api_profile_receipt_pre_helper_ok"] = (
+                        private_receipt_matches(
+                            Path(RECEIPT_PATH),
+                            json.dumps(
+                                build_profile_pair_receipt(
+                                    EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
+                                ), sort_keys=True, separators=(",", ":")
+                            ).encode("ascii"),
+                        )
+                        and
                         verify_profile_pair_receipt(
                             pre_helper_receipt, EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
                         )
@@ -1538,6 +1589,15 @@ class ProcessIdentityHelperLinuxTest(unittest.TestCase):
                     try:
                         receipt = json.load(open(RECEIPT_PATH, encoding="ascii"))
                         summary["profile_receipt_ok"] = (
+                            private_receipt_matches(
+                                Path(RECEIPT_PATH),
+                                json.dumps(
+                                    build_profile_pair_receipt(
+                                        EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
+                                    ), sort_keys=True, separators=(",", ":")
+                                ).encode("ascii"),
+                            )
+                            and
                             verify_profile_pair_receipt(
                                 receipt, EXPECTED_POLICY_BUNDLE, HELPER_FIXTURE_SHA256
                             )
