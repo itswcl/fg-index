@@ -2,14 +2,24 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import unittest
 import subprocess
+from unittest.mock import patch
 
 from ops.deploy_api_release import Deployment, DeploymentError, Host, Paths
+
+_POLLER_PATH = Path(__file__).parents[1] / "release-poller/poller.py"
+_POLLER_SPEC = importlib.util.spec_from_file_location("fg_index_real_release_poller", _POLLER_PATH)
+real_poller = importlib.util.module_from_spec(_POLLER_SPEC)
+sys.modules[_POLLER_SPEC.name] = real_poller
+_POLLER_SPEC.loader.exec_module(real_poller)
 
 CURRENT = "a" * 40
 PREVIOUS = "b" * 40
@@ -23,9 +33,13 @@ class FakeHost(Host):
         super().__init__(paths, owner_uid=os.geteuid())
         self.candidate = candidate
         self.promote_error = promote_error
+        self.verify_existing_error = None
         self.restart_error = restart_error
         self.promotions = []
         self.restarts = 0
+        self.existing_verifications = []
+        self.interrupt_after_install = False
+        self.on_poll = None
         self.poll_error = None
         self.on_restart = None
         self.main_sha = None
@@ -36,6 +50,8 @@ class FakeHost(Host):
     def poll(self):
         if self.poll_error:
             raise self.poll_error
+        if self.on_poll:
+            self.on_poll()
         return self.candidate
 
     def promote(self, sha):
@@ -43,6 +59,26 @@ class FakeHost(Host):
         if self.promote_error:
             raise self.promote_error
         _make_release(self.paths.releases / sha, sha)
+        if self.interrupt_after_install:
+            self.interrupt_after_install = False
+            raise KeyboardInterrupt("simulated process interruption after release rename")
+
+    def verify_existing(self, sha):
+        self.existing_verifications.append(sha)
+        if self.verify_existing_error:
+            raise self.verify_existing_error
+        root = self.paths.releases / sha
+        manifest = root / "RELEASE-MANIFEST.txt"
+        entry = root / "apps/api-server/dist/index.js"
+        actual_paths = {path.relative_to(root).as_posix() for path in root.rglob("*")}
+        expected_paths = {
+            "apps", "apps/api-server", "apps/api-server/dist", "RELEASE-MANIFEST.txt",
+            "apps/api-server/dist/index.js",
+        }
+        if (actual_paths != expected_paths or not manifest.is_file() or
+                manifest.read_text() != f"source_commit={sha}\n" or not entry.is_file() or
+                entry.read_text() != "// fixture\n"):
+            raise DeploymentError("existing release tree does not match authenticated archive")
 
     def restart(self):
         self.restarts += 1
@@ -57,6 +93,33 @@ def _make_release(path: Path, sha: str):
     app.mkdir(parents=True)
     (app / "index.js").write_text("// fixture\n")
     (path / "RELEASE-MANIFEST.txt").write_text(f"source_commit={sha}\n")
+
+
+def _make_staged_candidate(path: Path, sha: str, verified_at: str):
+    path.mkdir(mode=0o700, parents=True)
+    archive = b"poller retention fixture archive"
+    checksum = f"{hashlib.sha256(archive).hexdigest()}  {real_poller.ARCHIVE_NAME}\n".encode()
+    bundle = b'{"dsseEnvelope":{}}\n'
+    (path / "RELEASE-MANIFEST.txt").write_text(f"source_commit={sha}\n")
+    (path / real_poller.ARCHIVE_NAME).write_bytes(archive)
+    (path / real_poller.CHECKSUM_NAME).write_bytes(checksum)
+    (path / real_poller.ATTESTATION_BUNDLE_NAME).write_bytes(bundle)
+    metadata = {
+        "repository": real_poller.REPO,
+        "source_sha": sha,
+        "source_ref": "refs/heads/main",
+        "tag": f"api-{sha}",
+        "release_id": 1,
+        "archive_sha256": hashlib.sha256(archive).hexdigest(),
+        "checksum_asset_sha256": hashlib.sha256(checksum).hexdigest(),
+        "attestation_bundle_sha256": hashlib.sha256(bundle).hexdigest(),
+        "attestation_workflow": real_poller.WORKFLOW,
+        "attestation_predicate": real_poller.PREDICATE,
+        "verified_at": verified_at,
+    }
+    (path / real_poller.MARKER_NAME).write_text(json.dumps(metadata))
+    for item in path.iterdir():
+        item.chmod(0o600)
 
 
 class DeploymentTest(unittest.TestCase):
@@ -78,11 +141,12 @@ class DeploymentTest(unittest.TestCase):
         _make_release(self.paths.releases / PREVIOUS, PREVIOUS)
         self.paths.current.symlink_to(self.paths.releases / CURRENT)
         self.state = {
-            "schema_version": 1,
+            "schema_version": 2,
             "selected_sha": CURRENT,
             "previous_sha": PREVIOUS,
             "suppressed_shas": [],
             "restart_status": "succeeded",
+            "promotion_intent_sha": None,
         }
         self.host = FakeHost(self.paths)
         self.deploy = Deployment(self.host)
@@ -149,6 +213,7 @@ class DeploymentTest(unittest.TestCase):
             self.deploy.once()
         self.assertEqual(CURRENT, self.deploy.selected_link())
         self.assertEqual(CURRENT, self.read_state()["selected_sha"])
+        self.assertEqual(INCOMING, self.read_state()["promotion_intent_sha"])
         self.assertEqual(0, self.host.restarts)
 
     def test_verified_release_is_durably_selected_before_fixed_restart(self):
@@ -205,6 +270,118 @@ class DeploymentTest(unittest.TestCase):
         self.assertIn("already selected", self.deploy.once())
         self.assertEqual(1, self.host.restarts)
         self.assertEqual([INCOMING], self.host.promotions)
+
+    def test_interruption_after_promotion_rename_recovers_and_duplicate_cadence_is_idempotent(self):
+        self.host.candidate = INCOMING
+        self.host.interrupt_after_install = True
+        with self.assertRaisesRegex(KeyboardInterrupt, "after release rename"):
+            self.deploy.once()
+
+        self.assertEqual(INCOMING, self.read_state()["promotion_intent_sha"])
+        self.assertIn(INCOMING, json.loads(self.paths.retention_policy.read_text())["protected_shas"])
+        self.assertEqual(CURRENT, self.deploy.selected_link())
+        self.assertEqual(0, self.host.restarts)
+
+        self.assertIn("fixed API restart attempted", self.deploy.once())
+        self.assertEqual(INCOMING, self.read_state()["selected_sha"])
+        self.assertIsNone(self.read_state()["promotion_intent_sha"])
+        self.assertEqual([INCOMING], self.host.existing_verifications)
+        self.assertEqual([INCOMING], self.host.promotions)
+        self.assertEqual(1, self.host.restarts)
+
+        self.assertIn("already selected", self.deploy.once())
+        self.assertEqual(1, self.host.restarts)
+        self.assertEqual([INCOMING], self.host.promotions)
+
+    def test_main_advance_after_interrupted_promotion_verifies_and_retires_orphan(self):
+        self.host.candidate = INCOMING
+        self.host.interrupt_after_install = True
+        with self.assertRaises(KeyboardInterrupt):
+            self.deploy.once()
+
+        self.host.main_sha = ADVANCED
+        self.host.candidate = ADVANCED
+        def assert_orphan_retired_before_poller():
+            self.assertFalse((self.paths.releases / INCOMING).exists())
+            protected = json.loads(self.paths.retention_policy.read_text())["protected_shas"]
+            self.assertNotIn(INCOMING, protected)
+
+        self.host.on_poll = assert_orphan_retired_before_poller
+        self.assertIn("fixed API restart attempted", self.deploy.once())
+        self.assertEqual([INCOMING], self.host.existing_verifications)
+        self.assertFalse((self.paths.releases / INCOMING).exists())
+        self.assertEqual(ADVANCED, self.read_state()["selected_sha"])
+        self.assertIsNone(self.read_state()["promotion_intent_sha"])
+        self.assertEqual(1, self.host.restarts)
+        self.assertEqual([INCOMING, ADVANCED], self.host.promotions)
+
+    def test_real_poller_retires_interrupted_intent_candidate_before_staging_new_main(self):
+        _make_staged_candidate(self.paths.staged / CURRENT, CURRENT, "2026-01-01T00:00:00+00:00")
+        _make_staged_candidate(self.paths.staged / PREVIOUS, PREVIOUS, "2026-02-01T00:00:00+00:00")
+        _make_staged_candidate(self.paths.staged / INCOMING, INCOMING, "2026-03-01T00:00:00+00:00")
+
+        class PollerBackedHost(FakeHost):
+            def poll(inner_self):
+                sha = inner_self.current_main_sha()
+                poller = real_poller.ReleasePoller(
+                    inner_self.paths.staged.parent,
+                    retention_policy=inner_self.paths.retention_policy,
+                )
+                with patch.object(real_poller.ReleasePoller, "_policy_file_is_root_owned", return_value=True):
+                    poller._enforce_retention(
+                        sha, incoming_candidate=not (inner_self.paths.staged / sha).exists()
+                    )
+                staged = inner_self.paths.staged / sha
+                if not staged.exists():
+                    _make_staged_candidate(staged, sha, "2026-04-01T00:00:00+00:00")
+                return sha
+
+        self.host = PollerBackedHost(self.paths)
+        self.host.candidate = INCOMING
+        self.host.interrupt_after_install = True
+        self.deploy = Deployment(self.host)
+        self.deploy.save(self.state)
+        with self.assertRaises(KeyboardInterrupt):
+            self.deploy.once()
+        self.assertTrue((self.paths.staged / INCOMING).exists())
+        self.assertEqual(INCOMING, self.read_state()["promotion_intent_sha"])
+
+        self.host.main_sha = ADVANCED
+        self.assertIn("fixed API restart attempted", self.deploy.once())
+        self.assertTrue((self.paths.staged / CURRENT).exists())
+        self.assertTrue((self.paths.staged / PREVIOUS).exists())
+        self.assertFalse((self.paths.staged / INCOMING).exists())
+        self.assertTrue((self.paths.staged / ADVANCED).exists())
+        self.assertEqual(ADVANCED, self.read_state()["selected_sha"])
+        self.assertEqual(1, self.host.restarts)
+
+    def test_interrupted_promotion_with_tampered_tree_is_not_adopted_or_deleted(self):
+        self.host.candidate = INCOMING
+        self.host.interrupt_after_install = True
+        with self.assertRaises(KeyboardInterrupt):
+            self.deploy.once()
+        (self.paths.releases / INCOMING / "unexpected").write_text("untrusted\n")
+
+        with self.assertRaisesRegex(DeploymentError, "authenticated archive"):
+            self.deploy.once()
+        self.assertTrue((self.paths.releases / INCOMING / "unexpected").exists())
+        self.assertEqual(CURRENT, self.read_state()["selected_sha"])
+        self.assertEqual(INCOMING, self.read_state()["promotion_intent_sha"])
+        self.assertEqual(0, self.host.restarts)
+
+    def test_interrupted_promotion_capacity_failure_keeps_selection_and_does_not_restart(self):
+        self.host.candidate = INCOMING
+        self.host.interrupt_after_install = True
+        with self.assertRaises(KeyboardInterrupt):
+            self.deploy.once()
+        self.host.verify_existing_error = DeploymentError("insufficient release-tree free space reserve")
+
+        with self.assertRaisesRegex(DeploymentError, "free space reserve"):
+            self.deploy.once()
+        self.assertEqual(CURRENT, self.read_state()["selected_sha"])
+        self.assertEqual(INCOMING, self.read_state()["promotion_intent_sha"])
+        self.assertEqual(CURRENT, self.deploy.selected_link())
+        self.assertEqual(0, self.host.restarts)
 
     def test_manual_rollback_selects_recorded_previous_and_suppresses_failed_sha(self):
         _make_release(self.paths.releases / INCOMING, INCOMING)

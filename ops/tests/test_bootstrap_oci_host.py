@@ -12,8 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ops.bootstrap_oci_host import (
-    BOOTSTRAP_SOURCE, COMMANDS, ENV_FILE, MANAGED_DIRS, PROMOTER_SOURCE,
-    PROMOTER_TARGET, SERVICE_SOURCE, SERVICE_TARGET, SOURCE_HASHES,
+    BOOTSTRAP_SOURCE, COMMANDS, ENV_FILE, LEGACY_POLLER_SHA, MANAGED_DIRS, POLLER_SOURCE,
+    POLLER_TARGET, PROMOTER_SOURCE, PROMOTER_TARGET, SERVICE_SOURCE, SERVICE_TARGET, SOURCE_HASHES,
     FORWARD_RELATIONS, REVERSE_RELATIONS,
     BootstrapError, HostBootstrap, Identity,
 )
@@ -25,7 +25,7 @@ class BootstrapTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.repo = self.root / "root/stage"
-        for relative in (BOOTSTRAP_SOURCE, SERVICE_SOURCE, PROMOTER_SOURCE):
+        for relative in (BOOTSTRAP_SOURCE, SERVICE_SOURCE, PROMOTER_SOURCE, POLLER_SOURCE):
             source = self.repo / relative
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_bytes((Path(__file__).parents[2] / relative).read_bytes())
@@ -129,7 +129,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_apply_and_rerun_preserve_files_and_inactive_state(self):
         self.bootstrap.apply()
-        targets = (self.path(SERVICE_TARGET), self.path(PROMOTER_TARGET))
+        targets = (self.path(SERVICE_TARGET), self.path(PROMOTER_TARGET), self.path(POLLER_TARGET))
         before = [(p.read_bytes(), p.stat().st_ino) for p in targets]
         self.commands.clear()
         self.bootstrap.apply()
@@ -141,6 +141,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
         self.assertEqual(stat.S_IMODE(targets[0].stat().st_mode), 0o644)
         self.assertEqual(stat.S_IMODE(targets[1].stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(targets[2].stat().st_mode), 0o755)
         self.assertFalse(self.path(ENV_FILE).exists())
         self.assertFalse(self.path(Path("/opt/fg-index/current")).exists())
         self.assertFalse(any(c[1] in ("start", "enable", "restart", "stop") for c in self.commands))
@@ -155,17 +156,29 @@ class BootstrapTests(unittest.TestCase):
         self.assertIsNone(self.group)
 
     def test_conflicting_service_or_promoter_is_not_overwritten(self):
-        for target in (SERVICE_TARGET, PROMOTER_TARGET):
+        for target in (SERVICE_TARGET, PROMOTER_TARGET, POLLER_TARGET):
             with self.subTest(target=target):
                 file = self.path(target)
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text("unexpected")
-                file.chmod(0o755 if target == PROMOTER_TARGET else 0o644)
+                file.chmod(0o644 if target == SERVICE_TARGET else 0o755)
                 with self.assertRaisesRegex(BootstrapError, "differs from reviewed source"):
                     self.bootstrap.apply()
                 self.assertEqual(file.read_text(), "unexpected")
                 file.unlink()
         self.assertIsNone(self.group)
+
+    def test_source_pinned_legacy_poller_is_preserved_for_transition(self):
+        target = self.path(POLLER_TARGET)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy = b"legacy poller source fixture\n"
+        target.write_bytes(legacy)
+        target.chmod(0o755)
+        self.owners[target] = (0, 0)
+        with patch("ops.bootstrap_oci_host.LEGACY_POLLER_SHA", hashlib.sha256(legacy).hexdigest()):
+            self.bootstrap.plan()
+            self.bootstrap.apply()
+        self.assertEqual(legacy, target.read_bytes())
 
     def test_global_service_active_enabled_vendor_and_dropins_block(self):
         cases = [
@@ -234,7 +247,7 @@ class BootstrapTests(unittest.TestCase):
             self.bootstrap.plan()
 
     def test_target_ancestors_reject_dangling_symlinks_and_writable_dirs(self):
-        for target in (SERVICE_TARGET.parent, PROMOTER_TARGET.parent):
+        for target in (SERVICE_TARGET.parent, PROMOTER_TARGET.parent, POLLER_TARGET.parent):
             path = self.path(target)
             with self.subTest(target=target):
                 path.mkdir(parents=True, exist_ok=True)

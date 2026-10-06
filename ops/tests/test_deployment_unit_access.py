@@ -19,7 +19,11 @@ class DeploymentUnitTest(unittest.TestCase):
         service = unit["Service"]
         self.assertEqual("oneshot", service["Type"])
         self.assertEqual("root", service["User"])
-        self.assertEqual("10min", service["TimeoutStartSec"])
+        self.assertEqual("20min", service["TimeoutStartSec"])
+        stale_intent_recovery_and_deploy_budget = 10 + 240 + 10 + 190 + 10 + 240 + 10 + 180
+        timeout_seconds = 20 * 60
+        self.assertEqual(890, stale_intent_recovery_and_deploy_budget)
+        self.assertEqual(310, timeout_seconds - stale_intent_recovery_and_deploy_budget)
         self.assertEqual("/usr/bin/python3.12 /usr/local/libexec/fg-index-deployment/deploy_api_release.py --once",
                          service["ExecStart"])
         self.assertIn("/opt/fg-index", service["ReadWritePaths"])

@@ -25,6 +25,7 @@ SCHEDULER_OWNER_DROPIN_SHA = "32452cac8814231866521e8e5af192f7aa4df9b12573309ac0
 INSTALLED_DEPLOY_SHA = "a3355366163acfcfb10bdd76b38254e194eac339a238d6416696b4a770dc4ad9"
 INSTALLED_RETENTION_SHA = "7ac75bcbef9d9a4ae973c81481a3bdcc5e32894daff4c6ea93d4b25b81a66ec4"
 INSTALLED_PROMOTER_SHA = "41ad26d7a79978feda663f9e0a5b08dc0a8608599223de082345fd65ba03c3d0"
+INSTALLED_POLLER_SHA = "1a1bd8f161cdc7c4fce82ed5137aa1de9b0c4f8868bb82ffd9155e5d3c180700"
 OLD_UNIT_HASHES = {
     "fg-index-api.service": "9cb776ed9cf94d692ec9afbe44b92a6de92320a645034e9778712df2200d4dcd",
     "fg-index-api.service.d/20-deployment-boot-guard.conf": BOOT_GUARD_DROPIN_SHA,
@@ -121,11 +122,13 @@ class Host:
                  app=Path("/opt/fg-index"), node=Path("/opt/nodejs"), state=Path("/var/lib/fg-index-deployment"),
                  config=Path("/etc/fg-index"), poller_config=Path("/etc/fg-index-release-poller"),
                  libexec=Path("/usr/local/libexec/fg-index-deployment"), promoter=Path("/usr/local/libexec/fg-index-release-promoter/promote_api_release.py"),
+                 poller_helper=Path("/usr/local/libexec/fg-index-release-poller/poller.py"),
                  owner_uid: int = 0, group_id: int | None = None):
         self.source = source
         self.command = command
         self.systemd, self.app, self.node, self.state = systemd, app, node, state
         self.config, self.poller_config, self.libexec, self.promoter = config, poller_config, libexec, promoter
+        self.poller_helper = poller_helper
         self.owner_uid = owner_uid
         self.group_id = grp.getgrnam("fg-index").gr_gid if group_id is None else group_id
 
@@ -156,6 +159,11 @@ class Host:
             if path.exists() or path.is_symlink():
                 require(not path.is_symlink() and path.is_file() and sha256_file(path) == expected,
                         f"installed helper drift at {path.name}; review it before transition")
+        if self.poller_helper.exists() or self.poller_helper.is_symlink():
+            reviewed_sha = sha256_file(self.source / "ops/release-poller/poller.py")
+            require(not self.poller_helper.is_symlink() and self.poller_helper.is_file() and
+                    sha256_file(self.poller_helper) in {INSTALLED_POLLER_SHA, reviewed_sha},
+                    "installed poller helper drift; review it before transition")
         if self.promoter.exists() or self.promoter.is_symlink():
             require(not self.promoter.is_symlink() and self.promoter.is_file() and
                     sha256_file(self.promoter) == INSTALLED_PROMOTER_SHA,
@@ -356,6 +364,7 @@ class Host:
         files = {
             self.source / "ops/deploy_api_release.py": self.libexec / "deploy_api_release.py",
             self.source / "ops/promote_api_release.py": self.promoter,
+            self.source / "ops/release-poller/poller.py": self.poller_helper,
             self.source / "ops/deployment/systemd/fg-index-deployment.service": self.systemd / "fg-index-deployment.service",
             self.source / "ops/deployment/systemd/fg-index-deployment.timer": self.systemd / "fg-index-deployment.timer",
         }
@@ -427,8 +436,9 @@ class Host:
         if old_retention_helper.exists():
             old_retention_helper.unlink()
 
-        state = {"schema_version": 1, "selected_sha": current_sha, "previous_sha": previous_sha,
-                 "suppressed_shas": sorted(suppress), "restart_status": "not-attempted"}
+        state = {"schema_version": 2, "selected_sha": current_sha, "previous_sha": previous_sha,
+                 "suppressed_shas": sorted(suppress), "restart_status": "not-attempted",
+                 "promotion_intent_sha": None}
         # Initialize from old verified receipts; no release is started here.
         self.atomic_json(self.state / "state.json", state, 0o600)
         self.atomic_json(self.poller_config / "retention-policy.json",

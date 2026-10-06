@@ -24,21 +24,26 @@ USER = "fg-index"
 SERVICE = "fg-index-api.service"
 SERVICE_SOURCE = Path("ops/oci/fg-index-api.service")
 PROMOTER_SOURCE = Path("ops/promote_api_release.py")
+POLLER_SOURCE = Path("ops/release-poller/poller.py")
 SERVICE_TARGET = Path("/etc/systemd/system/fg-index-api.service")
 PROMOTER_TARGET = Path("/usr/local/libexec/fg-index-release-promoter/promote_api_release.py")
+POLLER_TARGET = Path("/usr/local/libexec/fg-index-release-poller/poller.py")
+LEGACY_POLLER_SHA = "1a1bd8f161cdc7c4fce82ed5137aa1de9b0c4f8868bb82ffd9155e5d3c180700"
 MANAGED_DIRS = {
     Path("/var/lib/fg-index"): (USER, GROUP, 0o750),
     Path("/opt/fg-index"): ("root", GROUP, 0o750),
     Path("/opt/fg-index/releases"): ("root", GROUP, 0o750),
     Path("/etc/fg-index"): ("root", GROUP, 0o750),
     Path("/usr/local/libexec/fg-index-release-promoter"): ("root", "root", 0o755),
+    Path("/usr/local/libexec/fg-index-release-poller"): ("root", "root", 0o755),
 }
 RESERVED_CURRENT = Path("/opt/fg-index/current")
 ENV_FILE = Path("/etc/fg-index/api.env")
 BOOTSTRAP_SOURCE = Path("ops/bootstrap_oci_host.py")
 SOURCE_HASHES = {
     SERVICE_SOURCE: "9cb776ed9cf94d692ec9afbe44b92a6de92320a645034e9778712df2200d4dcd",
-    PROMOTER_SOURCE: "8e3cb5b8481f10122bcf7b311ab2f8a8ec2fb39be7a0f36941974ef3e433933d",
+    PROMOTER_SOURCE: "71086b7e57eeb2c392bbca6c43155dc3d9369006be6da132c6822ed107bc0cdb",
+    POLLER_SOURCE: "a9885c0c81f496dfef479d6b4547bfd009ada94af230611224abf208f8cf9ecd",
 }
 COMMANDS = {
     "systemctl": "/usr/bin/systemctl",
@@ -183,8 +188,8 @@ class HostBootstrap:
             # parents need root ownership and no group/other write permissions.
             self._safe_existing_directory(path, owner=0, group=None)
 
-    def _read_sources(self) -> tuple[bytes, bytes]:
-        for relative in (BOOTSTRAP_SOURCE, SERVICE_SOURCE, PROMOTER_SOURCE):
+    def _read_sources(self) -> tuple[bytes, bytes, bytes]:
+        for relative in (BOOTSTRAP_SOURCE, SERVICE_SOURCE, PROMOTER_SOURCE, POLLER_SOURCE):
             path = self.repo_root / relative
             for parent in reversed(path.parents):
                 if parent == self.root or self.root in parent.parents:
@@ -194,7 +199,7 @@ class HostBootstrap:
                 raise BootstrapError(f"source must be a root-owned non-writable regular file: {path}")
             self._reject_acl(path)
         contents = []
-        for relative in (SERVICE_SOURCE, PROMOTER_SOURCE):
+        for relative in (SERVICE_SOURCE, PROMOTER_SOURCE, POLLER_SOURCE):
             digest = self.source_hashes[relative]
             path = self.repo_root / relative
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -203,7 +208,7 @@ class HostBootstrap:
             if len(content) > 1024 * 1024 or hashlib.sha256(content).hexdigest() != digest:
                 raise BootstrapError(f"source SHA-256 does not match reviewed code: {relative}")
             contents.append(content)
-        return contents[0], contents[1]
+        return contents[0], contents[1], contents[2]
 
     def _service_state(self, *, installed: bool, allow_unloaded: bool = False) -> None:
         active = self._run(("systemctl", "is-active", SERVICE), check=False)
@@ -315,7 +320,7 @@ class HostBootstrap:
         if any(entry.pw_uid == uid and entry.pw_name != USER for entry in self.passwd_lookup()):
             raise BootstrapError("fg-index UID is shared with another account name")
 
-    def _preflight(self) -> tuple[Identity | None, tuple[int, int, str, str] | None, bytes, bytes]:
+    def _preflight(self) -> tuple[Identity | None, tuple[int, int, str, str] | None, bytes, bytes, bytes]:
         if sys.platform != "linux":
             raise BootstrapError("host bootstrap requires Linux")
         if sys.version_info < (3, 12):
@@ -325,7 +330,7 @@ class HostBootstrap:
         for command, path in COMMANDS.items():
             if not os.access(self._path(Path(path)), os.X_OK):
                 raise BootstrapError(f"required host command is unavailable: {command}")
-        service_source, promoter_source = self._read_sources()
+        service_source, promoter_source, poller_source = self._read_sources()
         if b"[Install]" not in service_source or b"WantedBy=multi-user.target" not in service_source:
             raise BootstrapError("reviewed service unit must be installable for a later explicit enable")
 
@@ -366,7 +371,7 @@ class HostBootstrap:
             owner=0,
             group=0,
         )
-        for target, mode in ((SERVICE_TARGET, 0o644), (PROMOTER_TARGET, 0o755)):
+        for target, mode in ((SERVICE_TARGET, 0o644), (PROMOTER_TARGET, 0o755), (POLLER_TARGET, 0o755)):
             path = self._path(target)
             if path.exists() and stat.S_IMODE(self.metadata(path).st_mode) != mode:
                 raise BootstrapError(f"existing file has unexpected mode: {target}")
@@ -376,6 +381,17 @@ class HostBootstrap:
             owner=0,
             group=0,
         )
+        poller_path = self._path(POLLER_TARGET)
+        if poller_path.exists() or poller_path.is_symlink():
+            metadata = self.metadata(poller_path)
+            if stat.S_ISREG(metadata.st_mode) and hashlib.sha256(poller_path.read_bytes()).hexdigest() == LEGACY_POLLER_SHA:
+                # Bootstrap leaves the source-pinned legacy helper for the
+                # reviewed transition to replace after stopping its cadence.
+                self._safe_existing_file(poller_path, poller_path.read_bytes(), owner=0, group=0)
+            else:
+                self._safe_existing_file(poller_path, poller_source, owner=0, group=0)
+        else:
+            self._safe_existing_file(poller_path, poller_source, owner=0, group=0)
 
         env_path = self._path(ENV_FILE)
         if env_path.exists() or env_path.is_symlink():
@@ -393,10 +409,10 @@ class HostBootstrap:
         self._activation_safety()
         self._service_state(installed=self._path(SERVICE_TARGET).exists(), allow_unloaded=True)
 
-        return group, user, service_source, promoter_source
+        return group, user, service_source, promoter_source, poller_source
 
     def plan(self) -> list[str]:
-        group, user, _service, _promoter = self._preflight()
+        group, user, _service, _promoter, _poller = self._preflight()
         actions = []
         if group is None:
             actions.append("create system group fg-index")
@@ -408,6 +424,7 @@ class HostBootstrap:
         )
         actions.append("install reviewed fg-index-api.service and reload systemd without enabling or starting it")
         actions.append("install reviewed promoter helper under /usr/local/libexec without running it")
+        actions.append("install reviewed release poller helper if absent; transition replaces the pinned legacy helper")
         actions.append("verify the API unit remains disabled and inactive")
         actions.append("leave api.env, releases, current, Caddy, firewall, timers, schedulers, and OCI settings untouched")
         return actions
@@ -428,7 +445,7 @@ class HostBootstrap:
             self._apply_locked()
 
     def _apply_locked(self) -> None:
-        group, user, service_source, promoter_source = self._preflight()
+        group, user, service_source, promoter_source, poller_source = self._preflight()
         if group is None:
             self._run(("groupadd", "--system", GROUP))
             group = self.group_lookup(GROUP)
@@ -465,8 +482,10 @@ class HostBootstrap:
 
         service_path = self._path(SERVICE_TARGET)
         promoter_path = self._path(PROMOTER_TARGET)
+        poller_path = self._path(POLLER_TARGET)
         self._install_file(service_path, service_source, 0o644)
         self._install_file(promoter_path, promoter_source, 0o755)
+        self._install_file(poller_path, poller_source, 0o755)
         self._run(("systemctl", "daemon-reload"))
         self._activation_safety()
         self._service_state(installed=True)

@@ -108,10 +108,12 @@ class TransitionApplyTest(unittest.TestCase):
         self.node = self.root / "opt/nodejs"
         self.libexec = self.root / "usr/local/libexec/fg-index-deployment"
         self.promoter = self.root / "usr/local/libexec/fg-index-release-promoter/promote_api_release.py"
+        self.poller_helper = self.root / "usr/local/libexec/fg-index-release-poller/poller.py"
         self.source = self.root / "reviewed-source"
         for path in (self.releases, self.state, self.systemd / "fg-index-api.service.d",
                      self.config, self.poller_config, self.node / "releases/node-v24.21.0/bin",
-                     self.libexec, self.promoter.parent, self.source / "ops/deployment/systemd"):
+                     self.libexec, self.promoter.parent, self.poller_helper.parent,
+                     self.source / "ops/deployment/systemd"):
             path.mkdir(parents=True, exist_ok=True)
         self._release(self.current)
         self._release(self.previous)
@@ -181,13 +183,15 @@ class TransitionApplyTest(unittest.TestCase):
 
         self._copy_source("ops/deploy_api_release.py")
         self._copy_source("ops/promote_api_release.py")
+        self._copy_source("ops/release-poller/poller.py")
         for relative in ("ops/deployment/systemd/fg-index-deployment.service",
                          "ops/deployment/systemd/fg-index-deployment.timer"):
             self._copy_source(relative)
         self.host = FakeTransitionHost(
             self.source, systemd=self.systemd, app=self.app, node=self.node, state=self.state,
             config=self.config, poller_config=self.poller_config, libexec=self.libexec,
-            promoter=self.promoter, owner_uid=self.uid, group_id=self.gid,
+            promoter=self.promoter, poller_helper=self.poller_helper,
+            owner_uid=self.uid, group_id=self.gid,
         )
 
     def tearDown(self):
@@ -248,6 +252,8 @@ class TransitionApplyTest(unittest.TestCase):
         self.assertEqual(self.previous, new_state["previous_sha"])
         self.assertEqual([self.previous], new_state["suppressed_shas"])
         self.assertEqual("not-attempted", new_state["restart_status"])
+        self.assertEqual(2, new_state["schema_version"])
+        self.assertIsNone(new_state["promotion_intent_sha"])
         archived = self.state / "pre-simple-deployment/fg-index-deployment-state.json"
         self.assertEqual(self.legacy_state_bytes, archived.read_bytes())
         poller_policy = self.poller_config / "retention-policy.json"
@@ -256,6 +262,9 @@ class TransitionApplyTest(unittest.TestCase):
         self.assertEqual(self.api_env_bytes, (self.config / "api.env").read_bytes())
         self.assertEqual(self.scheduler_bytes,
                          (self.systemd / "fg-index-api.service.d/10-scheduler-owner.conf").read_bytes())
+        self.assertEqual((self.source / "ops/release-poller/poller.py").read_bytes(),
+                         self.poller_helper.read_bytes())
+        self.assertEqual(0o755, stat.S_IMODE(self.poller_helper.stat().st_mode))
         self.assertFalse((self.systemd / "fg-index-api.service.d/20-deployment-boot-guard.conf").exists())
         self.assertFalse((self.systemd / "fg-index-api-boot-guard.service").exists())
         self.assertFalse((self.systemd / "fg-index-deployment-watchdog.service").exists())
@@ -264,6 +273,15 @@ class TransitionApplyTest(unittest.TestCase):
         self.assertEqual(str(self.node / "releases/node-v24.21.0"), os.readlink(self.node / "current"))
         self.assertFalse(any("start" in call and "fg-index-api.service" in call for call in self.host.commands))
         self.assertFalse(any("enable" in call for call in self.host.commands))
+
+    def test_transition_accepts_only_legacy_or_exact_reviewed_poller_helper(self):
+        shutil.copyfile(self.source / "ops/release-poller/poller.py", self.poller_helper)
+        self._own(self.poller_helper, 0o755)
+        Host.assert_old_helpers(self.host)
+
+        self.poller_helper.write_text("unexpected poller helper\n")
+        with self.assertRaisesRegex(TransitionError, "poller helper drift"):
+            Host.assert_old_helpers(self.host)
 
     def test_bad_retained_artifact_verification_fails_before_host_mutation(self):
         self.host.verification_fails = True

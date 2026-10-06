@@ -193,6 +193,29 @@ class PromoteApiReleaseTests(unittest.TestCase):
         self.assertFalse(any(path.name.startswith(".promote-") for path in self.releases.iterdir()))
         self.assertEqual(1, len(self.commands))
 
+    def test_verify_existing_compares_full_release_tree_to_authenticated_archive(self) -> None:
+        destination = self.promoter.promote(SOURCE_SHA)
+        verified = self.promoter.promote(SOURCE_SHA, verify_only=True, verify_existing=True)
+        self.assertEqual(destination, verified)
+        self.assertEqual(2, len(self.commands))
+
+        (destination / "apps/api-server/dist/index.js").write_text("tampered\n")
+        with self.assertRaisesRegex(PromotionError, "does not match the authenticated staged archive"):
+            self.promoter.promote(SOURCE_SHA, verify_only=True, verify_existing=True)
+
+    def test_verify_existing_requires_an_installed_directory(self) -> None:
+        with self.assertRaisesRegex(PromotionError, "existing release does not exist"):
+            self.promoter.promote(SOURCE_SHA, verify_only=True, verify_existing=True)
+
+    def test_verify_existing_preserves_release_capacity_reserves(self) -> None:
+        self.promoter.promote(SOURCE_SHA)
+        self.promoter._capacity_preflight = lambda *_args: (_ for _ in ()).throw(
+            PromotionError("insufficient release-tree free space including reserve")
+        )
+        with self.assertRaisesRegex(PromotionError, "insufficient release-tree free space"):
+            self.promoter.promote(SOURCE_SHA, verify_only=True, verify_existing=True)
+        self.assertTrue((self.releases / SOURCE_SHA / MANIFEST_NAME).is_file())
+
     def test_gh_verification_is_pinned_and_offline_without_credentials(self) -> None:
         self.promoter.promote(SOURCE_SHA)
         command, kwargs = self.commands[0]

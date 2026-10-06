@@ -79,9 +79,10 @@ def _fsync_dir(path: Path) -> None:
 
 def _validate_state(value: object) -> dict:
     _require(isinstance(value, dict), "deployment state is not an object")
-    _require(set(value) == {"schema_version", "selected_sha", "previous_sha", "suppressed_shas", "restart_status"},
+    _require(set(value) == {"schema_version", "selected_sha", "previous_sha", "suppressed_shas",
+                            "restart_status", "promotion_intent_sha"},
              "deployment state fields do not match this version")
-    _require(value["schema_version"] == 1, "unsupported deployment state version")
+    _require(value["schema_version"] == 2, "unsupported deployment state version")
     _require(isinstance(value["selected_sha"], str) and SHA.fullmatch(value["selected_sha"]), "invalid selected SHA")
     previous = value["previous_sha"]
     _require(previous is None or (isinstance(previous, str) and SHA.fullmatch(previous)), "invalid previous SHA")
@@ -90,6 +91,9 @@ def _validate_state(value: object) -> dict:
              all(isinstance(sha, str) and SHA.fullmatch(sha) for sha in suppressed) and
              len(suppressed) == len(set(suppressed)), "invalid suppressed SHA set")
     _require(value["restart_status"] in {"not-attempted", "pending", "attempting", "succeeded", "failed"}, "invalid restart status")
+    intent = value["promotion_intent_sha"]
+    _require(intent is None or (isinstance(intent, str) and SHA.fullmatch(intent)), "invalid promotion intent SHA")
+    _require(intent not in {value["selected_sha"], previous}, "promotion intent must name a new release")
     return value
 
 
@@ -144,6 +148,9 @@ class Host:
 
     def promote(self, sha: str) -> None:
         self.run(["/usr/bin/python3.12", str(self.paths.promoter), sha], 240)
+
+    def verify_existing(self, sha: str) -> None:
+        self.run(["/usr/bin/python3.12", str(self.paths.promoter), sha, "--verify-only", "--verify-existing"], 240)
 
     def restart(self) -> None:
         self.run(["/usr/bin/systemctl", "restart", API_SERVICE], 180)
@@ -243,6 +250,8 @@ class Deployment:
 
     def sync_poller_retention(self, state: dict) -> None:
         protected = sorted({state["selected_sha"], *([state["previous_sha"]] if state["previous_sha"] else [])})
+        if state["promotion_intent_sha"]:
+            protected = sorted({*protected, state["promotion_intent_sha"]})
         _atomic_json(self.paths.retention_policy, {"schema_version": 1, "protected_shas": protected})
 
     def finish_restart(self, state: dict) -> dict:
@@ -277,18 +286,41 @@ class Deployment:
         with self.lock():
             state = self.load()
             self.reconcile(state)
+            intent = state["promotion_intent_sha"]
+            if intent and self.host.current_main_sha() != intent:
+                self.discard_stale_promotion_intent(state, intent)
+                state = self.load()
             self.sync_poller_retention(state)
             candidate = self.host.poll()
             if candidate is None:
+                intent = state["promotion_intent_sha"]
+                if intent and self.host.current_main_sha() != intent:
+                    self.discard_stale_promotion_intent(state, intent)
                 return "no verified candidate is staged"
             _require(bool(SHA.fullmatch(candidate)), "poller returned an invalid source SHA")
+            intent = state["promotion_intent_sha"]
+            if intent and candidate != intent:
+                self.discard_stale_promotion_intent(state, intent)
+                state = self.load()
+                intent = None
             if candidate in state["suppressed_shas"]:
                 return f"suppressed release {candidate} remains ineligible"
             if candidate == state["selected_sha"]:
                 return f"{candidate} is already selected"
             known = {state["selected_sha"], state["previous_sha"]}
-            if candidate not in known:
+            existing = self.paths.releases / candidate
+            if candidate not in known and intent != candidate:
                 self.check_release_set({sha for sha in known if sha} | {candidate})
+                next_state = dict(state)
+                next_state["promotion_intent_sha"] = candidate
+                self.save(next_state)
+                state = next_state
+                intent = candidate
+                self.sync_poller_retention(state)
+            if candidate not in known and (existing.exists() or existing.is_symlink()):
+                _require(intent == candidate, "existing release has no matching durable promotion intent")
+                self.host.verify_existing(candidate)
+            elif candidate not in known:
                 self.host.promote(candidate)
             self.validate_known_release(candidate)
             try:
@@ -300,16 +332,34 @@ class Deployment:
             if latest != candidate:
                 if candidate not in known:
                     self.prune(previous=state["selected_sha"], older=candidate)
+                    if intent == candidate:
+                        next_state = dict(state)
+                        next_state["promotion_intent_sha"] = None
+                        self.save(next_state)
+                        self.sync_poller_retention(next_state)
                 return f"main advanced to {latest}; verified {candidate} was not selected"
             previous = state["selected_sha"]
             next_state = dict(state)
-            next_state.update(selected_sha=candidate, previous_sha=previous, restart_status="pending")
+            next_state.update(selected_sha=candidate, previous_sha=previous, restart_status="pending",
+                              promotion_intent_sha=None)
             self.save(next_state)
             self.sync_poller_retention(next_state)
             self.set_current(candidate)
             self.prune(previous=previous, older=state["previous_sha"])
             self.finish_restart(next_state)
             return f"selected {candidate}; fixed API restart attempted"
+
+    def discard_stale_promotion_intent(self, state: dict, intent: str) -> None:
+        _require(intent not in {state["selected_sha"], state["previous_sha"]},
+                 "promotion intent unexpectedly names a retained release")
+        path = self.paths.releases / intent
+        if path.exists() or path.is_symlink():
+            self.host.verify_existing(intent)
+            self.prune(previous=state["selected_sha"], older=intent)
+        next_state = dict(state)
+        next_state["promotion_intent_sha"] = None
+        self.save(next_state)
+        self.sync_poller_retention(next_state)
 
     def rollback(self, requested_sha: str) -> str:
         with self.lock():
@@ -323,7 +373,7 @@ class Deployment:
             _require(len(rejected) <= 32, "suppressed release list is full; review it before adding another SHA")
             next_state = dict(state)
             next_state.update(selected_sha=requested_sha, previous_sha=current, suppressed_shas=rejected,
-                              restart_status="pending")
+                              restart_status="pending", promotion_intent_sha=None)
             self.save(next_state)
             self.sync_poller_retention(next_state)
             self.set_current(requested_sha)
