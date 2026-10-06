@@ -412,13 +412,21 @@ npx prisma migrate deploy   # production
 
 | Area | Platform | Trigger / Notes |
 |------|----------|-----------------|
-| API server | OCI Always Free VM | Node.js 24 under systemd behind Caddy; production recovery is incomplete |
+| API server | OCI Always Free VM | HTTPS `https://fg-index-api.duckdns.org` and WSS `wss://fg-index-api.duckdns.org`; Node.js 24 under systemd behind Caddy |
 | Web app | GitHub Pages | `.github/workflows/deploy-frontend.yml` on push to `main` or manual dispatch |
 | Database | Supabase Postgres | Prisma migrations from API workspace |
 | CI | GitHub Actions | Type-checks API/web, runs API tests, builds web |
-| Uptime | External monitor | Render is suspended; no tested standby or automatic fallback is configured |
+| Uptime | UptimeRobot | Existing endpoint is configured, as confirmed by the user; Render remains suspended and fallback is deferred |
 
-At the last migration checkpoint (October 5, 2026), GitHub Pages served the OCI-configured frontend, while the OCI API service was stopped and its health endpoint returned HTTP 502. The deployment transaction remained held for recovery and deployment timers were disabled. These are checkpoint observations, not a live status check. Supabase Postgres remains the existing database; the deployment controller does not run schema migrations or downgrade the database. Render is not an accepted standby or automatic failover target.
+### OCI migration closeout (October 6, 2026)
+
+The reviewed transition completed from source commit `a53fa079c696f2e4e7cf1c1443e716c2301d569e`. It selected that release, retained `dc7d2ea9c8c2d7bebf1dbca94edda6abc9613589` as the previous release, cleared the promotion intent, and successfully restarted the fixed API service. The installer exited successfully. The deployment timer is the sole owner of automatic release discovery and deployment, on an approximately 10-minute cadence; there is no separate poller timer. The OCI API is the sole owner of alert schedulers after Render workers were confirmed stopped. The frontend uses the HTTPS and WSS endpoints above; WSS is derived from `VITE_API_URL` unless `VITE_WS_URL` is explicitly set.
+
+Automatic deployment installs only eligible verified releases, restarts the API service, and records the selected version. Release acceptance does not wait for application health, socket ownership, or independent process proof. A download or integrity failure leaves the current installation untouched. Application failures do not trigger automatic rollback: rollback is an operator action, and the broken release can be suppressed to prevent immediate reinstallation. Installer errors are reported for operator review.
+
+The deployment controller retains the selected and previous releases, caps staged releases at three, and preserves at least 8 GiB of disk space and 10,000 inodes. At the Stage 1 closeout, two releases were installed and three were staged; the initial automatic cadence completed successfully, with the next run on the roughly 10-minute schedule. Later API commits are installed by that cadence. The existing Always Free VM was retained; the migration added no OCI resources or ingress rules. Render remains user-suspended, with fallback deferred. Supabase Postgres remains unchanged; the deployment controller does not run schema migrations or downgrade the database. UptimeRobot is already configured, as confirmed by the user.
+
+One-time post-transition observations on October 6, 2026: GitHub Pages returned HTTP 200, the OCI API `/health` endpoint returned HTTP 200, and an anonymous WebSocket connection opened then closed cleanly with code 1000 without authentication or data writes. These observations are informational only; runtime health and anonymous WebSocket behavior are not release gates or continuing health claims. The user handles authenticated sign-in, broader feature, and notification tests.
 
 Useful verification commands:
 

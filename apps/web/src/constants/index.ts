@@ -7,11 +7,11 @@ export const FEAR_GREED_COLORS = {
   'Extreme Greed': '#1E8449',
 } as const;
 
-// Production: Render URL. Development: localhost.
+// Production VITE_API_URL points to the OCI API; development defaults to localhost.
 export const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
 
 // WebSocket URL — derived from API URL (https → wss, http → ws)
-// No separate secret needed: VITE_API_URL https://fg-index.onrender.com → wss://fg-index.onrender.com
+// Unless VITE_WS_URL is set, VITE_API_URL https://fg-index-api.duckdns.org → wss://fg-index-api.duckdns.org.
 export const WS_URL: string = (() => {
   const explicit: string | undefined = import.meta.env.VITE_WS_URL;
   if (explicit) return explicit;
