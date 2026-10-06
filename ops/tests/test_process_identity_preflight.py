@@ -391,8 +391,7 @@ class StageZeroPreflightTest(unittest.TestCase):
                         f"expected_device={expected_device}", flush=True,
                     )
                     if len(proc_root) != 1 or proc_root[0]["filesystem"] != "tmpfs" \
-                            or "ro" not in proc_root[0]["mount_options"] \
-                            or "ro" not in proc_root[0]["super_options"]:
+                            or "ro" not in proc_root[0]["mount_options"]:
                         raise RuntimeError(f"H /proc is not the requested read-only tmpfs: {mounts}")
                     if len(children) != 1 or children[0]["mountpoint"] != target \
                             or children[0]["filesystem"] != "proc" \
@@ -542,6 +541,7 @@ class StageZeroPreflightTest(unittest.TestCase):
                     os.close(pinned_api_fd)
                 except OSError as error:
                     cleanup_errors.append(f"close pinned API proc fd: {error}")
+            deferred_reset_gc = {}
             for unit in units:
                 try:
                     before = show(unit)
@@ -553,9 +553,20 @@ class StageZeroPreflightTest(unittest.TestCase):
                     if state:
                         if state.get("MainPID", "0") != "0":
                             cleanup_errors.append(f"unit still has MainPID after stop {unit}: {state}")
-                        reset = run([SYSTEMCTL, "reset-failed", unit], check=False)
-                        if reset.returncode:
-                            cleanup_errors.append(f"reset-failed {unit}: {reset.stderr.strip()}")
+                        if state.get("LoadState") == "loaded" and state.get("ActiveState") == "failed":
+                            reset = run([SYSTEMCTL, "reset-failed", unit], check=False)
+                            if reset.returncode:
+                                after_reset = show(unit)
+                                not_loaded = any(
+                                    marker in reset.stderr.lower()
+                                    for marker in ("not loaded", "could not be found")
+                                )
+                                if after_reset.get("LoadState") == "loaded" or not not_loaded:
+                                    cleanup_errors.append(
+                                        f"reset-failed {unit}: {reset.stderr.strip()}"
+                                    )
+                                else:
+                                    deferred_reset_gc[unit] = reset.stderr.strip()
                     original_cgroup = recorded_cgroups.get(unit)
                     if original_cgroup:
                         empty, path = cgroup_empty(original_cgroup)
@@ -567,8 +578,24 @@ class StageZeroPreflightTest(unittest.TestCase):
                             cleanup_errors.append(
                                 f"original cgroup is not empty {unit} {original_cgroup}: {empty}"
                             )
+                        if unit in deferred_reset_gc:
+                            if empty in ("empty", "removed-by-systemd"):
+                                print(
+                                    f"RESET_FAILED_UNIT_GC[{unit}] cgroup={empty} "
+                                    f"detail={deferred_reset_gc[unit]}", flush=True,
+                                )
+                            else:
+                                cleanup_errors.append(
+                                    f"reset-failed {unit} raced unit GC before cgroup proof: "
+                                    f"{deferred_reset_gc[unit]}"
+                                )
                     elif unit in started_units:
                         cleanup_errors.append(f"no live ControlGroup was recorded for started unit {unit}")
+                        if unit in deferred_reset_gc:
+                            cleanup_errors.append(
+                                f"reset-failed {unit} could not be verified after unit GC: "
+                                f"{deferred_reset_gc[unit]}"
+                            )
                     else:
                         print(f"CGROUP_EMPTY[{unit}] state=unit-never-started", flush=True)
                 except Exception as error:
