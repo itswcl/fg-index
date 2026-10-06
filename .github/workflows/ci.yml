@@ -18,6 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Probe exact sparse-proc stage-zero design gate
+        run: sudo /usr/bin/python3.12 -m unittest ops.tests.test_process_identity_preflight -v
+
       - name: Setup Python (release poller)
         uses: actions/setup-python@v5
         with:
