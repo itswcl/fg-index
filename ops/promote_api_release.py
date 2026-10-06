@@ -507,9 +507,95 @@ class ReleasePromoter:
         os.chown(root, 0, group_id)
         root.chmod(0o750)
 
-    def promote(self, source_sha: str) -> Path:
+    def _release_inventory(self, root: Path, *, normalized: bool) -> dict[str, tuple]:
+        try:
+            root_info = root.lstat()
+        except OSError as error:
+            raise PromotionError(f"verified release tree is unavailable: {root}") from error
+        if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
+            raise PromotionError("verified release tree must be a real directory")
+        if not self.directory_owner_check(root):
+            raise PromotionError("verified release tree must be root-owned")
+        if normalized and stat.S_IMODE(root_info.st_mode) != 0o750:
+            raise PromotionError("existing release root mode does not match the promoted tree")
+
+        inventory: dict[str, tuple] = {}
+        for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            base = Path(directory)
+            retained_directories = []
+            for name in sorted(dirnames):
+                path = base / name
+                info = path.lstat()
+                relative = path.relative_to(root).as_posix()
+                if stat.S_ISLNK(info.st_mode):
+                    if not self.owner_check(path):
+                        raise PromotionError(f"release symlink is not root-owned: {relative}")
+                    inventory[relative] = ("symlink", os.readlink(path))
+                elif stat.S_ISDIR(info.st_mode):
+                    if not self.directory_owner_check(path):
+                        raise PromotionError(f"release directory is not root-owned: {relative}")
+                    if normalized and stat.S_IMODE(info.st_mode) != 0o750:
+                        raise PromotionError(f"release directory mode is not canonical: {relative}")
+                    inventory[relative] = ("directory",)
+                    retained_directories.append(name)
+                else:
+                    raise PromotionError(f"release contains an unsupported filesystem entry: {relative}")
+            dirnames[:] = retained_directories
+
+            for name in sorted(filenames):
+                path = base / name
+                info = path.lstat()
+                relative = path.relative_to(root).as_posix()
+                if stat.S_ISLNK(info.st_mode):
+                    if not self.owner_check(path):
+                        raise PromotionError(f"release symlink is not root-owned: {relative}")
+                    inventory[relative] = ("symlink", os.readlink(path))
+                    continue
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not self.owner_check(path):
+                    raise PromotionError(f"release file is not a root-owned regular file: {relative}")
+                mode = stat.S_IMODE(info.st_mode)
+                executable = mode & 0o111
+                if normalized and mode != (0o640 | executable):
+                    raise PromotionError(f"release file mode is not canonical: {relative}")
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                try:
+                    descriptor = os.open(path, flags)
+                except OSError as error:
+                    raise PromotionError(f"release file changed during verification: {relative}") from error
+                digest = hashlib.sha256()
+                try:
+                    opened = os.fstat(descriptor)
+                    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                        raise PromotionError(f"release file changed during verification: {relative}")
+                    with os.fdopen(os.dup(descriptor), "rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    after = os.fstat(descriptor)
+                    if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
+                        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+                    ):
+                        raise PromotionError(f"release file changed during verification: {relative}")
+                finally:
+                    os.close(descriptor)
+                inventory[relative] = ("file", digest.hexdigest(), executable)
+        return inventory
+
+    def _verify_existing_tree(self, archive: Path, destination: Path, source_sha: str, scratch: Path) -> None:
+        members, paths = _archive_members(archive)
+        self._capacity_preflight(self.releases_root, members, paths)
+        expected = scratch / "expanded-release"
+        expected.mkdir(mode=0o700)
+        _extract_safely(archive, expected, source_sha)
+        expected_inventory = self._release_inventory(expected, normalized=False)
+        actual_inventory = self._release_inventory(destination, normalized=True)
+        if actual_inventory != expected_inventory:
+            raise PromotionError("existing release tree does not match the authenticated staged archive")
+
+    def promote(self, source_sha: str, *, verify_only: bool = False, verify_existing: bool = False) -> Path:
         if not SHA_RE.fullmatch(source_sha):
             raise PromotionError("SHA must be a full lowercase 40-character commit SHA")
+        if verify_existing and not verify_only:
+            raise PromotionError("--verify-existing requires verify_only mode")
         candidate = self.staging_root / source_sha
         self._private_staging_directory(self.staging_root)
 
@@ -525,8 +611,10 @@ class ReleasePromoter:
         self._trusted_directory(self.releases_root.parent, "release-tree parent")
         self._trusted_directory(self.releases_root, "release tree")
         destination = self.releases_root / source_sha
-        if destination.exists() or destination.is_symlink():
+        if not verify_only and (destination.exists() or destination.is_symlink()):
             raise PromotionError(f"release already exists; refusing to overwrite: {destination}")
+        if verify_existing and not destination.exists() and not destination.is_symlink():
+            raise PromotionError(f"existing release does not exist: {destination}")
         try:
             group_id = self.group_id if self.group_id is not None else grp.getgrnam("fg-index").gr_gid
         except KeyError as error:
@@ -550,8 +638,10 @@ class ReleasePromoter:
             ):
                 raise PromotionError("promotion lock must be a private root-owned regular file")
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            if destination.exists() or destination.is_symlink():
+            if not verify_only and (destination.exists() or destination.is_symlink()):
                 raise PromotionError(f"release already exists; refusing to overwrite: {destination}")
+            if verify_existing and not destination.exists() and not destination.is_symlink():
+                raise PromotionError(f"existing release does not exist: {destination}")
 
             try:
                 staging_fd = os.open(
@@ -615,6 +705,11 @@ class ReleasePromoter:
                 _validate_bundle(bundle)
                 self._verify(archive, bundle, scratch, source_sha)
 
+                if verify_only:
+                    if verify_existing:
+                        self._verify_existing_tree(archive, destination, source_sha, scratch)
+                    return destination
+
                 temporary_release = Path(
                     tempfile.mkdtemp(prefix=f".promote-{source_sha}-", dir=self.releases_root)
                 )
@@ -644,16 +739,19 @@ class ReleasePromoter:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sha", help="full lowercase commit SHA to promote from private quarantine")
+    parser.add_argument("--verify-only", action="store_true", help="verify retained artifact evidence without installing or changing selection")
+    parser.add_argument("--verify-existing", action="store_true", help="also compare an existing installed tree to the authenticated archive")
     args = parser.parse_args()
     if os.geteuid() != 0:
         print("promotion must run as root", file=sys.stderr)
         return 1
     try:
-        path = ReleasePromoter().promote(args.sha)
+        path = ReleasePromoter().promote(args.sha, verify_only=args.verify_only, verify_existing=args.verify_existing)
     except PromotionError as error:
         print(f"promotion: ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"promotion: installed verified inactive release at {path}; current was not changed")
+    action = "verified retained release evidence for" if args.verify_only else "installed verified inactive release at"
+    print(f"promotion: {action} {path}; current was not changed")
     return 0
 
 

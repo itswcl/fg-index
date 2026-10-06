@@ -466,7 +466,7 @@ class ReleasePoller:
         candidates = self._list_staged_candidates(in_progress_path)
         by_sha = {candidate.source_sha: candidate for candidate in candidates}
         protected_shas.add(current_main_sha)
-        if candidates:
+        if candidates and (not incoming_candidate or current_main_sha in by_sha):
             newest = max(candidates, key=lambda candidate: (candidate.verified_at, candidate.source_sha))
             protected_shas.add(newest.source_sha)
 

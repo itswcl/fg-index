@@ -418,6 +418,20 @@ class ReleasePollerTests(unittest.TestCase):
         self.assertTrue(middle.exists())
         self.assertTrue(newest.exists())
 
+    def test_retention_retires_superseded_newest_to_reserve_current_main_slot(self) -> None:
+        active = self.add_candidate(SOURCE_SHA, "2026-01-01T00:00:00+00:00")
+        rollback = self.add_candidate("2" * 40, "2026-02-01T00:00:00+00:00")
+        interrupted_intent = self.add_candidate("3" * 40, "2026-03-01T00:00:00+00:00")
+        self.policy.write_text(
+            json.dumps({"schema_version": 1, "protected_shas": [active.name, rollback.name]}), encoding="utf-8"
+        )
+
+        self.make_poller()._enforce_retention("4" * 40, incoming_candidate=True)
+
+        self.assertTrue(active.exists())
+        self.assertTrue(rollback.exists())
+        self.assertFalse(interrupted_intent.exists())
+
     def test_retention_preserves_active_rollback_and_newest_pending_candidates(self) -> None:
         active = self.add_candidate(SOURCE_SHA, "2026-01-01T00:00:00+00:00")
         rollback = self.add_candidate("2" * 40, "2026-02-01T00:00:00+00:00")
@@ -535,13 +549,9 @@ class ReleasePollerTests(unittest.TestCase):
         self.policy.write_text(json.dumps(policy))
         return active, rollback, rejected, policy
 
-    def test_retirement_resolves_failed_newest_three_protected_slot_deadlock(self):
-        active, rollback, rejected, policy = self.retirement_fixture()
+    def test_new_current_main_retires_superseded_newest_without_manual_retirement(self):
+        active, rollback, rejected, _policy = self.retirement_fixture()
         self.policy.write_text(json.dumps({'schema_version': 1, 'protected_shas': [active.name, rollback.name]}))
-        with self.assertRaisesRegex(poller.PollError, 'retention is blocked'):
-            self.make_poller()._enforce_retention(NEXT_SHA, incoming_candidate=True)
-        self.policy.write_text(json.dumps(policy))
-        self.assertEqual([rejected.name], self.make_poller().retire_rejected(1))
         self.make_poller()._enforce_retention(NEXT_SHA, incoming_candidate=True)
         self.assertTrue(active.exists() and rollback.exists())
         self.assertFalse(rejected.exists())

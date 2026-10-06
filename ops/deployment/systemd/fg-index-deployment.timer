@@ -1,5 +1,5 @@
 [Unit]
-Description=Opt-in fg-index deployment cadence
+Description=One serialized fg-index release discovery and deployment cadence
 
 [Timer]
 OnBootSec=2min
