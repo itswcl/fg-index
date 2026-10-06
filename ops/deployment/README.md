@@ -28,6 +28,7 @@ The source tree used on the host must come from the approved merged `main` commi
 ```text
 ops/deploy_api_release.py
 ops/promote_api_release.py
+ops/release-poller/poller.py
 ops/transition_oci_deployment.py
 ops/deployment/systemd/fg-index-deployment.service
 ops/deployment/systemd/fg-index-deployment.timer
