@@ -138,7 +138,7 @@ export function useMarketIndicators(
   // successful WS handshake. After that, we never go back to yellow —
   // transient reconnects stay green (silent) until the 15s disconnect
   // timer promotes us to red. Prevents the yellow↔green flashing users
-  // saw on every brief Render socket drop.
+  // saw on brief socket reconnects.
   const [wsStatus, setWsStatus] = useState<WsStatus>('connecting');
   const [lastFearGreedUpdate, setLastFearGreedUpdate] = useState<Date | null>(
     () => cachedFearGreed?.updatedAt ?? null,
@@ -295,7 +295,7 @@ export function useMarketIndicators(
     // so users see a real loading indicator. After we've connected at
     // least once, stay silent (green) through transient drops — only
     // promote to red if the outage lasts SUSTAINED_MS. This eliminates
-    // the yellow↔green flashing on every brief Render socket drop.
+    // the yellow↔green flashing on every brief WebSocket reconnect.
     const SUSTAINED_MS = 15_000;
     const markReconnecting = () => {
       if (!hasConnectedOnceRef.current) {
@@ -313,7 +313,7 @@ export function useMarketIndicators(
 
     ws.onclose = () => {
       markReconnecting();
-      // Exponential backoff, capped at 60s (covers Render's ~30-50s cold start)
+      // Exponential backoff, capped at 60s to reduce reconnect pressure during outages.
       const delay = Math.min(reconnectDelayRef.current, 60000);
       reconnectDelayRef.current = Math.min(delay * 1.5, 60000);
       reconnectTimerRef.current = setTimeout(connect, delay);
