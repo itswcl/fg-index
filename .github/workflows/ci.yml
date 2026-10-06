@@ -172,8 +172,7 @@ jobs:
 
       - name: Install web dependencies
         working-directory: apps/web
-        # The committed web lockfile is missing five declared production dependencies.
-        run: npm install --workspaces=false
+        run: npm ci --workspaces=false
 
       - name: Type-check web
         working-directory: apps/web
