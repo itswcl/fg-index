@@ -101,6 +101,49 @@
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.14);
 }
 
+.alerts-popup-status {
+  padding: 18px 20px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.alerts-popup-status.alerts-popup-light {
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.alerts-popup-status p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.alerts-popup-status-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.alerts-popup-status-actions button {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.alerts-popup-status-primary {
+  color: #FFFFFF;
+  background: #007AFF;
+  border: 0;
+}
+
+.alerts-popup-status-close {
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
 .popup-backdrop {
   position: fixed;
   inset: 0;
