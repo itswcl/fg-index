@@ -169,7 +169,7 @@ Scraping remains the highest operational risk. Parser tests cover known Google/Y
 
 ### Prerequisites
 
-- Node.js 24 recommended. The workspace declares `>=18`; CI and the production OCI API use Node 24, while the GitHub Pages workflow builds with Node 20.
+- Node.js 24 is used by API CI and the production OCI API, frontend CI, and GitHub Pages builds. The root workspace declares `>=18`; the API and frontend packages require Node 24.
 - npm 10 recommended.
 - Supabase project for auth and persistence.
 - Postgres connection strings for Prisma migrations.
