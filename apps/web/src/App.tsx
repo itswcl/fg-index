@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef } from 'react';
+import {
+  Component,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { hydrateQuoteCacheIntoQueryClient } from './lib/quoteCache';
 import { useTheme } from './hooks/useTheme';
@@ -14,7 +22,6 @@ import { useDefaultMarketPresentation } from './hooks/useDefaultMarketPresentati
 import { CardGrid } from './components/CardGrid';
 import { MobileMetricList } from './components/MobileMetricList';
 import { IconBar } from './components/IconBar';
-import { AlertsPopup } from './components/AlertsPopup';
 import { AddTickerInput } from './components/AddTickerInput';
 import { PageIndicator } from './components/PageIndicator';
 import { TickerGroupTabs } from './components/TickerGroupTabs';
@@ -23,6 +30,7 @@ import { usePagination } from './hooks/usePagination';
 import { CARDS_PER_PAGE } from './constants';
 import { useIsMobile, useIsNarrow } from './hooks/useIsMobile';
 import { useDashboardUiStore } from './stores/useDashboardUiStore';
+import { PopupBackdrop } from './components/PopupBackdrop';
 import type { AlertTriggeredMessage } from './types/alerts';
 import './App.css';
 
@@ -32,6 +40,92 @@ const queryClient = new QueryClient();
 // reload instead of flashing shimmer / "Not Found" while the batch
 // request is in flight. Live fetches overwrite as they arrive.
 hydrateQuoteCacheIntoQueryClient(queryClient);
+
+const LazyAlertsPopup = lazy(() =>
+  import('./components/AlertsPopup').then(({ AlertsPopup }) => ({ default: AlertsPopup })),
+);
+
+interface AlertsPopupErrorBoundaryProps {
+  children: ReactNode;
+  isDark: boolean;
+  onClose: () => void;
+}
+
+interface AlertsPopupErrorBoundaryState {
+  hasError: boolean;
+}
+
+class AlertsPopupErrorBoundary extends Component<
+  AlertsPopupErrorBoundaryProps,
+  AlertsPopupErrorBoundaryState
+> {
+  state: AlertsPopupErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): AlertsPopupErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <AlertsPopupChunkStatus
+          isDark={this.props.isDark}
+          onClose={this.props.onClose}
+          status="error"
+        />
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function AlertsPopupChunkStatus({
+  isDark,
+  onClose,
+  status,
+}: {
+  isDark: boolean;
+  onClose: () => void;
+  status: 'loading' | 'error';
+}) {
+  const hasError = status === 'error';
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <>
+      <PopupBackdrop isDark={isDark} onDismiss={onClose} className="popup-backdrop-alerts" />
+      <div className={`alerts-popup alerts-popup-${isDark ? 'dark' : 'light'} alerts-popup-status`}>
+        <p role={hasError ? 'alert' : 'status'} aria-live={hasError ? 'assertive' : 'polite'}>
+          {hasError
+            ? 'Unable to load alerts. Reload the page to try again.'
+            : 'Loading alerts…'}
+        </p>
+        <div className="alerts-popup-status-actions">
+          {hasError && (
+            <button
+              type="button"
+              className="alerts-popup-status-primary"
+              onClick={() => window.location.reload()}
+            >
+              Reload page
+            </button>
+          )}
+          <button type="button" className="alerts-popup-status-close" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
 
 function MarketIndicators() {
   const {
@@ -238,19 +332,34 @@ function MarketIndicators() {
           }}
         />
         {alertsOpen && (
-          <AlertsPopup
+          <AlertsPopupErrorBoundary
             isDark={isDark}
-            alerts={alerts}
-            onAdd={addAlert}
-            onUpdate={updateAlert}
-            onDelete={deleteAlert}
-            onToggle={toggleAlert}
             onClose={() => setAlertsOpen(false)}
-            isAnonymous={alertsAnonymous}
-            migrationCandidate={alertsMigrationCandidate}
-            onAcceptMigration={() => { void acceptAlertsMigration(); }}
-            onDismissMigration={dismissAlertsMigration}
-          />
+          >
+            <Suspense
+              fallback={
+                <AlertsPopupChunkStatus
+                  isDark={isDark}
+                  onClose={() => setAlertsOpen(false)}
+                  status="loading"
+                />
+              }
+            >
+              <LazyAlertsPopup
+                isDark={isDark}
+                alerts={alerts}
+                onAdd={addAlert}
+                onUpdate={updateAlert}
+                onDelete={deleteAlert}
+                onToggle={toggleAlert}
+                onClose={() => setAlertsOpen(false)}
+                isAnonymous={alertsAnonymous}
+                migrationCandidate={alertsMigrationCandidate}
+                onAcceptMigration={() => { void acceptAlertsMigration(); }}
+                onDismissMigration={dismissAlertsMigration}
+              />
+            </Suspense>
+          </AlertsPopupErrorBoundary>
         )}
         {!isInitialLoading && !isDefaultGroup && order.length === 0 ? (
           <EmptyGroupState
