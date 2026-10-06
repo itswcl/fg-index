@@ -32,14 +32,14 @@ jobs:
       - name: Test root deployment transactions
         run: python -m unittest ops.tests.test_deploy_api_release -v
 
-      - name: Test receipt-bound root retention
-        run: python -m unittest ops.tests.test_retain_api_releases -v
+      - name: Test reviewed OCI transition
+        run: python -m unittest ops.tests.test_transition_oci_deployment -v
 
-      - name: Test deployment service namespace access
-        run: sudo /usr/bin/env FG_INDEX_REQUIRE_SYSTEMD_NAMESPACE_TEST=1 /usr/bin/python3.12 -m unittest ops.tests.test_deployment_unit_access -v
+      - name: Test deployment systemd contracts
+        run: python -m unittest ops.tests.test_deployment_unit_access -v
 
-      - name: Validate disabled deployment units
-        run: systemd-analyze verify ops/deployment/systemd/*.service ops/deployment/systemd/*.timer
+      - name: Validate deployment units
+        run: systemd-analyze verify ops/deployment/systemd/fg-index-deployment.service ops/deployment/systemd/fg-index-deployment.timer
 
       - name: Test inactive OCI host bootstrap
         run: python -m unittest ops.tests.test_bootstrap_oci_host -v

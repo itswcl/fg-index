@@ -186,6 +186,13 @@ class PromoteApiReleaseTests(unittest.TestCase):
         self.assertTrue(self.chown_calls)
         self.assertTrue(all(uid == 0 and gid == 4242 for _, uid, gid, _ in self.chown_calls))
 
+    def test_verify_only_authenticates_retained_candidate_without_installing(self) -> None:
+        result = self.promoter.promote(SOURCE_SHA, verify_only=True)
+        self.assertEqual(result, self.releases / SOURCE_SHA)
+        self.assertFalse(result.exists())
+        self.assertFalse(any(path.name.startswith(".promote-") for path in self.releases.iterdir()))
+        self.assertEqual(1, len(self.commands))
+
     def test_gh_verification_is_pinned_and_offline_without_credentials(self) -> None:
         self.promoter.promote(SOURCE_SHA)
         command, kwargs = self.commands[0]

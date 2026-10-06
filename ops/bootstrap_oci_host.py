@@ -38,7 +38,7 @@ ENV_FILE = Path("/etc/fg-index/api.env")
 BOOTSTRAP_SOURCE = Path("ops/bootstrap_oci_host.py")
 SOURCE_HASHES = {
     SERVICE_SOURCE: "9cb776ed9cf94d692ec9afbe44b92a6de92320a645034e9778712df2200d4dcd",
-    PROMOTER_SOURCE: "41ad26d7a79978feda663f9e0a5b08dc0a8608599223de082345fd65ba03c3d0",
+    PROMOTER_SOURCE: "8e3cb5b8481f10122bcf7b311ab2f8a8ec2fb39be7a0f36941974ef3e433933d",
 }
 COMMANDS = {
     "systemctl": "/usr/bin/systemctl",

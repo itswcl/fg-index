@@ -507,7 +507,7 @@ class ReleasePromoter:
         os.chown(root, 0, group_id)
         root.chmod(0o750)
 
-    def promote(self, source_sha: str) -> Path:
+    def promote(self, source_sha: str, *, verify_only: bool = False) -> Path:
         if not SHA_RE.fullmatch(source_sha):
             raise PromotionError("SHA must be a full lowercase 40-character commit SHA")
         candidate = self.staging_root / source_sha
@@ -525,7 +525,7 @@ class ReleasePromoter:
         self._trusted_directory(self.releases_root.parent, "release-tree parent")
         self._trusted_directory(self.releases_root, "release tree")
         destination = self.releases_root / source_sha
-        if destination.exists() or destination.is_symlink():
+        if not verify_only and (destination.exists() or destination.is_symlink()):
             raise PromotionError(f"release already exists; refusing to overwrite: {destination}")
         try:
             group_id = self.group_id if self.group_id is not None else grp.getgrnam("fg-index").gr_gid
@@ -550,7 +550,7 @@ class ReleasePromoter:
             ):
                 raise PromotionError("promotion lock must be a private root-owned regular file")
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            if destination.exists() or destination.is_symlink():
+            if not verify_only and (destination.exists() or destination.is_symlink()):
                 raise PromotionError(f"release already exists; refusing to overwrite: {destination}")
 
             try:
@@ -615,6 +615,9 @@ class ReleasePromoter:
                 _validate_bundle(bundle)
                 self._verify(archive, bundle, scratch, source_sha)
 
+                if verify_only:
+                    return destination
+
                 temporary_release = Path(
                     tempfile.mkdtemp(prefix=f".promote-{source_sha}-", dir=self.releases_root)
                 )
@@ -644,16 +647,18 @@ class ReleasePromoter:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sha", help="full lowercase commit SHA to promote from private quarantine")
+    parser.add_argument("--verify-only", action="store_true", help="verify retained artifact evidence without installing or changing selection")
     args = parser.parse_args()
     if os.geteuid() != 0:
         print("promotion must run as root", file=sys.stderr)
         return 1
     try:
-        path = ReleasePromoter().promote(args.sha)
+        path = ReleasePromoter().promote(args.sha, verify_only=args.verify_only)
     except PromotionError as error:
         print(f"promotion: ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"promotion: installed verified inactive release at {path}; current was not changed")
+    action = "verified retained release evidence for" if args.verify_only else "installed verified inactive release at"
+    print(f"promotion: {action} {path}; current was not changed")
     return 0
 
 
