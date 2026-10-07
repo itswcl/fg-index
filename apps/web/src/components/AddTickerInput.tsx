@@ -57,7 +57,7 @@ export function AddTickerInput({
   if (collapsible && !expanded) {
     const iconColor = isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.55)';
     return (
-      <div style={{ flex: '0 0 auto' }}>
+      <div className="add-ticker-search">
         <button
           type="button"
           className={`icon-btn ${isDark ? 'icon-btn-dark' : 'icon-btn-light'}`}

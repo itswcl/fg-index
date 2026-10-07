@@ -190,6 +190,30 @@
   padding-bottom: 4px;
 }
 
+/* In collapsed search mode, let each control share the full phone-width row. */
+.top-bar:has(.add-ticker-search) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(32px, 1fr));
+  gap: 4px;
+}
+
+.top-bar:has(.add-ticker-search) > .icon-bar {
+  display: contents;
+}
+
+.top-bar:has(.add-ticker-search) > .add-ticker-search,
+.top-bar:has(.add-ticker-search) > .icon-bar > *,
+.top-bar:has(.add-ticker-search) > .edit-toggle {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.top-bar:has(.add-ticker-search) .icon-btn,
+.top-bar:has(.add-ticker-search) .theme-btn {
+  width: 100%;
+}
+
 /* ── Ticker Group Tabs ───────────────────────────────────── */
 .ticker-tabs-shell {
   position: relative;
