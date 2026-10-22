@@ -1,7 +1,9 @@
+import { isMarketWindowOpen } from "@shared/types";
 import { refreshMarketStatus } from "../services/market-status.service.js";
 
 const MARKET_STATUS_CHECK_INTERVAL_MS = 60_000;
 const REFRESH_TIMES_PT = new Set([
+  "06:00",
   "06:25",
   "06:30",
   "06:35",
@@ -30,6 +32,7 @@ function getPacificRefreshKey(date = new Date()): string {
 }
 
 async function refreshIfScheduled(now = new Date()): Promise<void> {
+  if (!isMarketWindowOpen(now)) return;
   const key = getPacificRefreshKey(now);
   const minute = key.slice(-5);
   if (!REFRESH_TIMES_PT.has(minute) || completedRefreshKeys.has(key)) {
@@ -42,7 +45,7 @@ async function refreshIfScheduled(now = new Date()): Promise<void> {
 }
 
 export function startMarketStatusScheduler(): void {
-  void refreshMarketStatus();
+  if (isMarketWindowOpen()) void refreshMarketStatus();
   setInterval(() => {
     void refreshIfScheduled();
   }, MARKET_STATUS_CHECK_INTERVAL_MS);

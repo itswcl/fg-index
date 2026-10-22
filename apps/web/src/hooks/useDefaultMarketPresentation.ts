@@ -1,3 +1,4 @@
+import { isMarketWindowOpen } from '../../../../packages/shared-types/src/market-window';
 import { useCallback, useEffect } from 'react';
 import { useBtc } from './useBtc';
 import { useFearGreed } from './useFearGreed';
@@ -106,9 +107,10 @@ export function useDefaultMarketPresentation({
   }, [fearGreedData, vixData]);
 
   const refreshDefaultIndicators = useCallback(() => {
+    if (!isMarketWindowOpen()) return;
     Promise.all([
-      refetchFg().then(markManualFgUpdate),
-      refetchVix().then(markManualVixUpdate),
+      refetchFg().then((result) => { if (result.isSuccess) markManualFgUpdate(); }),
+      refetchVix().then((result) => { if (result.isSuccess) markManualVixUpdate(); }),
     ]);
   }, [markManualFgUpdate, markManualVixUpdate, refetchFg, refetchVix]);
 

@@ -1,3 +1,4 @@
+import { isMarketWindowOpen } from "@shared/types";
 import { Request, Response } from "express";
 import { getCachedFearGreed } from "../schedulers/fear-greed.scheduler.js";
 import { getCachedVix } from "../schedulers/vix.scheduler.js";
@@ -37,10 +38,12 @@ export const getHealth = (req: Request, res: Response) => {
   const btcAge = lastBtcFetchTime ? now - lastBtcFetchTime.getTime() : Infinity;
   const spxAge = lastSpxFetchTime ? now - lastSpxFetchTime.getTime() : Infinity;
 
-  const fgHealthy = fgAge < 60 * 60 * 1000; // 1 hour
-  const vixHealthy = vixAge < 15 * 60 * 1000; // 15 minutes
+  const stockUpdatesPaused = !isMarketWindowOpen(new Date(now));
+  const openingGrace = isMarketWindowOpen(new Date(now)) && !isMarketWindowOpen(new Date(now - 60_000));
+  const fgHealthy = stockUpdatesPaused || openingGrace || fgAge < 60 * 60 * 1000; // 1 hour
+  const vixHealthy = stockUpdatesPaused || openingGrace || vixAge < 15 * 60 * 1000; // 15 minutes
   const btcHealthy = btcAge < 5 * 60 * 1000; // 5 minutes
-  const spxHealthy = spxAge < 15 * 60 * 1000; // 15 minutes
+  const spxHealthy = stockUpdatesPaused || openingGrace || spxAge < 15 * 60 * 1000; // 15 minutes
 
   const hasFgData = getCachedFearGreed() !== null;
   const hasVixData = getCachedVix() !== null;
@@ -52,11 +55,12 @@ export const getHealth = (req: Request, res: Response) => {
   const backgroundDb = getBackgroundDbCircuitStats();
   const alertWorker = getAlertWorkerStats();
 
-  const healthy = fgHealthy && vixHealthy && btcHealthy && hasFgData;
+  const healthy = fgHealthy && vixHealthy && btcHealthy && (stockUpdatesPaused || openingGrace || hasFgData);
   const status = healthy ? 200 : 503;
 
   res.status(status).json({
     status: healthy ? "ok" : "degraded",
+    stockUpdatesPaused,
     fearGreed: {
       hasData: hasFgData,
       lastFetchAgeMs: lastFearGreedFetchTime ? fgAge : null,

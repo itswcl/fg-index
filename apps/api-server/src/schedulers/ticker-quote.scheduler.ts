@@ -1,3 +1,4 @@
+import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { listActiveTrackedSymbols } from "../services/ticker-cache.service.js";
 import {
@@ -14,6 +15,11 @@ import {
 let activeTickerRefreshInFlight = false;
 
 async function refreshActiveTickerQuotes(): Promise<void> {
+  if (!isMarketWindowOpen()) {
+    // BTC is the only symbol allowed to refresh unattended overnight.
+    enqueueQuoteRefresh("BTC-USD");
+    return;
+  }
   if (activeTickerRefreshInFlight) return;
 
   const cooldownRemainingMs = getBackgroundDbCooldownRemainingMs();

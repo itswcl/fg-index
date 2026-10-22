@@ -1,3 +1,5 @@
+import { canRefreshSymbol } from '../../../../packages/shared-types/src/market-window';
+import { useMarketWindow } from './useMarketWindow';
 import { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TickerQuote } from '../types';
@@ -26,7 +28,9 @@ interface BatchResponse {
 }
 
 async function fetchBatch(symbols: string[]): Promise<BatchResponse> {
-  const qs = encodeURIComponent(symbols.join(','));
+  const permittedSymbols = symbols.filter((symbol) => canRefreshSymbol(symbol));
+  if (!permittedSymbols.length) return { quotes: {} };
+  const qs = encodeURIComponent(permittedSymbols.join(','));
   const res = await authFetch(`${API_BASE_URL}/api/quote/batch?symbols=${qs}`);
   if (!res.ok) throw new Error(`Batch quote fetch failed (${res.status})`);
   const data = (await res.json()) as { quotes?: Record<string, unknown> };
@@ -38,10 +42,11 @@ async function fetchBatch(symbols: string[]): Promise<BatchResponse> {
 
 export function usePageTickers(symbols: string[]) {
   const queryClient = useQueryClient();
+  const marketWindowOpen = useMarketWindow();
 
   // Sort to keep queryKey stable across in-page reorders — dragging cards
   // shouldn't reissue the batch under a different key and refetch.
-  const sortedSymbols = useMemo(() => [...symbols].sort(), [symbols.join(',')]);
+  const sortedSymbols = useMemo(() => symbols.filter((symbol) => marketWindowOpen || canRefreshSymbol(symbol)).sort(), [symbols.join(','), marketWindowOpen]);
 
   const query = useQuery<BatchResponse, Error>({
     queryKey: ['tickers', 'batch', sortedSymbols],
@@ -49,7 +54,7 @@ export function usePageTickers(symbols: string[]) {
     enabled: sortedSymbols.length > 0,
     refetchInterval: TICKER_REFETCH_INTERVAL_MS,
     staleTime: TICKER_REFETCH_INTERVAL_MS,
-    retry: 2,
+    retry: (attempt) => sortedSymbols.some((symbol) => canRefreshSymbol(symbol)) && attempt < 2,
   });
 
   // Seed the query cache from localStorage for any on-page symbol whose
@@ -59,7 +64,7 @@ export function usePageTickers(symbols: string[]) {
   // writes `undefined` slots, so it never overwrites a live batch result
   // with stale cached data.
   useEffect(() => {
-    for (const sym of sortedSymbols) {
+    for (const sym of symbols) {
       const existing = queryClient.getQueryData<TickerQuote | null | undefined>([
         'ticker',
         sym,
@@ -70,7 +75,7 @@ export function usePageTickers(symbols: string[]) {
         queryClient.setQueryData<TickerQuote | null>(['ticker', sym], cached.quote);
       }
     }
-  }, [sortedSymbols, queryClient]);
+  }, [symbols, queryClient]);
 
   // Fan out into per-symbol cache so useTicker readers re-render.
   //

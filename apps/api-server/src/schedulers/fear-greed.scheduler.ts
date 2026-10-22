@@ -1,5 +1,7 @@
 import { fetchCnnData } from "../services/cnn.service.js";
 import { FearGreed } from "@shared/types";
+import { startMarketWindowTask } from "./market-window.js";
+import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordFearGreedFetch } from "../controllers/health.controller.js";
 
@@ -15,6 +17,7 @@ export function getCachedFearGreed(): FearGreed | null {
 }
 
 async function refreshFearGreed() {
+  if (!isMarketWindowOpen()) return;
   try {
     const data = await fetchCnnData();
     fearGreedCache = data;
@@ -26,6 +29,5 @@ async function refreshFearGreed() {
 }
 
 export function startFearGreedScheduler() {
-  refreshFearGreed(); // Initial fetch
-  setInterval(refreshFearGreed, env.FEAR_GREED_INTERVAL_MS);
+  startMarketWindowTask(refreshFearGreed, () => env.FEAR_GREED_INTERVAL_MS);
 }

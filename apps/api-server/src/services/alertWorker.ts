@@ -1,3 +1,4 @@
+import { isMarketWindowOpen, canEvaluateMarketAlert } from "@shared/types";
 import { WebSocket } from "ws";
 import { env } from "../config/env.js";
 import { prisma } from "./db.js";
@@ -203,6 +204,7 @@ export async function evaluateForMetric(
   snapshot: MarketSnapshot,
   now: Date = new Date()
 ): Promise<AlertTriggeredMessage[]> {
+  if (metric !== "btc" && !isMarketWindowOpen(now)) return [];
   if (!acceptingAlertWork) {
     process.stderr.write(
       JSON.stringify({
@@ -271,7 +273,7 @@ async function runEvaluationForMetric(
     }
   }
 
-  const fresh = candidates.filter((row) => !isInCooldown(row, now));
+  const fresh = candidates.filter((row) => !isInCooldown(row, now) && canEvaluateMarketAlert(row.conditions, now));
   if (fresh.length === 0) return [];
 
   // Reuse existing evaluator — but it expects the shared Alert shape.

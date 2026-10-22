@@ -1,3 +1,4 @@
+import { canEvaluateMarketAlert } from '../../../../packages/shared-types/src/market-window';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FearGreed, TickerQuote } from '../types';
 import type { Alert, AlertTriggeredMessage } from '../types/alerts';
@@ -65,7 +66,7 @@ function evaluateAlertsLocally(
   onTriggered: (msg: AlertTriggeredMessage) => void,
 ) {
   for (const alert of alerts) {
-    if (!alert.enabled) continue;
+    if (!alert.enabled || !canEvaluateMarketAlert(alert.conditions)) continue;
 
     const results = alert.conditions.map((cond) => {
       const metricValue = getMetricValue(cond.metric, prices);
