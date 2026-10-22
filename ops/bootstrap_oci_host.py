@@ -41,7 +41,7 @@ RESERVED_CURRENT = Path("/opt/fg-index/current")
 ENV_FILE = Path("/etc/fg-index/api.env")
 BOOTSTRAP_SOURCE = Path("ops/bootstrap_oci_host.py")
 SOURCE_HASHES = {
-    SERVICE_SOURCE: "9cb776ed9cf94d692ec9afbe44b92a6de92320a645034e9778712df2200d4dcd",
+    SERVICE_SOURCE: "6a0e379ad8a7aa17b24ee046df85c27ddb03a1954cf583a78f3531f10f7cfa87",
     PROMOTER_SOURCE: "71086b7e57eeb2c392bbca6c43155dc3d9369006be6da132c6822ed107bc0cdb",
     POLLER_SOURCE: "a9885c0c81f496dfef479d6b4547bfd009ada94af230611224abf208f8cf9ecd",
 }

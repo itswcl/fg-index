@@ -21,3 +21,7 @@ The release selection is determined by `/opt/fg-index/current` and its source ma
 ## Proxy and secrets
 
 Keep the Caddy upstream at `127.0.0.1:8080` and preserve its existing request-log redaction policy. Caddy handles WebSocket upgrades in `reverse_proxy`; do not add custom `Connection` or `Upgrade` headers. Never inspect, echo, or transfer values from `api.env` during release deployment.
+
+### Persistent indicator snapshots
+
+The canonical API unit declares `StateDirectory=fg-index` and `INDICATOR_SNAPSHOT_DIR=/var/lib/fg-index/indicators`. On an existing host, apply these two settings through a dedicated systemd drop-in, preserving the existing scheduler-owner override, then reload systemd and restart through the deployment installer. Keep the snapshot directory outside immutable release trees. A value in `/etc/fg-index/api.env` takes precedence over the unit's `Environment=` setting; remove any obsolete blank override. The first release starts saving snapshots after successful upstream fetches; subsequent restarts can serve them outside the stock refresh window.

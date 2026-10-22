@@ -1,3 +1,4 @@
+import { canRefreshSymbol } from "@shared/types";
 import type { TickerQuote } from "@shared/types";
 import { env } from "../config/env.js";
 import { prisma } from "./db.js";
@@ -79,8 +80,8 @@ function normalizeSymbol(symbol: string): string {
   return normalizeQuoteSymbol(symbol);
 }
 
-function isServable(row: { fetchedAt: Date }): boolean {
-  return Date.now() - row.fetchedAt.getTime() <= MAX_SERVED_QUOTE_AGE_MS;
+function isServable(row: { symbol: string; fetchedAt: Date }): boolean {
+  return !canRefreshSymbol(row.symbol) || Date.now() - row.fetchedAt.getTime() <= MAX_SERVED_QUOTE_AGE_MS;
 }
 
 function quoteMemoryTtlMs(quote: TickerQuote | null): number {

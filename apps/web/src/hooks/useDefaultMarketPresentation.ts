@@ -59,8 +59,6 @@ export function useDefaultMarketPresentation({
   const lastGoodVix = useDefaultMarketPresentationStore((state) => state.lastGoodVix);
   const lastGoodBtc = useDefaultMarketPresentationStore((state) => state.lastGoodBtc);
   const lastGoodSpx = useDefaultMarketPresentationStore((state) => state.lastGoodSpx);
-  const manualFgUpdateMs = useDefaultMarketPresentationStore((state) => state.manualFgUpdateMs);
-  const manualVixUpdateMs = useDefaultMarketPresentationStore((state) => state.manualVixUpdateMs);
   const rememberFearGreed = useDefaultMarketPresentationStore((state) => state.rememberFearGreed);
   const rememberVix = useDefaultMarketPresentationStore((state) => state.rememberVix);
   const rememberBtc = useDefaultMarketPresentationStore((state) => state.rememberBtc);
@@ -114,13 +112,9 @@ export function useDefaultMarketPresentation({
     ]);
   }, [markManualFgUpdate, markManualVixUpdate, refetchFg, refetchVix]);
 
-  const fgLastUpdate = manualFgUpdateMs > (lastFearGreedUpdate?.getTime() ?? 0)
-    ? new Date(manualFgUpdateMs)
-    : lastFearGreedUpdate;
-
-  const vixLastUpdate = manualVixUpdateMs > (lastVixUpdate?.getTime() ?? 0)
-    ? new Date(manualVixUpdateMs)
-    : lastVixUpdate;
+  // Cached HTTP/WS snapshots retain their source timestamps, including after hours.
+  const fgLastUpdate = fearGreedData?.updatedAt ? new Date(fearGreedData.updatedAt) : lastFearGreedUpdate;
+  const vixLastUpdate = vixData?.fetchedAt ? new Date(vixData.fetchedAt) : lastVixUpdate;
 
   const btcLastUpdate = lastBtcUpdate ?? (btcData?.fetchedAt ? new Date(btcData.fetchedAt) : null);
   const spxLastUpdate = lastSpxUpdate ?? (spxData?.fetchedAt ? new Date(spxData.fetchedAt) : null);

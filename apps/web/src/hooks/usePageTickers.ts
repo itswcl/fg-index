@@ -28,9 +28,7 @@ interface BatchResponse {
 }
 
 async function fetchBatch(symbols: string[]): Promise<BatchResponse> {
-  const permittedSymbols = symbols.filter((symbol) => canRefreshSymbol(symbol));
-  if (!permittedSymbols.length) return { quotes: {} };
-  const qs = encodeURIComponent(permittedSymbols.join(','));
+  const qs = encodeURIComponent(symbols.join(','));
   const res = await authFetch(`${API_BASE_URL}/api/quote/batch?symbols=${qs}`);
   if (!res.ok) throw new Error(`Batch quote fetch failed (${res.status})`);
   const data = (await res.json()) as { quotes?: Record<string, unknown> };
@@ -46,13 +44,23 @@ export function usePageTickers(symbols: string[]) {
 
   // Sort to keep queryKey stable across in-page reorders — dragging cards
   // shouldn't reissue the batch under a different key and refetch.
-  const sortedSymbols = useMemo(() => symbols.filter((symbol) => marketWindowOpen || canRefreshSymbol(symbol)).sort(), [symbols.join(','), marketWindowOpen]);
+  const sortedSymbols = useMemo(() => [...symbols].sort(), [symbols.join(',')]);
 
   const query = useQuery<BatchResponse, Error>({
     queryKey: ['tickers', 'batch', sortedSymbols],
-    queryFn: () => fetchBatch(sortedSymbols),
+    queryFn: async () => {
+      const cached = queryClient.getQueryData<BatchResponse>(['tickers', 'batch', sortedSymbols]);
+      const requested = !marketWindowOpen && cached
+        ? sortedSymbols.filter((symbol) => canRefreshSymbol(symbol))
+        : sortedSymbols;
+      if (!requested.length) return cached ?? { quotes: {} };
+      const result = await fetchBatch(requested);
+      return { quotes: { ...cached?.quotes, ...result.quotes } };
+    },
     enabled: sortedSymbols.length > 0,
-    refetchInterval: TICKER_REFETCH_INTERVAL_MS,
+    refetchInterval: marketWindowOpen || sortedSymbols.some((symbol) => canRefreshSymbol(symbol)) ? TICKER_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: marketWindowOpen,
+    refetchOnReconnect: marketWindowOpen,
     staleTime: TICKER_REFETCH_INTERVAL_MS,
     retry: (attempt) => sortedSymbols.some((symbol) => canRefreshSymbol(symbol)) && attempt < 2,
   });

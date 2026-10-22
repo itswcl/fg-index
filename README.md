@@ -221,7 +221,8 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | `GOOGLE_FINANCE_SPX_URL` | required | Google Finance S&P 500 page |
 | `YAHOO_FINANCE_SPX_URL` | required | Yahoo S&P 500 fallback |
 | `SCRAPER_USER_AGENT` | required | Browser User-Agent for upstream requests |
-| `FEAR_GREED_INTERVAL_MS` | `900000` | Fear & Greed scheduler interval |
+| `FEAR_GREED_INTERVAL_MS` | `600000` | Fear & Greed scheduler interval (10 minutes) |
+| `INDICATOR_SNAPSHOT_DIR` | empty | Optional durable directory for validated Fear & Greed, VIX, and SPX restart snapshots |
 | `VIX_REALTIME_INTERVAL_MS` | `10000` | VIX realtime loop interval before adaptive throttling |
 | `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX fallback refresh interval |
 | `BTC_INTERVAL_MS` | `60000` | BTC scheduler interval |
@@ -450,19 +451,14 @@ Workflow rules:
 - Keep review branches to one commit unless the reviewer asks otherwise.
 - Preserve the public response contracts for default cards: VIX returns `ticker: "VIX"`, S&P 500 returns `ticker: "SPX"`, and BTC returns the canonical BTC quote.
 
-### Scheduled market-data window
+### Stock refresh window and cached reads
 
-Automatic stock-data fetching, browser stock polling, and stock/mixed alerts run
-Monday–Friday from **6:00 AM inclusive to 6:00 PM exclusive in America/Los_Angeles**.
-This follows Pacific daylight saving time; holidays within weekdays are included.
-Fear & Greed, VIX, SPX, custom stock symbols, and market-status refreshes pause
-outside that window. Locally cached stock values remain visible. Default stock
-fetch loops resume within 30 seconds of opening; market status also refreshes at
-6:00 AM. Quote queues reject off-window stock work, including refresh requests
-from clients. Existing cache TTLs and failure cooldowns still apply.
+Stock upstream fetching and stock/mixed alerts run from **06:00 inclusive to 15:00 exclusive, America/Los_Angeles**, Monday through Friday, excluding standard full-day US exchange holidays. Pacific daylight saving changes are automatic. Full-day holiday rules follow the [NYSE calendar](https://www.nyse.com/trade/hours-calendars), including observed holidays and Good Friday. Early-close days retain this fixed application window for extended-hours quotes; extraordinary exchange closures are not predicted. BTC fetching and BTC-only alerts remain available 24/7.
 
-BTC fetching, browser polling, WebSocket delivery, and BTC-only alerts stay active
-24/7. An alert combining BTC with any stock metric waits for the stock window,
-including alerts using OR. Settings/authentication, health checks, and the shared
-WebSocket connection remain available all week. Health reports
-`stockUpdatesPaused: true` outside the window and continues checking BTC freshness.
+Outside that window, browsers may read the last cached stock snapshot once per query/page and keep its original timestamp; periodic stock polling and upstream refreshes pause. Mixed stock/BTC pages continue polling BTC without repeatedly requesting stock snapshots. Cached stock quotes remain readable across weekends and holidays even when older than 24 hours; BTC retains its normal age limit. Fear & Greed refreshes every 10 minutes during the window.
+
+Set `INDICATOR_SNAPSHOT_DIR` to a service-writable persistent directory to restore Fear & Greed, VIX, and SPX after an API restart. The OCI unit uses `/var/lib/fg-index/indicators` with `StateDirectory=fg-index`; writes atomically replace each complete JSON snapshot, and missing/invalid files are ignored. The first deployment cannot restore values never saved by an earlier process. Without this setting, default indicator snapshots remain in memory only. Custom ticker snapshots continue using Postgres.
+
+Market-status refresh failures retry once per minute, for at most five attempts including the initial attempt, then wait for the next scheduled slot. Startup refreshes follow the same retry policy. Retries stop outside the stock window; successful slots are marked complete only after provider fetch and required session persistence succeed.
+
+Default stock fetch loops resume within 30 seconds of opening. Quote queues reject off-window stock work, including requests from clients. An alert combining BTC and stock metrics waits for the stock window, including OR alerts. Settings, authentication, and WebSocket connections remain available all week. Health reports `stockUpdatesPaused: true` while stocks are paused and continues checking BTC freshness.

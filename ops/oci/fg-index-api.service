@@ -11,6 +11,8 @@ User=fg-index
 Group=fg-index
 WorkingDirectory=/opt/fg-index/current/apps/api-server
 EnvironmentFile=/etc/fg-index/api.env
+StateDirectory=fg-index
+Environment=INDICATOR_SNAPSHOT_DIR=/var/lib/fg-index/indicators
 ExecStart=/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=8080 SCHEDULERS_ENABLED=false /opt/nodejs/current/bin/node /opt/fg-index/current/apps/api-server/dist/index.js
 
 Restart=on-failure

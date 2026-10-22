@@ -8,7 +8,7 @@ export const getFearGreed = (req: Request, res: Response) => {
     if (!data) {
       throw new HttpError(404, "Fear & Greed data not ready", "DATA_NOT_READY");
     }
-    res.setHeader("Cache-Control", "public, max-age=900");
+    res.setHeader("Cache-Control", "public, max-age=600");
     res.json(data);
   } catch (error) {
     handleError(res, error);

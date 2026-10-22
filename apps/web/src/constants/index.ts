@@ -22,8 +22,8 @@ export const WS_URL: string = (() => {
 /** Optional API key sent as X-API-KEY header */
 export const API_KEY: string = import.meta.env.VITE_API_KEY ?? '';
 
-/** Fear & Greed HTTP polling every 15 min */
-export const FEAR_GREED_REFETCH_INTERVAL_MS = 15 * 60 * 1000;
+/** Fear & Greed HTTP polling every 10 min */
+export const FEAR_GREED_REFETCH_INTERVAL_MS = 10 * 60 * 1000;
 
 /** Re-try HTTP fallback every 3 min */
 export const VIX_REFETCH_INTERVAL_MS = 3 * 60 * 1000;

@@ -207,7 +207,7 @@ export function useMarketIndicators(
 
         if (message.type === 'FEAR_GREED_UPDATE' && 'payload' in message && message.payload) {
           const fg = message.payload as FearGreed;
-          const now = new Date();
+          const now = new Date(fg.updatedAt);
           setFearGreed(fg);
           setLastFearGreedUpdate(now);
           latestFearGreedScoreRef.current = fg.score;
@@ -229,7 +229,7 @@ export function useMarketIndicators(
         if (message.type === 'VIX_UPDATE' && 'payload' in message) {
           const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
           if (payload) {
-            const now = new Date();
+            const now = new Date(payload.fetchedAt);
             setVix(payload);
             setLastVixUpdate(now);
             latestVixPriceRef.current = payload.price;
@@ -267,7 +267,7 @@ export function useMarketIndicators(
         if (message.type === 'SPX_UPDATE' && 'payload' in message) {
           const payload = sanitizeTickerQuote((message as WsMarketMessage).payload);
           if (payload) {
-            const now = new Date();
+            const now = new Date(payload.fetchedAt);
             setSpx(payload);
             setLastSpxUpdate(now);
             latestSpxPriceRef.current = payload.price;
