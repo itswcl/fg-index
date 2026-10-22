@@ -7,6 +7,7 @@ The API runs on the existing Always Free OCI VM behind Caddy. The listener stays
 - Install the API unit as `/etc/systemd/system/fg-index-api.service`.
 - Keep the API environment at `/etc/fg-index/api.env`, `root:fg-index`, mode `0640`. Record required variable names only; enter values on the host and never copy them into a repository, CI log, or handoff.
 - The reviewed unit uses `/opt/nodejs/current/bin/node` (Node 24), `/opt/fg-index/current/apps/api-server/dist/index.js`, and the fixed loopback host and port.
+- Security baseline (2026-10-22): `/opt/nodejs/current/bin/node --version` must report Node **24.22.1 or newer within 24.x**. [The October 21 security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) fixes high-severity runtime issues. Updating application artifacts or `.nvmrc` does not replace the VM runtime. Install a verified official patched Node release using the host runtime maintenance procedure, update the root-owned runtime link, restart `fg-index-api`, and verify its health and runtime version. This PR does not perform that host change.
 - Keep release directories and `current` root-owned and readable by `fg-index`; the service account cannot modify application files.
 - The base API unit keeps `SCHEDULERS_ENABLED=false`. Preserve the existing scheduler-owner drop-in exactly. Only one backend may own alert schedulers; verify Render is stopped before changing ownership.
 - Preserve the API's existing `SIGTERM` shutdown behavior and `TimeoutStopSec=30s` during restart.

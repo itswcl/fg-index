@@ -169,7 +169,7 @@ Scraping remains the highest operational risk. Parser tests cover known Google/Y
 
 ### Prerequisites
 
-- Node.js 24 is used by API CI and the production OCI API, frontend CI, and GitHub Pages builds. The root workspace declares `>=18`; the API and frontend packages require Node 24.
+- Node.js 24.22.1 or newer within Node 24 is required by the workspace, API, and frontend. Run `nvm install && nvm use` to select the patched version in `.nvmrc`; CI and GitHub Pages builds use the same file. The OCI service uses its separately installed runtime, which must also be upgraded (see `ops/oci/README.md`).
 - npm 10 recommended.
 - Supabase project for auth and persistence.
 - Postgres connection strings for Prisma migrations.

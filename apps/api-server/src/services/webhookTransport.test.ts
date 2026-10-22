@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { RequestOptions } from "node:https";
-import type { PeerCertificate } from "node:tls";
+import type { DetailedPeerCertificate } from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   postWebhookJson, WEBHOOK_TIMEOUT_MS, WEBHOOK_MAX_CONCURRENT,
@@ -20,7 +20,7 @@ let hold = false;
 let peer: string | undefined;
 let responseBytes = 0;
 const completions: Array<() => void> = [];
-const requests: Array<EventEmitter & { end: Mock<[string], void>; destroy: Mock<[], void> }> = [];
+const requests: Array<EventEmitter & { end: Mock<(body: string) => void>; destroy: Mock<() => void> }> = [];
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 beforeEach(() => {
@@ -39,7 +39,7 @@ beforeEach(() => {
     };
     const req = Object.assign(new EventEmitter(), {
       end: vi.fn((_body: string) => { completions.push(complete); if (!hold) queueMicrotask(complete); }),
-      destroy: vi.fn<[], void>(),
+      destroy: vi.fn<() => void>(),
     });
     options.signal?.addEventListener("abort", () => { req.destroy(); req.emit("error", new Error("aborted secret URL")); });
     requests.push(req);
@@ -65,9 +65,9 @@ describe("pinned outbound webhook transport", () => {
         rejectUnauthorized: true,
         headers: { Host: "example.com", "Content-Type": "application/json" },
       });
-      const cert = { subjectaltname: "DNS:example.com" } as PeerCertificate;
+      const cert = { subjectaltname: "DNS:example.com" } as DetailedPeerCertificate;
       expect(options.checkServerIdentity?.("8.8.8.8", cert)).toBeUndefined();
-      expect(options.checkServerIdentity?.("8.8.8.8", { subjectaltname: "DNS:evil.com" } as PeerCertificate)).toBeInstanceOf(Error);
+      expect(options.checkServerIdentity?.("8.8.8.8", { subjectaltname: "DNS:evil.com" } as DetailedPeerCertificate)).toBeInstanceOf(Error);
       expect(requests[0].end).toHaveBeenCalledWith(JSON.stringify({ text: "hello" }));
       expect(mocks.dns4).toHaveBeenCalledTimes(1);
       expect(mocks.dns6).toHaveBeenCalledTimes(1);

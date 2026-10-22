@@ -94,7 +94,7 @@ beforeEach(() => {
   updateSpy.mockReset();
   deleteSpy.mockReset();
   deleteManySpy.mockReset();
-  condDeleteMany.mockReset();
+  condDeleteMany.mockReset().mockResolvedValue({ count: 0 });
 });
 
 describe("alerts controller — auth gate", () => {
