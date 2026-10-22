@@ -15,11 +15,6 @@ import {
 let activeTickerRefreshInFlight = false;
 
 async function refreshActiveTickerQuotes(): Promise<void> {
-  if (!isMarketWindowOpen()) {
-    // BTC is the only symbol allowed to refresh unattended overnight.
-    enqueueQuoteRefresh("BTC-USD");
-    return;
-  }
   if (activeTickerRefreshInFlight) return;
 
   const cooldownRemainingMs = getBackgroundDbCooldownRemainingMs();
@@ -27,6 +22,12 @@ async function refreshActiveTickerQuotes(): Promise<void> {
     recordActiveTickerSyncFailure(
       `Background DB cooldown active (${cooldownRemainingMs}ms remaining)`
     );
+    return;
+  }
+
+  if (!isMarketWindowOpen()) {
+    // BTC is the only symbol allowed to refresh unattended overnight.
+    enqueueQuoteRefresh("BTC-USD");
     return;
   }
 

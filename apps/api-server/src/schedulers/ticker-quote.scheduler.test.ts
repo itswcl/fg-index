@@ -50,6 +50,15 @@ describe("ticker quote scheduler", () => {
     expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("BTC-USD");
   });
 
+  it("preserves background DB cooldown before overnight BTC refresh", async () => {
+    vi.setSystemTime(new Date("2026-10-18T19:00:00Z"));
+    recordBackgroundDbFailure("test", new Error("Can't reach database server at `aws-1-us-east-2.pooler.supabase.com:6543`"));
+    const mod = await import("./ticker-quote.scheduler.js");
+    await mod.__privateTickerQuoteSchedulerForTests.refreshActiveTickerQuotes();
+    expect(enqueueQuoteRefreshMock).not.toHaveBeenCalled();
+    expect(listActiveTrackedSymbolsMock).not.toHaveBeenCalled();
+  });
+
   it("skips active ticker DB reads while the background DB circuit is cooling down", async () => {
     recordBackgroundDbFailure(
       "test",

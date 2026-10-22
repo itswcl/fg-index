@@ -2,7 +2,7 @@ import { isMarketWindowOpen } from '../../../../packages/shared-types/src/market
 import { useMarketWindow } from './useMarketWindow';
 import { useQuery } from '@tanstack/react-query';
 import type { FearGreed } from '../types';
-import { API_BASE_URL } from '../constants';
+import { API_BASE_URL, FEAR_GREED_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
 
 async function fetchFearGreed(): Promise<FearGreed> {
@@ -18,7 +18,8 @@ export function useFearGreed() {
     enabled: marketWindowOpen,
     queryKey: ['fearGreed'],
     queryFn: fetchFearGreed,
-    staleTime: 30 * 60 * 1000,
+    staleTime: FEAR_GREED_REFETCH_INTERVAL_MS,
+    refetchInterval: FEAR_GREED_REFETCH_INTERVAL_MS,
     retry: (attempt) => isMarketWindowOpen() && attempt < 2,
   });
 }

@@ -18,7 +18,7 @@ const envSchema = z.object({
   PORT: z.string().transform(Number).default("8080"),
   HOST: z.string().default("0.0.0.0"),
   SCHEDULERS_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
-  FEAR_GREED_INTERVAL_MS: z.string().transform(Number).default("1800000"),
+  FEAR_GREED_INTERVAL_MS: z.string().transform(Number).default("900000"),
   VIX_REALTIME_INTERVAL_MS: z.string().transform(Number).default("10000"),
   VIX_FALLBACK_INTERVAL_MS: z.string().transform(Number).default("300000"),
   BTC_INTERVAL_MS: z.string().transform(Number).default("60000"),

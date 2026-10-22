@@ -221,7 +221,7 @@ The API and WebSocket server run on the same port, defaulting to `http://localho
 | `GOOGLE_FINANCE_SPX_URL` | required | Google Finance S&P 500 page |
 | `YAHOO_FINANCE_SPX_URL` | required | Yahoo S&P 500 fallback |
 | `SCRAPER_USER_AGENT` | required | Browser User-Agent for upstream requests |
-| `FEAR_GREED_INTERVAL_MS` | `1800000` | Fear & Greed scheduler interval |
+| `FEAR_GREED_INTERVAL_MS` | `900000` | Fear & Greed scheduler interval |
 | `VIX_REALTIME_INTERVAL_MS` | `10000` | VIX realtime loop interval before adaptive throttling |
 | `VIX_FALLBACK_INTERVAL_MS` | `300000` | VIX fallback refresh interval |
 | `BTC_INTERVAL_MS` | `60000` | BTC scheduler interval |
