@@ -1,3 +1,5 @@
+import { TickerQuoteSchema } from "@shared/types";
+import { loadIndicatorSnapshot, saveIndicatorSnapshot } from "../services/indicator-snapshot.service.js";
 import { fetchSpxData } from "../services/spx.service.js";
 import type { TickerQuote } from "@shared/types";
 
@@ -7,7 +9,7 @@ import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordSpxFetch } from "../controllers/health.controller.js";
 
-let spxCache: Spx | null = null;
+let spxCache: Spx | null = loadIndicatorSnapshot("spx", TickerQuoteSchema);
 let listeners: ((data: Spx | null) => void)[] = [];
 let currentInterval = env.SPX_INTERVAL_MS;
 
@@ -29,6 +31,7 @@ async function refreshSpx() {
     const data = await fetchSpxData();
     if (data) {
       spxCache = data;
+      void saveIndicatorSnapshot("spx", data);
       recordSpxFetch();
       listeners.forEach((cb) => cb(data));
     }

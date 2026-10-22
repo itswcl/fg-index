@@ -1,5 +1,5 @@
 import { isMarketWindowOpen } from "@shared/types";
-import { refreshMarketStatus } from "../services/market-status.service.js";
+import { getMarketStatusStats, refreshMarketStatus } from "../services/market-status.service.js";
 
 const MARKET_STATUS_CHECK_INTERVAL_MS = 60_000;
 const REFRESH_TIMES_PT = new Set([
@@ -13,6 +13,9 @@ const REFRESH_TIMES_PT = new Set([
 ]);
 
 const completedRefreshKeys = new Set<string>();
+const MAX_ATTEMPTS = 5;
+let pendingRefresh: { key: string; attempts: number } | null = null;
+let refreshInFlight = false;
 
 function getPacificRefreshKey(date = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -31,21 +34,35 @@ function getPacificRefreshKey(date = new Date()): string {
   ].join("T");
 }
 
-async function refreshIfScheduled(now = new Date()): Promise<void> {
-  if (!isMarketWindowOpen(now)) return;
+async function refreshIfScheduled(now = new Date(), startup = false): Promise<void> {
+  if (!isMarketWindowOpen(now) || refreshInFlight) return;
   const key = getPacificRefreshKey(now);
-  const minute = key.slice(-5);
-  if (!REFRESH_TIMES_PT.has(minute) || completedRefreshKeys.has(key)) {
-    return;
+  const day = key.slice(0, 10);
+  for (const completed of completedRefreshKeys) {
+    if (!completed.startsWith(day)) completedRefreshKeys.delete(completed);
   }
-
-  completedRefreshKeys.add(key);
-  const session = await refreshMarketStatus();
-  process.stdout.write(`Market status refreshed: ${session ?? "unknown"}\n`);
+  if (pendingRefresh && !pendingRefresh.key.startsWith(day)) pendingRefresh = null;
+  if ((startup || REFRESH_TIMES_PT.has(key.slice(-5))) && !completedRefreshKeys.has(key) && pendingRefresh?.key !== key) {
+    pendingRefresh = { key, attempts: 0 };
+  }
+  if (!pendingRefresh || pendingRefresh.attempts >= MAX_ATTEMPTS) return;
+  const attempt = pendingRefresh;
+  attempt.attempts += 1;
+  refreshInFlight = true;
+  try {
+    const session = await refreshMarketStatus();
+    const stats = getMarketStatusStats();
+    if (stats.lastError || !stats.configured || session === null) return;
+    completedRefreshKeys.add(attempt.key);
+    pendingRefresh = null;
+    process.stdout.write(`Market status refreshed: ${session}\n`);
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 export function startMarketStatusScheduler(): void {
-  if (isMarketWindowOpen()) void refreshMarketStatus();
+  void refreshIfScheduled(new Date(), true);
   setInterval(() => {
     void refreshIfScheduled();
   }, MARKET_STATUS_CHECK_INTERVAL_MS);

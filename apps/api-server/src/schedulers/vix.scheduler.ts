@@ -1,3 +1,5 @@
+import { TickerQuoteSchema } from "@shared/types";
+import { loadIndicatorSnapshot, saveIndicatorSnapshot } from "../services/indicator-snapshot.service.js";
 import { fetchVixData } from "../services/vix.service.js";
 import type { TickerQuote } from "@shared/types";
 
@@ -7,7 +9,7 @@ import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordVixFetch } from "../controllers/health.controller.js";
 
-let vixCache: Vix | null = null;
+let vixCache: Vix | null = loadIndicatorSnapshot("vix", TickerQuoteSchema);
 let listeners: ((data: Vix | null) => void)[] = [];
 let currentInterval = env.VIX_REALTIME_INTERVAL_MS;
 let timeoutId: NodeJS.Timeout | null = null;
@@ -30,6 +32,7 @@ async function refreshVix() {
     const data = await fetchVixData();
     if (data) {
       vixCache = data;
+      void saveIndicatorSnapshot("vix", data);
       recordVixFetch();
       listeners.forEach((cb) => cb(data));
     }
@@ -55,6 +58,7 @@ async function fallbackRefreshVix() {
         const data = await fetchVixData();
         if (data) {
           vixCache = data;
+      void saveIndicatorSnapshot("vix", data);
           recordVixFetch();
         }
     } catch (error) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { findUniqueMock, findManyMock, upsertMock } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
@@ -115,6 +115,7 @@ describe("ticker cache price sanity guard", () => {
 });
 
 describe("ticker cache memory layer", () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
@@ -145,6 +146,24 @@ describe("ticker cache memory layer", () => {
       staleAt: new Date(Date.now() + 15_000),
     };
   }
+
+  it("serves Friday stock snapshots on a fresh Sunday request without refreshing upstream", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-18T18:00:00Z"));
+    const friday = new Date("2026-10-16T21:30:00Z");
+    findUniqueMock.mockResolvedValue({ ...dbRow(), fetchedAt: friday, staleAt: friday });
+    const { getCachedQuoteSnapshot, __resetTickerCacheMemoryForTests } = await import("./ticker-cache.service.js");
+    __resetTickerCacheMemoryForTests();
+    expect((await getCachedQuoteSnapshot("AMD")).quote?.price).toBe(100);
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the 24-hour age limit for BTC even during a stock holiday", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-26T18:00:00Z"));
+    const old = new Date("2026-11-24T18:00:00Z");
+    findUniqueMock.mockResolvedValue({ ...dbRow("BTC-USD"), fetchedAt: old, staleAt: old });
+    const { getCachedQuoteSnapshot } = await import("./ticker-cache.service.js");
+    expect((await getCachedQuoteSnapshot("BTC-USD")).quote).toBeNull();
+  });
 
   it("serves repeated single quote reads from memory after the first DB read", async () => {
     findUniqueMock.mockResolvedValue(dbRow());

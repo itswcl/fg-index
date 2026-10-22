@@ -215,6 +215,17 @@ describe("market status service", () => {
     });
   });
 
+  it("retries failed session persistence even when the provider session is unchanged", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ market: "open" }), { status: 200 })));
+    updateManyMock.mockRejectedValueOnce(new Error("database unavailable")).mockResolvedValueOnce({ count: 3 });
+    const mod = await import("./market-status.service.js");
+    await mod.refreshMarketStatus();
+    expect(mod.getMarketStatusStats().lastError).toBe("database unavailable");
+    await mod.refreshMarketStatus();
+    expect(updateManyMock).toHaveBeenCalledTimes(2);
+    expect(mod.getMarketStatusStats().lastError).toBeNull();
+  });
+
   it("does not override BTC session because crypto trades continuously", async () => {
     const mod = await import("./market-status.service.js");
     mod.__setMarketSessionForTests("closed");

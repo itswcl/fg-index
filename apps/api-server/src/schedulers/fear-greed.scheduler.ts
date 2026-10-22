@@ -1,3 +1,5 @@
+import { FearGreedSchema } from "@shared/types";
+import { loadIndicatorSnapshot, saveIndicatorSnapshot } from "../services/indicator-snapshot.service.js";
 import { fetchCnnData } from "../services/cnn.service.js";
 import { FearGreed } from "@shared/types";
 import { startMarketWindowTask } from "./market-window.js";
@@ -5,7 +7,7 @@ import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordFearGreedFetch } from "../controllers/health.controller.js";
 
-let fearGreedCache: FearGreed | null = null;
+let fearGreedCache: FearGreed | null = loadIndicatorSnapshot("fear-greed", FearGreedSchema);
 let listeners: ((data: FearGreed) => void)[] = [];
 
 export function subscribeToFearGreed(callback: (data: FearGreed) => void) {
@@ -21,6 +23,7 @@ async function refreshFearGreed() {
   try {
     const data = await fetchCnnData();
     fearGreedCache = data;
+    void saveIndicatorSnapshot("fear-greed", data);
     recordFearGreedFetch();
     listeners.forEach((cb) => cb(data));
   } catch (error) {

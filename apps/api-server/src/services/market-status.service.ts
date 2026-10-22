@@ -30,6 +30,7 @@ const cache: MarketSessionCache = {
   lastError: null,
   lastStatus: null,
 };
+let lastPersistedSession: MarketSession | null = null;
 let persistedSessionUpdates = 0;
 let skippedSessionPersists = 0;
 
@@ -163,6 +164,7 @@ export async function refreshMarketStatus(): Promise<MarketSession | null> {
     const url = new URL(env.MASSIVE_MARKET_STATUS_URL);
     url.searchParams.set("apiKey", env.MASSIVE_API_KEY);
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(env.QUOTE_FETCH_TIMEOUT_MS),
       headers: {
         Accept: "application/json",
         "User-Agent": env.SCRAPER_USER_AGENT,
@@ -174,14 +176,14 @@ export async function refreshMarketStatus(): Promise<MarketSession | null> {
 
     const body = (await response.json()) as MassiveMarketStatus;
     const session = normalizeMassiveSession(body);
-    const previousSession = cache.session;
     cache.session = session;
     cache.updatedAt = new Date();
     cache.serverTime = body.serverTime ?? null;
     cache.lastStatus = body;
     cache.lastError = null;
-    if (previousSession !== session) {
+    if (lastPersistedSession !== session) {
       await persistMarketSession(session);
+      lastPersistedSession = session;
       persistedSessionUpdates += 1;
     } else {
       skippedSessionPersists += 1;
@@ -199,6 +201,7 @@ export function __setMarketSessionForTests(session: MarketSession | null): void 
   cache.serverTime = null;
   cache.lastStatus = null;
   cache.lastError = null;
+  lastPersistedSession = null;
   persistedSessionUpdates = 0;
   skippedSessionPersists = 0;
 }

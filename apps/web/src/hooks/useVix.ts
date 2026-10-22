@@ -7,7 +7,6 @@ import { authFetch } from '../lib/authFetch';
 import { sanitizeTickerQuote } from '../lib/marketData';
 
 async function fetchVix(): Promise<TickerQuote | null> {
-  if (!isMarketWindowOpen()) throw new Error('Stock updates pause outside weekdays 6 AM–6 PM Pacific');
   const res = await authFetch(`${API_BASE_URL}/api/vix`);
   if (!res.ok) throw new Error('Failed to fetch VIX');
   return sanitizeTickerQuote(await res.json());
@@ -16,11 +15,12 @@ async function fetchVix(): Promise<TickerQuote | null> {
 export function useVix() {
   const marketWindowOpen = useMarketWindow();
   return useQuery<TickerQuote | null, Error>({
-    enabled: marketWindowOpen,
     queryKey: ['vix'],
     queryFn: fetchVix,
-    refetchInterval: VIX_REFETCH_INTERVAL_MS,
+    refetchInterval: marketWindowOpen ? VIX_REFETCH_INTERVAL_MS : false,
     staleTime: VIX_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: marketWindowOpen,
+    refetchOnReconnect: marketWindowOpen,
     retry: (attempt) => isMarketWindowOpen() && attempt < 2,
   });
 }

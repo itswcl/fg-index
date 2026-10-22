@@ -6,7 +6,6 @@ import { API_BASE_URL, FEAR_GREED_REFETCH_INTERVAL_MS } from '../constants';
 import { authFetch } from '../lib/authFetch';
 
 async function fetchFearGreed(): Promise<FearGreed> {
-  if (!isMarketWindowOpen()) throw new Error('Stock updates pause outside weekdays 6 AM–6 PM Pacific');
   const res = await authFetch(`${API_BASE_URL}/api/fear-greed`);
   if (!res.ok) throw new Error('Failed to fetch Fear & Greed');
   return res.json() as Promise<FearGreed>;
@@ -15,11 +14,12 @@ async function fetchFearGreed(): Promise<FearGreed> {
 export function useFearGreed() {
   const marketWindowOpen = useMarketWindow();
   return useQuery<FearGreed, Error>({
-    enabled: marketWindowOpen,
     queryKey: ['fearGreed'],
     queryFn: fetchFearGreed,
     staleTime: FEAR_GREED_REFETCH_INTERVAL_MS,
-    refetchInterval: FEAR_GREED_REFETCH_INTERVAL_MS,
+    refetchInterval: marketWindowOpen ? FEAR_GREED_REFETCH_INTERVAL_MS : false,
+    refetchOnWindowFocus: marketWindowOpen,
+    refetchOnReconnect: marketWindowOpen,
     retry: (attempt) => isMarketWindowOpen() && attempt < 2,
   });
 }
