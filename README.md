@@ -9,7 +9,7 @@ Real-time market dashboard for sentiment, volatility, crypto, indices, and custo
 | Web dashboard | https://itswcl.github.io/fg-index/ |
 | API | https://fg-index-api.duckdns.org |
 
-The API URL is the OCI endpoint; it does not imply the service is currently healthy. See [Deployment and CI](#deployment-and-ci) for the last recorded migration state.
+The web app is served by GitHub Pages; the API runs on OCI behind Caddy. See [Deployment and CI](#deployment-and-ci) for release operations and health checks.
 
 ---
 
@@ -23,11 +23,12 @@ The API URL is the OCI endpoint; it does not imply the service is currently heal
 - **Persistent quote cache** - Custom ticker responses are stored in Postgres via `TickerQuoteCache`; request handlers serve the latest known quote while a bounded refresh queue updates stale symbols in the background.
 - **Source links** - Cards and mobile rows can open their source page when the backend provides `sourceUrl`.
 - **After-hours context** - Custom equity quotes can carry `marketSession`, pre-market, and post-market fields; the UI shows a moon badge and paints the extended-hours price when the data is available.
-- **Last-known display** - The frontend hydrates cached quotes from localStorage and keeps good quotes visible through transient scraper misses instead of flashing to empty states.
+- **Last-known display** - The frontend hydrates cached quotes from localStorage and keeps good quotes visible through transient scraper misses. Cached stock reads remain available outside refresh hours; see [Refresh Schedule and Cached Reads](#refresh-schedule-and-cached-reads).
 
 ### Dashboard UX
 
 - **Desktop grid** - Drag-to-reorder card grid with 12 cards per page and up to 3 pages.
+- **Ticker groups** - A default group plus up to 12 custom groups, with synced names, order, and ticker membership.
 - **Mobile line-item layout** - Phones switch to compact metric rows with swipe pagination and an explicit edit mode for reorder/delete so normal vertical scrolling remains reliable.
 - **Stable loading states** - Initial signed-in hydration pads the grid/list with placeholders so cards and pagination do not jump as preferences and tickers load.
 - **Theme support** - Dark, light, and system theme modes.
@@ -36,7 +37,7 @@ The API URL is the OCI endpoint; it does not imply the service is currently heal
 ### Accounts, Alerts, and Notifications
 
 - **Supabase Google sign-in** - Authenticated APIs use Supabase JWTs.
-- **Cross-device sync** - Alerts, webhook destinations, custom ticker list, and card order persist in Supabase Postgres.
+- **Cross-device sync** - Alerts, webhook destinations, custom ticker lists, ticker groups, and card order persist in Supabase Postgres.
 - **Signed-in alerting** - The current web UI gates alert and webhook management behind Google sign-in.
 - **Anonymous fallback** - LocalStorage backs unsigned ticker/order sessions and acts as the migration source for older local alerts after sign-in.
 - **Server-side alerts** - Alerts are stored in Postgres and evaluated by the API server on each default market-data update, so delivery does not depend on the browser staying open.
@@ -53,9 +54,13 @@ apps/
   web/            React + Vite dashboard deployed to GitHub Pages
   macos-app/      React Native macOS legacy companion
 packages/
-  shared-types/   Zod schemas and TypeScript types shared by web and API
+  shared-types/   Shared schemas, types, limits, and Pacific market-window rules
 docs/
   *.md            Product specs and historical design notes
+ops/
+  deployment/     OCI release operations and systemd deployment cadence
+  oci/            API service unit and Caddy configuration
+  release-poller/ Artifact verification and staging
 ```
 
 The active product is the web app plus API server. The macOS app is retained as legacy code; see [`docs/README-macos-legacy.md`](docs/README-macos-legacy.md).
@@ -77,6 +82,7 @@ graph TD
         API["Express REST API"]
         WS["WebSocket Hub"]
         SCHED["Default indicator schedulers"]
+        SNAP[("Persistent stock indicator snapshots")]
         QAPI["Quote API /api/quote/*"]
         QQUEUE["Quote refresh queue"]
         ALERTS["Alert worker"]
@@ -109,16 +115,18 @@ graph TD
     CNN --> SCHED
     GOOG --> SCHED
     YHOO --> SCHED
-    GOOG --> QAPI
-    YHOO --> QAPI
-    CG --> QAPI
+    GOOG --> QQUEUE
+    YHOO --> QQUEUE
+    CG --> SCHED
+    CG --> QQUEUE
 
+    SCHED <--> SNAP
     SCHED --> API
     SCHED --> WS
     SCHED --> ALERTS
-    QAPI --> QUOTE_CACHE
+    QAPI <-->|"cached reads"| QUOTE_CACHE
     QAPI --> QQUEUE
-    QQUEUE --> QAPI
+    QQUEUE -->|"refreshed quotes"| QUOTE_CACHE
     HEALTH --> QQUEUE
 
     WEB --> API
@@ -142,9 +150,9 @@ graph TD
 
 ### Data Flow
 
-1. Default indicator schedulers keep in-memory caches warm and broadcast `FEAR_GREED_UPDATE`, `VIX_UPDATE`, `BTC_UPDATE`, and `SPX_UPDATE` over WebSocket.
-2. Custom ticker requests read from `TickerQuoteCache` first, enqueue refresh work, and return a quote or `null` without blocking on a slow upstream scrape.
-3. The quote worker periodically syncs all active `UserTicker` symbols and refreshes stale cache rows with bounded concurrency and per-symbol failure cooldown.
+1. Default indicator schedulers update memory caches and broadcast `FEAR_GREED_UPDATE`, `VIX_UPDATE`, `BTC_UPDATE`, and `SPX_UPDATE` over WebSocket. Configured disk snapshots restore Fear & Greed, VIX, and SPX after restarts.
+2. Custom ticker requests read the memory/Postgres quote cache, return a quote or `null`, and enqueue eligible refresh work without waiting for an upstream scrape.
+3. The quote worker scans tracked symbols and refreshes stale quotes with bounded concurrency and per-symbol failure cooldown. Stock refresh eligibility follows the shared market window; BTC runs all week.
 4. Authenticated users persist alerts, webhook destinations, card order, and tickers through REST APIs.
 5. The alert worker evaluates default-market alerts on scheduler updates and fans out delivery to all enabled webhook destinations.
 
@@ -154,14 +162,38 @@ graph TD
 
 | Area | Primary path | Fallback / guard |
 |------|--------------|------------------|
-| Fear & Greed | CNN DataViz JSON | In-memory scheduler cache |
+| Fear & Greed | CNN DataViz JSON | Last-known memory cache and optional restart snapshot |
 | VIX | Google Finance with forced English locale | Yahoo Finance HTML fallback |
-| S&P 500 | Google Finance with forced English locale | Yahoo Finance HTML fallback |
-| BTC | CoinGecko simple price | None |
+| S&P 500 | Google Finance with forced English locale | Yahoo chart JSON, then Yahoo HTML |
+| BTC | CoinGecko simple price | 60-second quote cache; no alternate provider |
 | Custom stocks/indices | Google Finance parser | Yahoo chart/HTML, exchange suffix resolution, last-known cache |
 | Custom quote serving | Postgres `TickerQuoteCache` | Background refresh queue with cooldown and health stats |
 
 Scraping remains the highest operational risk. Parser tests cover known Google/Yahoo shapes, and `validateTickerQuote` enforces a complete-quote-or-null contract so `NaN` or partial numeric payloads do not reach clients.
+
+---
+
+## Refresh Schedule and Cached Reads
+
+Stock upstream fetching and stock/mixed alerts run from **06:00 inclusive to 15:00 exclusive, America/Los_Angeles**, Monday through Friday, excluding standard full-day US exchange holidays. Pacific daylight saving changes are automatic. Full-day holiday rules follow the [NYSE calendar](https://www.nyse.com/trade/hours-calendars), including observed holidays and Good Friday. Early-close days retain this fixed application window for extended-hours quotes; extraordinary exchange closures are not predicted. BTC fetching and BTC-only alerts remain available 24/7.
+
+Outside that window, browsers may read the last cached stock snapshot once per query/page and keep its original timestamp; periodic stock polling and upstream refreshes pause. Mixed stock/BTC pages continue polling BTC without repeatedly requesting stock snapshots. Cached stock quotes remain readable across weekends and holidays even when older than 24 hours; BTC retains its normal age limit. The cadence below applies during the window for stocks and all week for BTC.
+
+| Data | Backend cadence | Browser HTTP polling |
+|------|-----------------|----------------------|
+| Fear & Greed | 10 min | 10 min |
+| VIX | 10 sec after each fetch; widens to 30 sec when fetching takes over 8 sec; separate 5-min fallback | 3 min |
+| S&P 500 | 10 sec after each fetch; widens to 30 sec when fetching takes over 8 sec | 3 min |
+| BTC | 60 sec; 60-sec quote freshness | 30 sec |
+| Custom tickers | 30-sec scan; 60-sec quote freshness; starts spaced at least 3 sec apart, 2 workers | 10-sec visible-page batch |
+
+Default indicators also arrive over WebSocket; their HTTP polling currently runs alongside push updates. Custom tickers have no WebSocket quote channel. Intervals are code defaults; API environment overrides can change backend values.
+
+Set `INDICATOR_SNAPSHOT_DIR` to a service-writable persistent directory to restore Fear & Greed, VIX, and SPX after an API restart. The OCI unit uses `/var/lib/fg-index/indicators` with `StateDirectory=fg-index`; writes atomically replace each complete JSON snapshot, and missing/invalid files are ignored. The first deployment cannot restore values never saved by an earlier process. Without this setting, default indicator snapshots remain in memory only. Custom ticker snapshots continue using Postgres.
+
+Market status is checked locally every minute, with upstream refresh slots at 06:00, 06:25, 06:30, 06:35, 12:55, 13:00, and 13:05 Pacific plus startup inside the window. An API key and enabled market-status refreshes are required. Market-status refresh failures retry once per minute, for at most five attempts including the initial attempt, then wait for the next scheduled slot. Startup refreshes follow the same retry policy. Retries stop outside the stock window; successful slots are marked complete only after provider fetch and required session persistence succeed.
+
+Default stock fetch loops resume within 30 seconds of opening. Quote queues reject off-window stock work, including requests from clients. An alert combining BTC and stock metrics waits for the stock window, including OR alerts. Settings, authentication, and WebSocket connections remain available all week. Health reports `stockUpdatesPaused: true` while stocks are paused and continues checking BTC freshness.
 
 ---
 
@@ -170,7 +202,7 @@ Scraping remains the highest operational risk. Parser tests cover known Google/Y
 ### Prerequisites
 
 - Node.js 24.22.1 or newer within Node 24 is required by the workspace, API, and frontend. Run `nvm install && nvm use` to select the patched version in `.nvmrc`; CI and GitHub Pages builds use the same file. The OCI service uses its separately installed runtime, which must also be upgraded (see `ops/oci/README.md`).
-- npm 10 recommended.
+- npm bundled with the selected Node version.
 - Supabase project for auth and persistence.
 - Postgres connection strings for Prisma migrations.
 
@@ -196,21 +228,25 @@ SUPABASE_JWKS_URL=https://<project>.supabase.co/auth/v1/.well-known/jwks.json
 Run locally:
 
 ```bash
+npm ci --workspaces=false --prefix packages/shared-types
 cd apps/api-server
-npm install
-npm install --prefix ../../packages/shared-types
-npx prisma generate
-npx prisma migrate dev
+npm ci --workspaces=false
+npm run build
+npm run prisma:migrate
 npm run dev
 ```
 
-The API and WebSocket server run on the same port, defaulting to `http://localhost:8080`.
+Run the installation commands from the repository root. `npm run build` builds shared types, generates the Prisma client, and builds the API. `npm run prisma:migrate` loads `.env.local` for development migrations.
+
+The API and WebSocket server share port 8080 by default. Schedulers start by default and contact real upstream providers; set `SCHEDULERS_ENABLED=false` to disable periodic schedulers on additional API processes. Quote read requests can still enqueue eligible background refreshes.
 
 ### API Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP + WebSocket port |
+| `HOST` | `0.0.0.0` | Listen address; OCI binds to `127.0.0.1` behind Caddy |
+| `SCHEDULERS_ENABLED` | `true` | Start indicator, custom quote, and market-status schedulers; enable on only the designated scheduler owner |
 | `INTERNAL_API_KEY` | `dev-key-123` | API key for public read endpoints; the default disables enforcement in development and is rejected in production |
 | `CORS_ORIGIN` | `*` | Comma-separated allowed origins |
 | `CNN_FEAR_GREED_URL` | required | CNN Fear & Greed JSON endpoint |
@@ -263,7 +299,7 @@ Run locally:
 
 ```bash
 cd apps/web
-npm install
+npm ci --workspaces=false
 npm run dev
 ```
 
@@ -275,7 +311,7 @@ npm run dev
 | `VITE_SUPABASE_URL` | Supabase project URL for sign-in |
 | `VITE_SUPABASE_ANON_KEY` | Supabase public anon key |
 
-Without Supabase env vars, market data still works, but signed-in persistence and server-side alert/webhook management are unavailable.
+Configure both browser Supabase variables even when testing unsigned use: the app constructs its auth client at startup. Use the public anon key, never a service-role key. Google sign-in is required for synced preferences and server-side alert/webhook management.
 
 ---
 
@@ -283,7 +319,7 @@ Without Supabase env vars, market data still works, but signed-in persistence an
 
 ### Public Read APIs
 
-These endpoints are API-key gated in production and skip API-key enforcement when `INTERNAL_API_KEY=dev-key-123`.
+Market-data endpoints require `X-API-KEY` in production. The development default `INTERNAL_API_KEY=dev-key-123` bypasses that check and is rejected at production startup.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -291,10 +327,10 @@ These endpoints are API-key gated in production and skip API-key enforcement whe
 | `/api/vix` | `GET` | Latest VIX scheduler cache |
 | `/api/btc` | `GET` | Latest BTC scheduler cache |
 | `/api/spx` | `GET` | Latest S&P 500 scheduler cache |
-| `/api/quote/:ticker` | `GET` | Cached custom quote snapshot; enqueues refresh |
-| `/api/quote/batch?symbols=AAPL,MSFT` | `GET` | Up to 12 deduped quote snapshots in one response; enqueues refresh for all |
-| `/api/health` | `GET` | Scheduler and quote-refresh health |
-| `/health` | `GET` | Backward-compatible health alias |
+| `/api/quote/:ticker` | `GET` | Cached custom quote snapshot; enqueues refresh when eligible |
+| `/api/quote/batch?symbols=AAPL,MSFT` | `GET` | Up to 12 deduped cached quotes; refresh eligibility follows the market window |
+
+`GET /api/health` and its alias `GET /health` require no API key. They return scheduler, quote-refresh, market-status, and alert-worker diagnostics, including `stockUpdatesPaused`.
 
 Batch quote response (quote shape abbreviated here; real quotes include `previousClose`, `change`, `changePercent`, and `fetchedAt`):
 
@@ -324,10 +360,16 @@ Send `Authorization: Bearer <supabase-access-token>`.
 | `/api/user/preferences` | `GET` / `PUT` | Persist `cardOrder` |
 | `/api/user/tickers` | `GET` / `POST` / `PUT` | List, add, or bulk-replace custom tickers |
 | `/api/user/tickers/:symbol` | `DELETE` | Remove a custom ticker |
+| `/api/user/ticker-groups` | `GET` / `POST` | List or create ticker groups |
+| `/api/user/ticker-groups/reorder` | `PUT` | Reorder groups |
+| `/api/user/ticker-groups/migration` | `PUT` | Migrate local ticker groups |
+| `/api/user/ticker-groups/:groupId` | `PUT` / `DELETE` | Rename or delete a group |
+| `/api/user/ticker-groups/:groupId/tickers` | `POST` / `PUT` | Add a ticker or replace group membership |
+| `/api/user/ticker-groups/:groupId/tickers/:symbol` | `DELETE` | Remove a ticker from a group |
 
 ### WebSocket Protocol
 
-The WebSocket server runs on the same host/port as HTTP. Browser clients pass auth through query params because custom headers are not available during the WebSocket handshake.
+The WebSocket server shares the HTTP host/port and sends cached default-indicator snapshots on connection. An optional Supabase JWT in `?token=<access-token>` enables user alert delivery; anonymous connections receive market snapshots. Custom ticker cards use HTTP batch polling. Connections and upgrades are bounded globally and per IP; the payload limit is 4 KiB.
 
 | Message | Direction | Description |
 |---------|-----------|-------------|
@@ -384,7 +426,6 @@ The removed ad-hoc `POST /api/webhooks/test` route is unavailable; use a saved,
 JWT-authenticated webhook test route. These limits contain resource use but do
 not make arbitrary public webhook recipients trusted or prevent notification spam.
 
-
 ---
 
 ## Database
@@ -395,17 +436,12 @@ PostgreSQL is accessed through Prisma. Core models:
 |-------|---------|
 | `User` | Supabase user mirror with email and `cardOrder` |
 | `UserTicker` | Per-user custom ticker list and order |
+| `UserTickerGroup` / `UserTickerGroupItem` | Named groups, group order, and ticker membership |
 | `TickerQuoteCache` | Persistent quote snapshots plus refresh metadata |
 | `Alert` / `Condition` | Server-side threshold alerts |
 | `Webhook` | N-per-user webhook destinations |
 
-Run migrations:
-
-```bash
-cd apps/api-server
-npx prisma migrate dev      # development
-npx prisma migrate deploy   # production
-```
+Development migrations are part of [API setup](#api-server). For production, supply `DATABASE_URL` and `DIRECT_URL` through the deployment environment, then run `npm run prisma:deploy` from `apps/api-server`. The release installer does not run migrations; application rollback does not roll back the database.
 
 ---
 
@@ -413,52 +449,46 @@ npx prisma migrate deploy   # production
 
 | Area | Platform | Trigger / Notes |
 |------|----------|-----------------|
-| API server | OCI Always Free VM | HTTPS `https://fg-index-api.duckdns.org` and WSS `wss://fg-index-api.duckdns.org`; Node.js 24 under systemd behind Caddy |
-| Web app | GitHub Pages | `.github/workflows/deploy-frontend.yml` on push to `main` or manual dispatch |
-| Database | Supabase Postgres | Prisma migrations from API workspace |
-| CI | GitHub Actions | Type-checks API/web, runs API tests, builds web |
-| Uptime | UptimeRobot | Existing endpoint is configured, as confirmed by the user; Render remains suspended and fallback is deferred |
+| API | OCI VM, Caddy, systemd, Node 24 | Verified current-main release, installed by the deployment service |
+| Frontend | GitHub Pages | Push to `main` or manual dispatch of `deploy-frontend.yml` |
+| Database | Supabase Postgres | Explicit Prisma migrations, separate from release installation |
+| CI | GitHub Actions | Operations tests and unit checks, API build/type-check/tests, frontend type-check/build |
+| Availability monitoring | UptimeRobot | External endpoint monitoring; independent of release selection |
 
-### OCI migration closeout (October 6, 2026)
+### API release flow
 
-The reviewed transition completed from source commit `a53fa079c696f2e4e7cf1c1443e716c2301d569e`. It selected that release, retained `dc7d2ea9c8c2d7bebf1dbca94edda6abc9613589` as the previous release, cleared the promotion intent, and successfully restarted the fixed API service. The installer exited successfully. The deployment timer is the sole owner of automatic release discovery and deployment, on an approximately 10-minute cadence; there is no separate poller timer. The OCI API is the sole owner of alert schedulers after Render workers were confirmed stopped. The frontend uses the HTTPS and WSS endpoints above; WSS is derived from `VITE_API_URL` unless `VITE_WS_URL` is explicitly set.
+1. Main CI builds the production archive and generates its provenance attestation.
+2. `publish-api-release.yml` publishes the successful main build as an immutable per-commit GitHub release.
+3. OCI's deployment service starts the unprivileged poller, verifies the current-main artifact, and promotes it into an inactive release directory.
+4. The installer selects `/opt/fg-index/current` and restarts `fg-index-api.service`. One deployment timer runs roughly every 10 minutes; there is no separate poller timer.
 
-Automatic deployment installs only eligible verified releases, restarts the API service, and records the selected version. Release acceptance does not wait for application health, socket ownership, or independent process proof. A download or integrity failure leaves the current installation untouched. Application failures do not trigger automatic rollback: rollback is an operator action, and the broken release can be suppressed to prevent immediate reinstallation. Installer errors are reported for operator review.
+The API is the scheduler owner; Render remains suspended. The installer keeps the selected and previous releases, caps staged releases at three, and preserves disk/inode reserves. Failed artifact verification leaves the selected release untouched. Runtime health is checked separately, and rollback is an explicit operator action rather than an automatic health gate.
 
-The deployment controller retains the selected and previous releases, caps staged releases at three, and preserves at least 8 GiB of disk space and 10,000 inodes. At the Stage 1 closeout, two releases were installed and three were staged; the initial automatic cadence completed successfully, with the next run on the roughly 10-minute schedule. Later API commits are installed by that cadence. The existing Always Free VM was retained; the migration added no OCI resources or ingress rules. Render remains user-suspended, with fallback deferred. Supabase Postgres remains unchanged; the deployment controller does not run schema migrations or downgrade the database. UptimeRobot is already configured, as confirmed by the user.
+The service handles `SIGTERM`/`SIGINT` by draining HTTP, WebSocket, and in-flight alert work for up to 20 seconds, then allowing up to 5 seconds for database shutdown. systemd allows 30 seconds before forcing termination. Webhook delivery remains best-effort during shutdown.
 
-One-time post-transition observations on October 6, 2026: GitHub Pages returned HTTP 200, the OCI API `/health` endpoint returned HTTP 200, and an anonymous WebSocket connection opened then closed cleanly with code 1000 without authentication or data writes. These observations are informational only; runtime health and anonymous WebSocket behavior are not release gates or continuing health claims. The user handles authenticated sign-in, broader feature, and notification tests.
+For install, restart, and rollback commands, use [OCI release operations](ops/deployment/README.md). For runtime setup, environment handling, snapshot storage, and Caddy, use [OCI service configuration](ops/oci/README.md).
 
-Useful verification commands:
+### Verification
+
+From the repository root, after installing dependencies as described above:
 
 ```bash
 cd apps/api-server
-npm install --prefix ../../packages/shared-types
-npm install
+npm run build
 npx tsc --noEmit
-npx vitest run
+npm test
 
 cd ../web
-npm install
 npm run lint
 npm run build
 ```
 
-Workflow rules:
+The API test runner supplies dummy environment defaults. Live-server integration tests and the live CNN test are excluded from the default suite; see `apps/api-server/vitest.config.ts`. CI also runs the release poller, promoter, deployment, bootstrap, and systemd contract checks.
 
-- One PR per task; do not bundle unrelated changes.
-- Branch from fresh `origin/main`.
+For a deployed API, `GET /health` reports current data availability and freshness. A successful workflow or recorded release selection alone does not establish application health.
+
+### Contribution workflow
+
+- Branch from fresh `origin/main`, with one PR per task.
 - Keep review branches to one commit unless the reviewer asks otherwise.
-- Preserve the public response contracts for default cards: VIX returns `ticker: "VIX"`, S&P 500 returns `ticker: "SPX"`, and BTC returns the canonical BTC quote.
-
-### Stock refresh window and cached reads
-
-Stock upstream fetching and stock/mixed alerts run from **06:00 inclusive to 15:00 exclusive, America/Los_Angeles**, Monday through Friday, excluding standard full-day US exchange holidays. Pacific daylight saving changes are automatic. Full-day holiday rules follow the [NYSE calendar](https://www.nyse.com/trade/hours-calendars), including observed holidays and Good Friday. Early-close days retain this fixed application window for extended-hours quotes; extraordinary exchange closures are not predicted. BTC fetching and BTC-only alerts remain available 24/7.
-
-Outside that window, browsers may read the last cached stock snapshot once per query/page and keep its original timestamp; periodic stock polling and upstream refreshes pause. Mixed stock/BTC pages continue polling BTC without repeatedly requesting stock snapshots. Cached stock quotes remain readable across weekends and holidays even when older than 24 hours; BTC retains its normal age limit. Fear & Greed refreshes every 10 minutes during the window.
-
-Set `INDICATOR_SNAPSHOT_DIR` to a service-writable persistent directory to restore Fear & Greed, VIX, and SPX after an API restart. The OCI unit uses `/var/lib/fg-index/indicators` with `StateDirectory=fg-index`; writes atomically replace each complete JSON snapshot, and missing/invalid files are ignored. The first deployment cannot restore values never saved by an earlier process. Without this setting, default indicator snapshots remain in memory only. Custom ticker snapshots continue using Postgres.
-
-Market-status refresh failures retry once per minute, for at most five attempts including the initial attempt, then wait for the next scheduled slot. Startup refreshes follow the same retry policy. Retries stop outside the stock window; successful slots are marked complete only after provider fetch and required session persistence succeed.
-
-Default stock fetch loops resume within 30 seconds of opening. Quote queues reject off-window stock work, including requests from clients. An alert combining BTC and stock metrics waits for the stock window, including OR alerts. Settings, authentication, and WebSocket connections remain available all week. Health reports `stockUpdatesPaused: true` while stocks are paused and continues checking BTC freshness.
+- Preserve default-card response contracts: VIX returns `ticker: "VIX"`, S&P 500 returns `ticker: "SPX"`, and BTC uses the canonical `BTC-USD` quote.
