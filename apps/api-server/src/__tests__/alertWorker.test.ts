@@ -67,6 +67,8 @@ function alertRow(overrides: Partial<{
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-21T17:00:00Z"));
   __resetBackgroundDbCircuitForTests();
   __resetAlertWorkerStateForTests();
   findManySpy.mockClear();
@@ -81,6 +83,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   __setFetchOverrideForTests(null);
   __setPushOverrideForTests(null);
   __resetAlertWorkerStateForTests();
@@ -88,6 +91,21 @@ afterEach(() => {
 });
 
 describe("alertWorker.evaluateForMetric", () => {
+  it("keeps BTC-only alerts active on weekends and pauses mixed alerts", async () => {
+    vi.setSystemTime(new Date("2026-10-18T19:00:00Z"));
+    __setFetchOverrideForTests(async () => [
+      alertRow({ id: "btc-only", conditions: [{ metric: "btc", operator: ">", value: 1 }] }),
+      alertRow({ id: "mixed", logic: "OR", conditions: [
+        { metric: "btc", operator: ">", value: 1 },
+        { metric: "vix", operator: ">", value: 30 },
+      ] }),
+    ]);
+    const snapshot = { fearGreedScore: 10, vixPrice: 35, btcPrice: 100, spxPrice: 5000 };
+    expect(await evaluateForMetric("vix", snapshot)).toEqual([]);
+    const triggered = await evaluateForMetric("btc", snapshot);
+    expect(triggered.map((msg) => msg.alertId)).toEqual(["btc-only"]);
+  });
+
   it("returns empty and makes no side-effects when no candidates exist", async () => {
     __setFetchOverrideForTests(async () => []);
     const out = await evaluateForMetric("vix", {
@@ -255,7 +273,7 @@ describe("alertWorker.evaluateForMetric", () => {
   });
 
   it("skips alerts inside cooldown window", async () => {
-    const now = new Date("2026-04-15T12:00:00Z");
+    const now = new Date("2026-04-15T17:00:00Z");
     const recent = new Date(now.getTime() - 10 * 60_000); // 10 min ago
     __setFetchOverrideForTests(async () => [
       alertRow({ cooldownMinutes: 60, lastTriggeredAt: recent }),
@@ -270,7 +288,7 @@ describe("alertWorker.evaluateForMetric", () => {
   });
 
   it("re-fires after cooldown elapses", async () => {
-    const now = new Date("2026-04-15T12:00:00Z");
+    const now = new Date("2026-04-15T17:00:00Z");
     const old = new Date(now.getTime() - 120 * 60_000); // 2h ago
     __setFetchOverrideForTests(async () => [
       alertRow({ cooldownMinutes: 60, lastTriggeredAt: old }),

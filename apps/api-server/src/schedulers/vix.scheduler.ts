@@ -3,6 +3,7 @@ import type { TickerQuote } from "@shared/types";
 
 // Aliased so the scheduler's public API reads naturally.
 type Vix = TickerQuote;
+import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordVixFetch } from "../controllers/health.controller.js";
 
@@ -20,6 +21,10 @@ export function getCachedVix(): Vix | null {
 }
 
 async function refreshVix() {
+  if (!isMarketWindowOpen()) {
+    timeoutId = setTimeout(refreshVix, 30_000);
+    return;
+  }
   const start = Date.now();
   try {
     const data = await fetchVixData();
@@ -45,6 +50,7 @@ async function refreshVix() {
 }
 
 async function fallbackRefreshVix() {
+    if (!isMarketWindowOpen()) return;
     try {
         const data = await fetchVixData();
         if (data) {

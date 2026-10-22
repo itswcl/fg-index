@@ -60,6 +60,8 @@ const fetchFreshTickerQuoteMock =
 describe("quote refresh queue service", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T17:00:00Z"));
     vi.restoreAllMocks();
     vi.resetModules();
     applyEnv();
@@ -69,6 +71,17 @@ describe("quote refresh queue service", () => {
     recordQuoteRefreshFailureMock.mockReset();
     upsertCachedQuoteMock.mockReset();
     fetchFreshTickerQuoteMock.mockReset();
+  });
+
+  it("blocks stock refreshes but permits BTC on weekends", async () => {
+    vi.setSystemTime(new Date("2026-10-18T19:00:00Z"));
+    getFreshQuoteMemorySnapshotMock.mockReturnValue({ quote: null, isFresh: true });
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    mod.enqueueQuoteRefresh(["AAPL", "BTC-USD"]);
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    expect(getFreshQuoteMemorySnapshotMock).toHaveBeenCalledTimes(1);
+    expect(getFreshQuoteMemorySnapshotMock).toHaveBeenCalledWith("BTC-USD");
   });
 
   it("skips upstream work when the cache is already fresh", async () => {

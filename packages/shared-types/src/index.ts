@@ -1,3 +1,5 @@
+export { isMarketWindowOpen, isBtcSymbol, canRefreshSymbol, canEvaluateMarketAlert } from "./market-window.js";
+
 import { z } from "zod";
 
 export { MAX_CUSTOM_TICKER_GROUPS } from "./limits.js";

@@ -449,3 +449,20 @@ Workflow rules:
 - Branch from fresh `origin/main`.
 - Keep review branches to one commit unless the reviewer asks otherwise.
 - Preserve the public response contracts for default cards: VIX returns `ticker: "VIX"`, S&P 500 returns `ticker: "SPX"`, and BTC returns the canonical BTC quote.
+
+### Scheduled market-data window
+
+Automatic stock-data fetching, browser stock polling, and stock/mixed alerts run
+Monday–Friday from **6:00 AM inclusive to 6:00 PM exclusive in America/Los_Angeles**.
+This follows Pacific daylight saving time; holidays within weekdays are included.
+Fear & Greed, VIX, SPX, custom stock symbols, and market-status refreshes pause
+outside that window. Locally cached stock values remain visible. Default stock
+fetch loops resume within 30 seconds of opening; market status also refreshes at
+6:00 AM. Quote queues reject off-window stock work, including refresh requests
+from clients. Existing cache TTLs and failure cooldowns still apply.
+
+BTC fetching, browser polling, WebSocket delivery, and BTC-only alerts stay active
+24/7. An alert combining BTC with any stock metric waits for the stock window,
+including alerts using OR. Settings/authentication, health checks, and the shared
+WebSocket connection remain available all week. Health reports
+`stockUpdatesPaused: true` outside the window and continues checking BTC freshness.

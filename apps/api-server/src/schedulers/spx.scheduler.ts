@@ -3,6 +3,7 @@ import type { TickerQuote } from "@shared/types";
 
 // Aliased so the scheduler's public API reads naturally.
 type Spx = TickerQuote;
+import { isMarketWindowOpen } from "@shared/types";
 import { env } from "../config/env.js";
 import { recordSpxFetch } from "../controllers/health.controller.js";
 
@@ -19,6 +20,10 @@ export function getCachedSpx(): Spx | null {
 }
 
 async function refreshSpx() {
+  if (!isMarketWindowOpen()) {
+    setTimeout(refreshSpx, 30_000);
+    return;
+  }
   const start = Date.now();
   try {
     const data = await fetchSpxData();

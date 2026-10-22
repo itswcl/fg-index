@@ -1,3 +1,4 @@
+import { canRefreshSymbol } from "@shared/types";
 import { env } from "../config/env.js";
 import { normalizeQuoteSymbol } from "./quote-symbols.service.js";
 import {
@@ -60,7 +61,7 @@ function drainQueue(): void {
     if (!symbol) continue;
 
     queued.delete(symbol);
-    if (isCoolingDown(symbol)) {
+    if (!canRefreshSymbol(symbol) || isCoolingDown(symbol)) {
       continue;
     }
     inFlight.add(symbol);
@@ -76,6 +77,7 @@ function drainQueue(): void {
 }
 
 async function processSymbol(symbol: string): Promise<void> {
+  if (!canRefreshSymbol(symbol)) return;
   try {
     const snapshot =
       getFreshQuoteMemorySnapshot(symbol) ?? (await getCachedQuoteSnapshot(symbol));
@@ -84,6 +86,7 @@ async function processSymbol(symbol: string): Promise<void> {
       return;
     }
 
+    if (!canRefreshSymbol(symbol)) return;
     const quote = await fetchFreshTickerQuote(symbol);
     if (!quote) {
       const message = "Upstream quote fetch returned null";
@@ -106,7 +109,7 @@ export function enqueueQuoteRefresh(symbols: string[] | string): void {
   const items = Array.isArray(symbols) ? symbols : [symbols];
   for (const raw of items) {
     const symbol = normalizeSymbol(raw);
-    if (!symbol || queued.has(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
+    if (!symbol || !canRefreshSymbol(symbol) || queued.has(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
       continue;
     }
     queue.push(symbol);

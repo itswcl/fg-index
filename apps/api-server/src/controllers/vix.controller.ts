@@ -5,7 +5,7 @@ import { handleError } from "../errors/httpError.js";
 export const getVix = (req: Request, res: Response) => {
   try {
     const data = getCachedVix();
-    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("Cache-Control", "public, max-age=180");
     res.json(data);
   } catch (error) {
     handleError(res, error);
