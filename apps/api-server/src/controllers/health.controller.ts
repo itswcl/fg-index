@@ -83,6 +83,8 @@ export const getHealth = (req: Request, res: Response) => {
     },
     tickerQuotes: {
       queuedSymbols: quoteRefresh.queuedSymbols,
+      visibleQueuedSymbols: quoteRefresh.visibleQueuedSymbols,
+      backgroundQueuedSymbols: quoteRefresh.backgroundQueuedSymbols,
       inFlightSymbols: quoteRefresh.inFlightSymbols,
       activeWorkers: quoteRefresh.activeWorkers,
       coolingDownSymbols: quoteRefresh.coolingDownSymbols,
