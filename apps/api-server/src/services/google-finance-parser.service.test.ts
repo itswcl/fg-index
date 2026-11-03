@@ -167,6 +167,12 @@ describe("parseGoogleFinanceQuoteHtml", () => {
     expect(quote).toBeNull();
   });
 
+  it("does not read a trading-calendar year as the price when quote data is missing", () => {
+    const html = `AF_initDataCallback({data:[["/m/test",["RKLB","NASDAQ"],"Rocket Lab",0,"USD",[null,null,null],null,null,[[2026,11,3,9,30]]]]});`;
+
+    expect(parseGoogleFinanceQuoteHtml(html, { tickerFormat: "RKLB:NASDAQ" })).toBeNull();
+  });
+
   it("extracts extended-hours price from AF data", () => {
     const html =
       `AF_initDataCallback({key: 'ds:2', data:[[[[` +

@@ -236,4 +236,27 @@ describe("quote refresh queue service", () => {
     expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
+
+  it("does not delay a stale quote behind already-fresh symbols", async () => {
+    vi.useFakeTimers();
+    process.env.QUOTE_REFRESH_SPACING_MS = "3000";
+    getFreshQuoteMemorySnapshotMock.mockImplementation((symbol: string) =>
+      symbol === "AAPL" ? null : { quote: { ticker: symbol, price: 100 }, isFresh: true }
+    );
+    getCachedQuoteSnapshotMock.mockResolvedValue({ quote: null, isFresh: false });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    try {
+      mod.enqueueQuoteRefresh(["MSFT", "GOOGL", "AAPL"]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(fetchFreshTickerQuoteMock).toHaveBeenCalledWith("AAPL");
+      expect(mod.getQuoteRefreshQueueStats().queuedSymbols).toBe(0);
+    } finally {
+      mod.__resetQuoteRefreshQueueForTests();
+      vi.useRealTimers();
+    }
+  });
 });

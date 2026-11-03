@@ -126,9 +126,11 @@ function parseAfQuote(
     options.tickerFormat
   );
   const number = NUMBER_RE;
+  // The first array after the scalar metadata is the quote. Never scan past
+  // an empty/malformed quote array into calendar dates or another record.
   const recordRe = new RegExp(
     String.raw`\[\s*"[^"]+"\s*,\s*\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]\s*,\s*"([^"]*)"` +
-      String.raw`[\s\S]{0,120}?\[\s*(${number})\s*,\s*(${number})\s*,\s*(${number})[^\]]*\]` +
+      String.raw`[^\[\]]{0,120}?\[\s*(${number})\s*,\s*(${number})\s*,\s*(${number})[^\]]*\]` +
       String.raw`(?:\s*,\s*null\s*,\s*(${number}))?` +
       String.raw`(?:[\s\S]{0,300}?null\s*,\s*\[\s*(${number})\s*,\s*(${number})\s*,\s*(${number})[^\]]*\])?`,
     "g"
