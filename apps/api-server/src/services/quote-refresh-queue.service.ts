@@ -112,6 +112,10 @@ export function enqueueQuoteRefresh(symbols: string[] | string): void {
     if (!symbol || !canRefreshSymbol(symbol) || queued.has(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
       continue;
     }
+    // Browser polling and scheduler syncs repeatedly submit the same symbols.
+    // Fresh memory hits need no upstream work and must not consume paced slots
+    // ahead of stale quotes. The worker checks freshness again when it starts.
+    if (getFreshQuoteMemorySnapshot(symbol)?.isFresh) continue;
     queue.push(symbol);
     queued.add(symbol);
   }

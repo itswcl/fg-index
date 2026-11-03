@@ -437,6 +437,40 @@ describe("ticker service — Google Finance AF_initDataCallback parser", () => {
 
     expect(quote).toBeNull();
   });
+
+  it("recovers through Yahoo when missing Google quote data is followed by calendar dates", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("google.com/finance/quote/RKLB")) {
+        return new Response(
+          `AF_initDataCallback({data:[["/m/test",["RKLB","NASDAQ"],"Rocket Lab",0,"USD",[null,null,null],null,null,[[2026,11,3,9,30]]]]});`
+        );
+      }
+      if (url.includes("/v7/finance/quote")) {
+        return new Response(JSON.stringify({ quoteResponse: { result: [{
+          symbol: "RKLB",
+          shortName: "Rocket Lab",
+          regularMarketPrice: 55,
+          regularMarketPreviousClose: 54,
+          regularMarketChange: 1,
+          regularMarketChangePercent: 1.8519,
+        }] } }));
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("./ticker.service.js");
+    mod._resetTickerServiceState();
+
+    expect(await mod.fetchFreshTickerQuote("RKLB")).toMatchObject({
+      ticker: "RKLB",
+      price: 55,
+      previousClose: 54,
+      change: 1,
+    });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/v7/finance/quote"))).toBe(true);
+  });
 });
 
 describe("ticker service — default market index aliases", () => {
