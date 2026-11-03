@@ -259,4 +259,105 @@ describe("quote refresh queue service", () => {
       vi.useRealTimers();
     }
   });
+
+  it("promotes visible symbols without duplicates and gives background work a turn after three visible jobs", async () => {
+    vi.useFakeTimers();
+    process.env.QUOTE_REFRESH_SPACING_MS = "1000";
+    process.env.QUOTE_REFRESH_CONCURRENCY = "1";
+    getCachedQuoteSnapshotMock.mockResolvedValue({ quote: null, isFresh: false });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    try {
+      mod.enqueueQuoteRefresh(["SEED", "OLD1", "OLD2", "PROMOTE"]);
+      mod.enqueueQuoteRefresh(["PROMOTE", "V1", "V2", "V3", "V4"], { priority: "visible" });
+      mod.enqueueQuoteRefresh("PROMOTE"); // A scheduler sync must not demote it.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mod.getQuoteRefreshQueueStats()).toMatchObject({
+        queuedSymbols: 7,
+        visibleQueuedSymbols: 5,
+        backgroundQueuedSymbols: 2,
+      });
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(fetchFreshTickerQuoteMock.mock.calls.map(([symbol]) => symbol)).toEqual([
+        "SEED", "PROMOTE", "V1", "V2", "OLD1",
+      ]);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(fetchFreshTickerQuoteMock.mock.calls.map(([symbol]) => symbol)).toEqual([
+        "SEED", "PROMOTE", "V1", "V2", "OLD1", "V3", "V4", "OLD2",
+      ]);
+    } finally {
+      mod.__resetQuoteRefreshQueueForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off repeated failures for one, two, then five minutes, even for visible requests", async () => {
+    getCachedQuoteSnapshotMock.mockResolvedValue({ quote: null, isFresh: false });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    mod.enqueueQuoteRefresh("BAD");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    let attempts = 1;
+    for (const cooldownMs of [60_000, 120_000, 300_000, 300_000]) {
+      vi.setSystemTime(Date.now() + cooldownMs - 1);
+      mod.enqueueQuoteRefresh("BAD", { priority: "visible" });
+      await mod.__waitForQuoteRefreshQueueToIdle();
+      expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(attempts);
+      vi.setSystemTime(Date.now() + 1);
+      mod.enqueueQuoteRefresh("BAD", { priority: "visible" });
+      await mod.__waitForQuoteRefreshQueueToIdle();
+      expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(++attempts);
+    }
+  });
+
+  it("resets the progressive cooldown after successfully persisting a quote", async () => {
+    getCachedQuoteSnapshotMock.mockResolvedValue({ quote: null, isFresh: false });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    for (const elapsed of [0, 60_000]) {
+      vi.setSystemTime(Date.now() + elapsed);
+      mod.enqueueQuoteRefresh("AAPL");
+      await mod.__waitForQuoteRefreshQueueToIdle();
+    }
+    vi.setSystemTime(Date.now() + 120_000);
+    fetchFreshTickerQuoteMock.mockResolvedValueOnce({ ticker: "AAPL", price: 100 });
+    mod.enqueueQuoteRefresh("AAPL");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    expect(upsertCachedQuoteMock).toHaveBeenCalledTimes(1);
+    mod.enqueueQuoteRefresh("AAPL");
+    await mod.__waitForQuoteRefreshQueueToIdle(); // New failure starts at one minute.
+    vi.setSystemTime(Date.now() + 59_999);
+    mod.enqueueQuoteRefresh("AAPL");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(4);
+    vi.setSystemTime(Date.now() + 1);
+    mod.enqueueQuoteRefresh("AAPL");
+    await mod.__waitForQuoteRefreshQueueToIdle();
+    expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("continues draining when persisting a refresh failure also fails", async () => {
+    process.env.QUOTE_REFRESH_CONCURRENCY = "1";
+    getCachedQuoteSnapshotMock.mockResolvedValue({ quote: null, isFresh: false });
+    fetchFreshTickerQuoteMock.mockResolvedValue(null);
+    recordQuoteRefreshFailureMock.mockRejectedValue(new Error("DB unavailable"));
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const mod = await import("./quote-refresh-queue.service.js");
+    mod.__resetQuoteRefreshQueueForTests();
+    try {
+      mod.enqueueQuoteRefresh(["AAPL", "MSFT"]);
+      await mod.__waitForQuoteRefreshQueueToIdle();
+      expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(2);
+      expect(stderr).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(Date.now() + 60_000);
+      mod.enqueueQuoteRefresh("AAPL");
+      await mod.__waitForQuoteRefreshQueueToIdle();
+      expect(fetchFreshTickerQuoteMock).toHaveBeenCalledTimes(3);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });

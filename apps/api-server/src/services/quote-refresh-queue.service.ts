@@ -11,8 +11,12 @@ import { fetchFreshTickerQuote } from "./ticker.service.js";
 
 const queue: string[] = [];
 const queued = new Set<string>();
+const visibleQueued = new Set<string>();
 const inFlight = new Set<string>();
 const failedUntil = new Map<string, number>();
+const consecutiveFailures = new Map<string, number>();
+const MAX_VISIBLE_BURST = 3;
+let visibleBurst = 0;
 
 let activeWorkers = 0;
 let nextWorkerStartAtMs = 0;
@@ -37,8 +41,16 @@ function isCoolingDown(symbol: string): boolean {
 }
 
 function recordWorkerFailure(symbol: string, error: string): void {
-  failedUntil.set(symbol, Date.now() + env.QUOTE_REFRESH_FAILURE_COOLDOWN_MS);
+  const failures = Math.min((consecutiveFailures.get(symbol) ?? 0) + 1, 3);
+  consecutiveFailures.set(symbol, failures);
+  const multiplier = [1, 2, 5][failures - 1];
+  failedUntil.set(symbol, Date.now() + env.QUOTE_REFRESH_FAILURE_COOLDOWN_MS * multiplier);
   lastRefreshFailure = { symbol, error, at: new Date() };
+}
+
+function recordWorkerSuccess(symbol: string): void {
+  failedUntil.delete(symbol);
+  consecutiveFailures.delete(symbol);
 }
 
 function scheduleDrain(delayMs: number): void {
@@ -57,13 +69,22 @@ function drainQueue(): void {
       return;
     }
 
-    const symbol = queue.shift();
+    // Up to three visible jobs, then one background job when both are waiting.
+    // FIFO within each class keeps polling from starving the tracked watchlist
+    // (including symbols used by alerts).
+    const visibleIndex = queue.findIndex((symbol) => visibleQueued.has(symbol));
+    const backgroundIndex = queue.findIndex((symbol) => !visibleQueued.has(symbol));
+    const index = visibleIndex >= 0 && (visibleBurst < MAX_VISIBLE_BURST || backgroundIndex < 0)
+      ? visibleIndex : backgroundIndex;
+    const [symbol] = queue.splice(index, 1);
     if (!symbol) continue;
 
+    const visible = visibleQueued.delete(symbol);
     queued.delete(symbol);
     if (!canRefreshSymbol(symbol) || isCoolingDown(symbol)) {
       continue;
     }
+    visibleBurst = visible ? Math.min(visibleBurst + 1, MAX_VISIBLE_BURST) : 0;
     inFlight.add(symbol);
     activeWorkers += 1;
     nextWorkerStartAtMs = Date.now() + Math.max(0, env.QUOTE_REFRESH_SPACING_MS);
@@ -82,42 +103,56 @@ async function processSymbol(symbol: string): Promise<void> {
     const snapshot =
       getFreshQuoteMemorySnapshot(symbol) ?? (await getCachedQuoteSnapshot(symbol));
     if (snapshot.isFresh) {
-      failedUntil.delete(symbol);
+      recordWorkerSuccess(symbol);
       return;
     }
 
     if (!canRefreshSymbol(symbol)) return;
     const quote = await fetchFreshTickerQuote(symbol);
     if (!quote) {
-      const message = "Upstream quote fetch returned null";
-      recordWorkerFailure(symbol, message);
-      await recordQuoteRefreshFailure(symbol, message);
-      return;
+      throw new Error("Upstream quote fetch returned null");
     }
-    failedUntil.delete(symbol);
     await upsertCachedQuote(symbol, quote, {
       previousPrice: snapshot.quote?.price,
     });
+    recordWorkerSuccess(symbol);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recordWorkerFailure(symbol, message);
-    await recordQuoteRefreshFailure(symbol, message);
+    try {
+      await recordQuoteRefreshFailure(symbol, message);
+    } catch {
+      // A DB outage must not reject the worker promise or count one failed
+      // refresh twice. Keep the in-memory cooldown until a later retry.
+      process.stderr.write(`Unable to persist quote refresh failure for ${symbol}\n`);
+    }
   }
 }
 
-export function enqueueQuoteRefresh(symbols: string[] | string): void {
+export function enqueueQuoteRefresh(
+  symbols: string[] | string,
+  options: { priority?: "visible" | "background" } = {}
+): void {
   const items = Array.isArray(symbols) ? symbols : [symbols];
   for (const raw of items) {
     const symbol = normalizeSymbol(raw);
-    if (!symbol || !canRefreshSymbol(symbol) || queued.has(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
+    if (!symbol || !canRefreshSymbol(symbol) || inFlight.has(symbol) || isCoolingDown(symbol)) {
+      continue;
+    }
+    if (queued.has(symbol)) {
+      if (options.priority === "visible") visibleQueued.add(symbol);
       continue;
     }
     // Browser polling and scheduler syncs repeatedly submit the same symbols.
     // Fresh memory hits need no upstream work and must not consume paced slots
     // ahead of stale quotes. The worker checks freshness again when it starts.
-    if (getFreshQuoteMemorySnapshot(symbol)?.isFresh) continue;
+    if (getFreshQuoteMemorySnapshot(symbol)?.isFresh) {
+      recordWorkerSuccess(symbol);
+      continue;
+    }
     queue.push(symbol);
     queued.add(symbol);
+    if (options.priority === "visible") visibleQueued.add(symbol);
   }
   drainQueue();
 }
@@ -138,6 +173,8 @@ export function getQuoteRefreshQueueStats() {
 
   return {
     queuedSymbols: queue.length,
+    visibleQueuedSymbols: visibleQueued.size,
+    backgroundQueuedSymbols: queue.length - visibleQueued.size,
     inFlightSymbols: inFlight.size,
     activeWorkers,
     coolingDownSymbols: coolingDownSymbols.length,
@@ -164,8 +201,11 @@ export function __resetQuoteRefreshQueueForTests(): void {
   }
   queue.length = 0;
   queued.clear();
+  visibleQueued.clear();
   inFlight.clear();
   failedUntil.clear();
+  consecutiveFailures.clear();
+  visibleBurst = 0;
   activeWorkers = 0;
   nextWorkerStartAtMs = 0;
   trackedSymbolsCount = 0;

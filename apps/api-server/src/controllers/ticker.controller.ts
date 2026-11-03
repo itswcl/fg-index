@@ -21,7 +21,7 @@ export async function getTicker(req: Request, res: Response): Promise<void> {
 
   const symbol = normalizeQuoteSymbol(ticker);
   const data = await getCachedQuoteSnapshot(symbol);
-  enqueueQuoteRefresh(symbol);
+  enqueueQuoteRefresh(symbol, { priority: "visible" });
 
   if (!data.quote) {
     res.status(404).json({
@@ -95,7 +95,7 @@ export async function getBatchQuotes(
   }
 
   const quotes: Record<string, TickerQuote | null> = await getCachedQuotesBatch(symbols);
-  enqueueQuoteRefresh(symbols);
+  enqueueQuoteRefresh(symbols, { priority: "visible" });
 
   res.set("Cache-Control", "public, max-age=15");
   res.json({ quotes });

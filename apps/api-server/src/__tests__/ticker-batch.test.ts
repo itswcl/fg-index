@@ -81,7 +81,7 @@ beforeEach(() => {
 });
 
 describe("getTicker", () => {
-  it("returns a cached quote and enqueues a background refresh", async () => {
+  it("returns a cached quote and enqueues a visible refresh", async () => {
     const res = mockRes();
     const quote = makeQuote("AAPL", 100);
     getCachedQuoteSnapshotMock.mockResolvedValue({
@@ -94,7 +94,7 @@ describe("getTicker", () => {
     expect(res._status).toBe(200);
     expect(res._body).toEqual(quote);
     expect(getCachedQuoteSnapshotMock).toHaveBeenCalledWith("AAPL");
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("AAPL");
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("AAPL", { priority: "visible" });
   });
 
   it("returns 404 for an uncached symbol but still enqueues refresh", async () => {
@@ -109,7 +109,7 @@ describe("getTicker", () => {
     expect(res._status).toBe(404);
     expect((res._body as { code: string }).code).toBe("TICKER_NOT_FOUND");
     expect(getCachedQuoteSnapshotMock).toHaveBeenCalledWith("TSLA");
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("TSLA");
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith("TSLA", { priority: "visible" });
   });
 });
 
@@ -152,7 +152,7 @@ describe("getBatchQuotes", () => {
 
     expect(res._status).toBe(200);
     expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(symbols);
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(symbols);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(symbols, { priority: "visible" });
     expect(res._body).toEqual({
       quotes: {
         AMD: expect.objectContaining({ ticker: "AMD" }),
@@ -176,7 +176,7 @@ describe("getBatchQuotes", () => {
 
     expect(res._status).toBe(200);
     expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["AAPL", "MSFT"]);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["AAPL", "MSFT"], { priority: "visible" });
   });
 
   it("canonicalizes default market index aliases before cache lookup", async () => {
@@ -193,7 +193,7 @@ describe("getBatchQuotes", () => {
 
     expect(res._status).toBe(200);
     expect(getCachedQuotesBatchMock).toHaveBeenCalledWith(["VIX", "SPX"]);
-    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["VIX", "SPX"]);
+    expect(enqueueQuoteRefreshMock).toHaveBeenCalledWith(["VIX", "SPX"], { priority: "visible" });
     expect(res._body).toEqual({
       quotes: {
         VIX: expect.objectContaining({ ticker: "VIX" }),

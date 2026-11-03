@@ -189,6 +189,8 @@ Outside that window, browsers may read the last cached stock snapshot once per q
 
 Default indicators also arrive over WebSocket; their HTTP polling currently runs alongside push updates. Custom tickers have no WebSocket quote channel. Intervals are code defaults; API environment overrides can change backend values.
 
+Visible custom-ticker requests promote pending symbols into a priority queue without duplicating work. When both classes are waiting, the worker starts up to three visible jobs followed by one background job, preserving progress for the tracked watchlist and alert symbols under sustained polling. Both classes share the same concurrency, spacing, freshness, and market-window limits. Consecutive refresh failures use 1×, 2×, then 5× the base cooldown (1, 2, then 5 minutes by default, capped at 5 minutes with default settings); a successful refresh resets the cooldown progression. Previously fetched prices remain available during retries.
+
 Set `INDICATOR_SNAPSHOT_DIR` to a service-writable persistent directory to restore Fear & Greed, VIX, and SPX after an API restart. The OCI unit uses `/var/lib/fg-index/indicators` with `StateDirectory=fg-index`; writes atomically replace each complete JSON snapshot, and missing/invalid files are ignored. The first deployment cannot restore values never saved by an earlier process. Without this setting, default indicator snapshots remain in memory only. Custom ticker snapshots continue using Postgres.
 
 Market status is checked locally every minute, with upstream refresh slots at 06:00, 06:25, 06:30, 06:35, 12:55, 13:00, and 13:05 Pacific plus startup inside the window. An API key and enabled market-status refreshes are required. Market-status refresh failures retry once per minute, for at most five attempts including the initial attempt, then wait for the next scheduled slot. Startup refreshes follow the same retry policy. Retries stop outside the stock window; successful slots are marked complete only after provider fetch and required session persistence succeed.
@@ -266,7 +268,7 @@ The API and WebSocket server share port 8080 by default. Schedulers start by def
 | `QUOTE_REFRESH_INTERVAL_MS` | `30000` | Active custom ticker sync interval |
 | `QUOTE_REFRESH_CONCURRENCY` | `2` | Max concurrent background quote refresh workers |
 | `QUOTE_REFRESH_SPACING_MS` | `3000` | Minimum spacing between background quote refresh starts to avoid provider bursts |
-| `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Per-symbol refresh cooldown after failure |
+| `QUOTE_REFRESH_FAILURE_COOLDOWN_MS` | `60000` | Base per-symbol failure cooldown; consecutive failures use 1×, 2×, then 5×; success resets progression |
 | `BACKGROUND_DB_FAILURE_COOLDOWN_MS` | `60000` | Shared cooldown for background DB jobs after Supabase/Prisma connectivity failures |
 | `QUOTE_STOCK_CACHE_TTL_MS` | `60000` | Freshness TTL for stock/index quote cache rows before background refresh refetches upstream |
 | `QUOTE_MEMORY_CACHE_TTL_MS` | `120000` | In-process quote read cache TTL to reduce database egress |
