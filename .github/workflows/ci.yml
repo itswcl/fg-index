@@ -12,7 +12,8 @@ permissions:
 jobs:
   ci:
     name: Lint, Type-check & Test
-    runs-on: ubuntu-latest
+    # Validate the OCI units against the Ubuntu release that provides /usr/bin/python3.12.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
