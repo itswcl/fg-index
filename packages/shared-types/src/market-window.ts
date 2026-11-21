@@ -4,7 +4,7 @@
  */
 const pacificClock = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
-  weekday: "short", hour: "2-digit", hourCycle: "h23",
+  weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
 
 function nthWeekday(year: number, month: number, weekday: number, nth: number): number {
@@ -43,12 +43,22 @@ function isHoliday(year: number, month: number, day: number): boolean {
     || (month === 12 && day === observedDay(year, 12, 25));
 }
 
+function isPacificTradingWindowOpen(now: Date, endMinute: number): boolean {
+  const parts = Object.fromEntries(pacificClock.formatToParts(now).map(({ type, value }) => [type, value]));
+  const minuteOfDay = Number(parts.hour) * 60 + Number(parts.minute);
+  return parts.weekday !== "Sat" && parts.weekday !== "Sun"
+    && minuteOfDay >= 6 * 60 && minuteOfDay < endMinute
+    && !isHoliday(Number(parts.year), Number(parts.month), Number(parts.day));
+}
+
 /** Scheduled 06:00–15:00 Pacific window, excluding weekends and full-day holidays. */
 export function isMarketWindowOpen(now = new Date()): boolean {
-  const parts = Object.fromEntries(pacificClock.formatToParts(now).map(({ type, value }) => [type, value]));
-  return parts.weekday !== "Sat" && parts.weekday !== "Sun"
-    && Number(parts.hour) >= 6 && Number(parts.hour) < 15
-    && !isHoliday(Number(parts.year), Number(parts.month), Number(parts.day));
+  return isPacificTradingWindowOpen(now, 15 * 60);
+}
+
+/** Stock-related alerts stop at 13:30 Pacific. */
+export function isStockAlertWindowOpen(now = new Date()): boolean {
+  return isPacificTradingWindowOpen(now, 13 * 60 + 30);
 }
 
 export function isBtcSymbol(symbol: string): boolean {
@@ -59,7 +69,7 @@ export function canRefreshSymbol(symbol: string, now = new Date()): boolean {
   return isBtcSymbol(symbol) || isMarketWindowOpen(now);
 }
 
-/** Mixed stock/BTC alerts wait for the stock window, regardless of AND/OR logic. */
+/** Mixed stock/BTC alerts follow stock alert hours, regardless of AND/OR logic. */
 export function canEvaluateMarketAlert(conditions: readonly { metric: string }[], now = new Date()): boolean {
-  return isMarketWindowOpen(now) || (conditions.length > 0 && conditions.every((c) => c.metric === "btc"));
+  return (conditions.length > 0 && conditions.every((c) => c.metric === "btc")) || isStockAlertWindowOpen(now);
 }

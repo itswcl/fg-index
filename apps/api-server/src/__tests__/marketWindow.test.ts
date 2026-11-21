@@ -48,6 +48,18 @@ describe("Pacific weekday data window", () => {
     expect(canEvaluateMarketAlert([], weekend)).toBe(false);
   });
 
+  it.each([
+    ["2026-10-19T20:29:59Z", "2026-10-19T20:30:00Z"], // PDT
+    ["2026-11-20T21:29:59Z", "2026-11-20T21:30:00Z"], // PST
+  ])("stops stock and mixed alerts at %s / %s while stock refreshes continue", (before, cutoff) => {
+    for (const conditions of [[{ metric: "vix" }], [{ metric: "btc" }, { metric: "vix" }]]) {
+      expect(canEvaluateMarketAlert(conditions, new Date(before))).toBe(true);
+      expect(canEvaluateMarketAlert(conditions, new Date(cutoff))).toBe(false);
+    }
+    expect(canEvaluateMarketAlert([{ metric: "btc" }], new Date(cutoff))).toBe(true);
+    expect(canRefreshSymbol("AAPL", new Date(cutoff))).toBe(true);
+  });
+
   it("resumes promptly at Monday opening and pauses after close", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-19T12:59:45Z"));
