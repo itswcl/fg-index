@@ -1,4 +1,4 @@
-export { isMarketWindowOpen, isStockAlertWindowOpen, isBtcSymbol, canRefreshSymbol, canEvaluateMarketAlert } from "./market-window.js";
+export { isMarketWindowOpen, isStockAlertWindowOpen, DEFAULT_STOCK_ALERT_CUTOFF, isValidStockAlertCutoff, isBtcSymbol, canRefreshSymbol, canEvaluateMarketAlert } from "./market-window.js";
 
 import { z } from "zod";
 

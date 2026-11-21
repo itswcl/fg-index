@@ -20,6 +20,7 @@ import { startSpxScheduler } from "./schedulers/spx.scheduler.js";
 import { startTickerQuoteScheduler } from "./schedulers/ticker-quote.scheduler.js";
 import { startMarketStatusScheduler } from "./schedulers/market-status.scheduler.js";
 import { startWsServer } from "./ws.js";
+import { getStockAlertCutoff } from "./services/alert-settings.service.js";
 import { getHealth } from "./controllers/health.controller.js";
 import { globalRateLimiter } from "./middlewares/rateLimit.js";
 import { prisma } from "./services/db.js";
@@ -57,6 +58,11 @@ app.use("/api/alerts", alertsRouter);
 app.use("/api/user/tickers", tickerListRouter);
 app.use("/api/user/ticker-groups", tickerGroupsRouter);
 app.use("/api/user", userRouter);
+
+app.get("/api/alert-settings", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ stockAlertCutoff: await getStockAlertCutoff() });
+});
 
 // Health check
 app.get("/api/health", getHealth);

@@ -25,3 +25,22 @@ Keep the Caddy upstream at `127.0.0.1:8080` and preserve its existing request-lo
 ### Persistent indicator snapshots
 
 The canonical API unit declares `StateDirectory=fg-index` and `INDICATOR_SNAPSHOT_DIR=/var/lib/fg-index/indicators`. On an existing host, apply these two settings through a dedicated systemd drop-in, preserving the existing scheduler-owner override, then reload systemd and restart through the deployment installer. Keep the snapshot directory outside immutable release trees. A value in `/etc/fg-index/api.env` takes precedence over the unit's `Environment=` setting; remove any obsolete blank override. The first release starts saving snapshots after successful upstream fetches; subsequent restarts can serve them outside the stock refresh window.
+
+### Live stock alert cutoff
+
+The API reads a Pacific cutoff in 24-hour `HH:MM` format from `/etc/fg-index/stock-alert-cutoff`. Valid values are `06:01` through `15:00`. The cutoff applies to stock and mixed stock/BTC alerts. Stock refreshes run until 15:00 Pacific, and BTC-only alerts run 24/7.
+
+Change the cutoff with an atomic file replacement as an OCI operator. For example, to set it to 1:30 PM Pacific:
+
+```sh
+sudo sh -eu -c '
+  tmp=$(mktemp /etc/fg-index/.stock-alert-cutoff.XXXXXX)
+  trap "rm -f -- \"$tmp\"" EXIT
+  printf "%s\n" "$1" > "$tmp"
+  chown root:fg-index "$tmp"
+  chmod 0640 "$tmp"
+  mv -f -- "$tmp" /etc/fg-index/stock-alert-cutoff
+' sh 13:30
+```
+
+The API checks for edits on demand with a 15-second cache. The browser checks `GET /api/alert-settings` every 30 seconds while alerts are present. Verify the setting using that endpoint after the cache expires. Missing, unreadable, or invalid files preserve the last valid cutoff in the running API. If the process starts without a valid file, it uses 13:30 Pacific. Routine edits take effect without a service restart or release.

@@ -56,9 +56,17 @@ export function isMarketWindowOpen(now = new Date()): boolean {
   return isPacificTradingWindowOpen(now, 15 * 60);
 }
 
-/** Stock-related alerts stop at 13:30 Pacific. */
-export function isStockAlertWindowOpen(now = new Date()): boolean {
-  return isPacificTradingWindowOpen(now, 13 * 60 + 30);
+export const DEFAULT_STOCK_ALERT_CUTOFF = "13:30";
+
+export function isValidStockAlertCutoff(value: unknown): value is string {
+  return typeof value === "string" && /^(?:0[6-9]|1[0-4]):[0-5][0-9]$|^15:00$/.test(value)
+    && value > "06:00";
+}
+
+/** Stock alerts share the trading calendar and have their own Pacific cutoff. */
+export function isStockAlertWindowOpen(now = new Date(), cutoff = DEFAULT_STOCK_ALERT_CUTOFF): boolean {
+  const [hour, minute] = cutoff.split(":").map(Number);
+  return isPacificTradingWindowOpen(now, hour * 60 + minute);
 }
 
 export function isBtcSymbol(symbol: string): boolean {
@@ -70,6 +78,6 @@ export function canRefreshSymbol(symbol: string, now = new Date()): boolean {
 }
 
 /** Mixed stock/BTC alerts follow stock alert hours, regardless of AND/OR logic. */
-export function canEvaluateMarketAlert(conditions: readonly { metric: string }[], now = new Date()): boolean {
-  return (conditions.length > 0 && conditions.every((c) => c.metric === "btc")) || isStockAlertWindowOpen(now);
+export function canEvaluateMarketAlert(conditions: readonly { metric: string }[], now = new Date(), cutoff = DEFAULT_STOCK_ALERT_CUTOFF): boolean {
+  return (conditions.length > 0 && conditions.every((c) => c.metric === "btc")) || isStockAlertWindowOpen(now, cutoff);
 }

@@ -1,8 +1,8 @@
-import { canEvaluateMarketAlert } from '../../../../packages/shared-types/src/market-window';
+import { canEvaluateMarketAlert, DEFAULT_STOCK_ALERT_CUTOFF, isValidStockAlertCutoff } from '../../../../packages/shared-types/src/market-window';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FearGreed, TickerQuote } from '../types';
 import type { Alert, AlertTriggeredMessage } from '../types/alerts';
-import { WS_URL } from '../constants';
+import { API_BASE_URL, WS_URL } from '../constants';
 import { buildWsUrl } from '../lib/authFetch';
 import { sanitizeTickerQuote } from '../lib/marketData';
 import {
@@ -64,9 +64,11 @@ function evaluateAlertsLocally(
   alerts: Alert[],
   prices: MarketPrices,
   onTriggered: (msg: AlertTriggeredMessage) => void,
+  stockAlertCutoff: string,
 ) {
+  const now = new Date();
   for (const alert of alerts) {
-    if (!alert.enabled || !canEvaluateMarketAlert(alert.conditions)) continue;
+    if (!alert.enabled || !canEvaluateMarketAlert(alert.conditions, now, stockAlertCutoff)) continue;
 
     const results = alert.conditions.map((cond) => {
       const metricValue = getMetricValue(cond.metric, prices);
@@ -165,6 +167,8 @@ export function useMarketIndicators(
   // Keep latest callback/alerts in refs so the stable `connect` closure can access them
   const onAlertTriggeredRef = useRef(onAlertTriggered);
   const alertsRef = useRef(alerts);
+  const stockAlertCutoffRef = useRef(DEFAULT_STOCK_ALERT_CUTOFF);
+  const hasAlerts = Boolean(alerts?.length);
   // Seeded from cache too so local alert evaluation has a baseline for
   // the other metrics the moment any one of them ticks over WS.
   const latestFearGreedScoreRef = useRef<number | null>(cachedFearGreed?.data.score ?? null);
@@ -180,6 +184,31 @@ export function useMarketIndicators(
     // Keep local alert evaluation in sync; the server loads alert config from the database.
     alertsRef.current = alerts;
   }, [alerts]);
+
+  useEffect(() => {
+    if (!hasAlerts) return;
+    const controller = new AbortController();
+    let nextPoll: ReturnType<typeof setTimeout>;
+    async function refreshAlertSettings() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/alert-settings`, { signal: controller.signal });
+        if (!response.ok) return;
+        const settings = await response.json();
+        if (!controller.signal.aborted && isValidStockAlertCutoff(settings?.stockAlertCutoff)) {
+          stockAlertCutoffRef.current = settings.stockAlertCutoff;
+        }
+      } catch {
+        // Keep the last known cutoff until the API is reachable again.
+      } finally {
+        if (!controller.signal.aborted) nextPoll = setTimeout(refreshAlertSettings, 30_000);
+      }
+    }
+    void refreshAlertSettings();
+    return () => {
+      controller.abort();
+      clearTimeout(nextPoll);
+    };
+  }, [hasAlerts]);
 
   const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -218,7 +247,7 @@ export function useMarketIndicators(
               vixPrice: latestVixPriceRef.current,
               btcPrice: latestBtcPriceRef.current,
               spxPrice: latestSpxPriceRef.current,
-            }, onAlertTriggeredRef.current);
+            }, onAlertTriggeredRef.current, stockAlertCutoffRef.current);
           }
         }
 
@@ -240,7 +269,7 @@ export function useMarketIndicators(
                 vixPrice: payload.price,
                 btcPrice: latestBtcPriceRef.current,
                 spxPrice: latestSpxPriceRef.current,
-              }, onAlertTriggeredRef.current);
+              }, onAlertTriggeredRef.current, stockAlertCutoffRef.current);
             }
           }
         }
@@ -259,7 +288,7 @@ export function useMarketIndicators(
                 vixPrice: latestVixPriceRef.current,
                 btcPrice: payload.price,
                 spxPrice: latestSpxPriceRef.current,
-              }, onAlertTriggeredRef.current);
+              }, onAlertTriggeredRef.current, stockAlertCutoffRef.current);
             }
           }
         }
@@ -278,7 +307,7 @@ export function useMarketIndicators(
                 vixPrice: latestVixPriceRef.current,
                 btcPrice: latestBtcPriceRef.current,
                 spxPrice: payload.price,
-              }, onAlertTriggeredRef.current);
+              }, onAlertTriggeredRef.current, stockAlertCutoffRef.current);
             }
           }
         }

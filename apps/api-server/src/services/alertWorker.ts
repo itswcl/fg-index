@@ -1,4 +1,5 @@
 import { isStockAlertWindowOpen, canEvaluateMarketAlert } from "@shared/types";
+import { getStockAlertCutoff } from "./alert-settings.service.js";
 import { WebSocket } from "ws";
 import { env } from "../config/env.js";
 import { prisma } from "./db.js";
@@ -204,7 +205,6 @@ export async function evaluateForMetric(
   snapshot: MarketSnapshot,
   now: Date = new Date()
 ): Promise<AlertTriggeredMessage[]> {
-  if (metric !== "btc" && !isStockAlertWindowOpen(now)) return [];
   if (!acceptingAlertWork) {
     process.stderr.write(
       JSON.stringify({
@@ -250,7 +250,10 @@ async function runEvaluationForMetric(
   }
 
   let candidates: AlertRow[];
+  let cutoff: string;
   try {
+    cutoff = await getStockAlertCutoff();
+    if (metric !== "btc" && !isStockAlertWindowOpen(now, cutoff)) return [];
     candidates = await fetchCandidateAlerts(metric);
     if (!fetchOverride) {
       recordBackgroundDbSuccess();
@@ -273,7 +276,7 @@ async function runEvaluationForMetric(
     }
   }
 
-  const fresh = candidates.filter((row) => !isInCooldown(row, now) && canEvaluateMarketAlert(row.conditions, now));
+  const fresh = candidates.filter((row) => !isInCooldown(row, now) && canEvaluateMarketAlert(row.conditions, now, cutoff));
   if (fresh.length === 0) return [];
 
   // Reuse existing evaluator — but it expects the shared Alert shape.
